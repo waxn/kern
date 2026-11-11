@@ -111,6 +111,17 @@ class Kern(val api: Api) {
     suspend fun review(card: String, rating: Int, ms: Long): Card = api.post("/cards/$card/review", jsonOf("rating" to rating, "duration_ms" to ms))
     suspend fun undoReview(): Card = api.post("/cards/undo")
     suspend fun cardStats(): CardStats = api.get("/cards/stats" + qs("tzo" to tzo()))
+    suspend fun cardPage(offset: Int, limit: Int = 500): CardPage = api.get("/cards" + qs("offset" to offset, "limit" to limit))
+    /** Every live card, a page at a time (capped so a huge collection stays quick). */
+    suspend fun allCards(max: Int = 5000): List<Card> {
+        val out = mutableListOf<Card>()
+        while (out.size < max) {
+            val p = cardPage(out.size)
+            out += p.cards
+            if (p.cards.isEmpty() || out.size >= p.total) break
+        }
+        return out
+    }
     suspend fun decks(): List<Deck> = api.get("/decks" + qs("tzo" to tzo()))
     suspend fun createNote(kind: String, front: String, back: String, deck: String?): JsonObject =
         api.post("/notes", jsonOf("kind" to kind, "front" to front, "back" to back, "deck" to deck))
@@ -142,5 +153,5 @@ class Kern(val api: Api) {
 
     // ---- misc
     suspend fun settings(): JsonObject = api.get("/settings")
-    suspend fun storage(): JsonObject = api.get("/storage")
+    suspend fun storage(): Storage = api.get("/storage")
 }

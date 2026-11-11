@@ -71,12 +71,24 @@ fun SettingsScreen(ws: Workspace, nav: Nav) {
     var confirmOut by remember { mutableStateOf(false) }
     var storage by remember { mutableStateOf<String?>(null) }
     LaunchedEffect(Unit) {
-        storage = runCatching { ws.kern.storage()["total"]?.jsonPrimitive?.contentOrNull?.toLongOrNull()?.let { bytes(it) } }.getOrNull()
+        storage = runCatching { ws.kern.storage().let { bytes(it.databaseBytes + it.mediaBytes + it.gitBytes + it.backupsBytes) } }.getOrNull()
     }
 
     Column(Modifier.fillMaxSize().background(kern.bg).statusBarsPadding()) {
         KTopBar("Settings", onBack = { nav.back() })
         LazyColumn {
+            item { Heading("Your numbers") }
+            item {
+                Bordered {
+                    Row(Modifier.fillMaxWidth().clickable { nav.go("stats") }.padding(14.dp), verticalAlignment = Alignment.CenterVertically) {
+                        Column(Modifier.weight(1f)) {
+                            Text("Stats", style = MaterialTheme.typography.bodyLarge)
+                            Text("Flashcard streaks and memory, task completion, workspace size", style = MaterialTheme.typography.bodySmall, color = kern.text3)
+                        }
+                        Text("›", style = MaterialTheme.typography.titleLarge, color = kern.text3)
+                    }
+                }
+            }
             item { Heading("Appearance") }
             item {
                 Bordered {

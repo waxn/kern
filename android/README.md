@@ -56,6 +56,12 @@ allowed because Kern is usually self-hosted on a home network; use HTTPS when it
 - **Search** across pages, blocks, tags, cards and tasks, with highlights and recent searches.
 - **Tags, Files, Git** (repositories, file browser, commits, README, code view),
   **Templates, Archive, Trash**.
+- **Stats** (Settings → Your numbers, the More tab, or the chart icon on Cards): flashcard
+  streaks, reviews per day, accuracy, a 26-week heatmap, the 30-day due forecast, card states,
+  memory strength (FSRS stability), when you study and the hardest cards; task completions,
+  on-time rate, time to finish and open tasks by priority and date; workspace counts, pages
+  created per month, storage by kind, files, bookmarks, tags and repositories. Tap a bar or a
+  heatmap day to read its exact value.
 - **Settings**: theme, text size, reminders, widgets, password, user approval for admins.
 
 ### Notifications

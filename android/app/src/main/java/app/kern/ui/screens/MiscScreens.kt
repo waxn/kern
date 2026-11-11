@@ -33,6 +33,7 @@ import androidx.compose.material.icons.outlined.Movie
 import androidx.compose.material.icons.outlined.PictureAsPdf
 import androidx.compose.material.icons.outlined.Restore
 import androidx.compose.material.icons.outlined.Settings
+import androidx.compose.material.icons.outlined.Insights
 import androidx.compose.material.icons.outlined.Storage
 import androidx.compose.material.icons.outlined.Tag
 import androidx.compose.material.icons.outlined.Unarchive
@@ -123,6 +124,7 @@ fun MoreScreen(ws: Workspace, nav: Nav) {
         item { Heading("App") }
         item {
             Bordered {
+                MoreRow(Icons.Outlined.Insights, "Stats") { nav.go("stats") }
                 MoreRow(Icons.Outlined.Settings, "Settings") { nav.go("settings") }
             }
         }

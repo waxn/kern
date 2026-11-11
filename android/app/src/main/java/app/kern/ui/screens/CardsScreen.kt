@@ -31,6 +31,7 @@ import androidx.compose.material.icons.outlined.Add
 import androidx.compose.material.icons.outlined.Celebration
 import androidx.compose.material.icons.outlined.Description
 import androidx.compose.material.icons.outlined.Layers
+import androidx.compose.material.icons.outlined.Insights
 import androidx.compose.material.icons.outlined.PlayArrow
 import androidx.compose.material3.Icon
 import androidx.compose.material3.IconButton
@@ -98,6 +99,7 @@ fun CardsScreen(ws: Workspace, nav: Nav) {
     Column(Modifier.fillMaxSize().background(k.bg).statusBarsPadding()) {
         Row(Modifier.fillMaxWidth().padding(start = 20.dp, end = 8.dp, top = 12.dp, bottom = 4.dp), verticalAlignment = Alignment.CenterVertically) {
             Text("Flashcards", style = MaterialTheme.typography.headlineMedium, modifier = Modifier.weight(1f))
+            IconButton(onClick = { nav.go("stats") }) { Icon(Icons.Outlined.Insights, "Stats", tint = k.text2) }
             IconButton(onClick = { adding = true }) { Icon(Icons.Outlined.Add, "New card", tint = k.accent) }
         }
         PullToRefreshBox(refreshing, { scope.launch { refreshing = true; load(); refreshing = false } }, Modifier.weight(1f)) {
@@ -119,8 +121,8 @@ fun CardsScreen(ws: Workspace, nav: Nav) {
                             Row(horizontalArrangement = Arrangement.spacedBy(18.dp)) {
                                 Stat("${s.reviewedToday}", "reviewed")
                                 Stat("${s.timeTodayMs / 60000}m", "studied")
-                                Stat(s.accuracyToday?.let { "${(it * 100).toInt()}%" } ?: "—", "right today")
-                                Stat(s.accuracy30d?.let { "${(it * 100).toInt()}%" } ?: "—", "30 days")
+                                Stat(s.accuracyToday?.let { "${it.toInt()}%" } ?: "—", "right today")
+                                Stat(s.accuracy30d?.let { "${it.toInt()}%" } ?: "—", "30 days")
                             }
                             Spacer(Modifier.height(16.dp))
                             KButton(if (s.dueToday + s.newAvailable > 0) "Study now" else "Nothing to study", Modifier.fillMaxWidth(), primary = true, icon = Icons.Outlined.PlayArrow, enabled = s.dueToday + s.newAvailable > 0) { nav.go("review") }

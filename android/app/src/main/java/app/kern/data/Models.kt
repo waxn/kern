@@ -208,6 +208,9 @@ data class Card(
     val due: String? = null,
     val reps: Int = 0,
     val lapses: Int = 0,
+    val stability: Double = 0.0,
+    val difficulty: Double = 0.0,
+    @SerialName("last_review") val lastReview: String? = null,
     val suspended: Boolean = false,
     val deck: String? = null,
     val document: String? = null,
@@ -387,3 +390,22 @@ data class Commit(
 
 @Serializable
 data class Uploaded(val id: String, val url: String, val name: String = "", val mime: String = "", val size: Long = 0)
+
+@Serializable
+data class CardPage(val total: Int = 0, val cards: List<Card> = emptyList())
+
+@Serializable
+data class StorageCounts(
+    val pages: Int = 0, val entries: Int = 0, val databases: Int = 0, val blocks: Int = 0,
+    val cards: Int = 0, val tasks: Int = 0, val files: Int = 0, val versions: Int = 0, val trashed: Int = 0,
+)
+
+@Serializable
+data class Storage(
+    @SerialName("database_bytes") val databaseBytes: Long = 0,
+    @SerialName("media_bytes") val mediaBytes: Long = 0,
+    @SerialName("downloads_bytes") val downloadsBytes: Long = 0,
+    @SerialName("git_bytes") val gitBytes: Long = 0,
+    @SerialName("backups_bytes") val backupsBytes: Long = 0,
+    val counts: StorageCounts = StorageCounts(),
+)

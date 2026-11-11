@@ -255,6 +255,7 @@ private fun SignedIn(ws: Workspace, launch: MutableStateFlow<Launch?>, host: Sna
             composable("archive") { ArchiveScreen(ws, n) }
             composable("templates") { TemplatesScreen(ws, n) }
             composable("settings") { SettingsScreen(ws, n) }
+            composable("stats") { app.kern.ui.stats.StatsScreen(ws, n) }
         }
     }
 
