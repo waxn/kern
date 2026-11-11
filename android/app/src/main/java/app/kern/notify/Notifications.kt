@@ -121,6 +121,10 @@ object Notifications {
             .setAutoCancel(true)
             .setContentIntent(openIntent(ctx, "review", 50))
             .addAction(0, "Review now", openIntent(ctx, "review", 51))
+            .addAction(0, "Later", PendingIntent.getBroadcast(
+                ctx, 52, Intent(ctx, ActionReceiver::class.java).setAction(ActionReceiver.ACTION_CARDS_LATER),
+                PendingIntent.FLAG_IMMUTABLE or PendingIntent.FLAG_UPDATE_CURRENT,
+            ))
             .build()
         try { NotificationManagerCompat.from(ctx).notify(ID_CARDS, n) } catch (_: SecurityException) {}
     }

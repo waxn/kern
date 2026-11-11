@@ -225,9 +225,11 @@ fun KButton(text: String, modifier: Modifier = Modifier, primary: Boolean = fals
         shape = RoundedCornerShape(10.dp),
         color = bg.copy(alpha = if (enabled) 1f else 0.5f),
         contentColor = fg,
-        modifier = modifier.heightIn(min = 42.dp).then(if (!primary && !danger) Modifier.border(1.dp, k.borderStrong, RoundedCornerShape(10.dp)) else Modifier),
+        // The border belongs to the Surface so it hugs the visible button, not the larger touch target.
+        border = if (!primary && !danger) androidx.compose.foundation.BorderStroke(1.dp, k.borderStrong) else null,
+        modifier = modifier.height(44.dp),
     ) {
-        Row(Modifier.padding(horizontal = 16.dp, vertical = 10.dp), verticalAlignment = Alignment.CenterVertically, horizontalArrangement = Arrangement.Center) {
+        Row(Modifier.padding(horizontal = 16.dp), verticalAlignment = Alignment.CenterVertically, horizontalArrangement = Arrangement.Center) {
             if (icon != null) { Icon(icon, null, Modifier.size(18.dp)); Spacer(Modifier.width(8.dp)) }
             Text(text, style = MaterialTheme.typography.labelLarge, fontWeight = if (primary || danger) FontWeight.SemiBold else FontWeight.Medium)
         }

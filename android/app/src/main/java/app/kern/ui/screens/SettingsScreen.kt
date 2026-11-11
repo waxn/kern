@@ -6,6 +6,7 @@ import androidx.compose.foundation.background
 import androidx.compose.foundation.clickable
 import androidx.compose.foundation.layout.Arrangement
 import androidx.compose.foundation.layout.Column
+import androidx.compose.foundation.layout.FlowRow
 import androidx.compose.foundation.layout.Row
 import androidx.compose.foundation.layout.Spacer
 import androidx.compose.foundation.layout.fillMaxSize
@@ -63,9 +64,6 @@ fun SettingsScreen(ws: Workspace, nav: Nav) {
     val size by s.editorSize.collectAsState()
     val session by ws.session.collectAsState()
     val user = (session as? Session.SignedIn)?.user
-    var tasks by remember { mutableStateOf(s.notifyTasks) }
-    var cards by remember { mutableStateOf(s.notifyCards) }
-    var hour by remember { mutableStateOf(s.notifyHour) }
     var password by remember { mutableStateOf(false) }
     var users by remember { mutableStateOf(false) }
     var confirmOut by remember { mutableStateOf(false) }
@@ -107,31 +105,12 @@ fun SettingsScreen(ws: Workspace, nav: Nav) {
             item { Heading("Reminders") }
             item {
                 Bordered {
-                    Toggle("Tasks due today", "Each task with Done and Tomorrow buttons", tasks) { tasks = it; s.notifyTasks = it }
-                    app.kern.ui.components.Divider()
-                    Toggle("Flashcards due", "A daily nudge when cards are waiting", cards) { cards = it; s.notifyCards = it }
-                    app.kern.ui.components.Divider()
-                    Column(Modifier.padding(14.dp)) {
-                        Text("Send reminders after", style = MaterialTheme.typography.bodyLarge)
-                        Spacer(Modifier.height(8.dp))
-                        Row(horizontalArrangement = Arrangement.spacedBy(8.dp)) {
-                            listOf(6, 8, 9, 12, 18).forEach { h -> Choice("%02d:00".format(h), hour == h) { hour = h; s.notifyHour = h } }
+                    Row(Modifier.fillMaxWidth().clickable { nav.go("reminders") }.padding(14.dp), verticalAlignment = Alignment.CenterVertically) {
+                        Column(Modifier.weight(1f)) {
+                            Text("Reminders", style = MaterialTheme.typography.bodyLarge)
+                            Text(app.kern.ui.screens.reminderSummary(s), style = MaterialTheme.typography.bodySmall, color = kern.text3)
                         }
-                    }
-                    app.kern.ui.components.Divider()
-                    Row(Modifier.fillMaxWidth().padding(14.dp), horizontalArrangement = Arrangement.spacedBy(8.dp)) {
-                        KButton("Send a test") {
-                            scope.launch {
-                                runCatching { SyncWorker.refresh(ctx) }
-                                val t = s.cachedTasks.filter { !it.done }
-                                if (t.isNotEmpty()) Notifications.showTasks(ctx, t) else Notifications.showGeneral(ctx, "Kern reminders work", "Nothing is due today.", "tasks")
-                                if (s.cachedDue + s.cachedNew > 0) Notifications.showCards(ctx, s.cachedDue, s.cachedNew)
-                                if (!Notifications.allowed(ctx)) snack.show("Notifications are turned off for Kern in Android settings.")
-                            }
-                        }
-                        KButton("System settings") {
-                            ctx.startActivity(Intent(AndroidSettings.ACTION_APP_NOTIFICATION_SETTINGS).putExtra(AndroidSettings.EXTRA_APP_PACKAGE, ctx.packageName))
-                        }
+                        Text("›", style = MaterialTheme.typography.titleLarge, color = kern.text3)
                     }
                 }
             }

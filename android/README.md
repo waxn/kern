@@ -66,9 +66,17 @@ allowed because Kern is usually self-hosted on a home network; use HTTPS when it
 
 ### Notifications
 
-A background job runs about every 30 minutes. Once a day after the hour you choose (8:00 by
-default) it notifies you of tasks due today and overdue — each with **Done** and **Tomorrow**
-buttons — and of flashcards waiting, with **Review now**. Settings → Reminders has a test button.
+A background job runs about every 15 minutes. Settings → Reminders controls it:
+
+- **Flashcards:** while cards are waiting, a reminder with **Review now** and **Later**, repeated
+  every hour, 1½, 2, 3 or 4 hours (or once a day). Studying restarts the wait. Choose a minimum
+  number of waiting cards, whether new cards count, and how long **Later** holds off.
+- **Tasks:** once a day, tasks due today (and overdue ones, if you like), each with **Done** and
+  **Tomorrow**; optionally only medium or high priority.
+- **Schedule:** start time, quiet hour, and which days of the week.
+
+The Reminders screen also has a test button and a shortcut to Android's sound and vibration
+settings for Kern.
 
 ### Widgets
 

@@ -276,6 +276,9 @@ fun ReviewScreen(ws: Workspace, nav: Nav, deck: String?, doc: String?) {
         try {
             ws.kern.review(card.id, r, System.currentTimeMillis() - started)
             done++
+            // Studying counts as answering the reminder: restart its cooldown and clear it.
+            ws.settings.cardsLastNudge = System.currentTimeMillis()
+            app.kern.notify.Notifications.cancel(ctx, app.kern.notify.Notifications.ID_CARDS)
             next()
             SyncWorker.refreshSoon(ctx)
         } catch (e: Exception) { snack.error(e) }

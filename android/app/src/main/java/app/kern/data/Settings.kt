@@ -32,6 +32,44 @@ class Settings(context: Context) {
         get() = p.getInt("notify_hour", 8)
         set(v) = p.edit().putInt("notify_hour", v.coerceIn(0, 23)).apply()
 
+    /** Minutes between flashcard reminders while cards are due; 0 = once a day. */
+    var cardsEveryMin: Int
+        get() = p.getInt("cards_every", 90)
+        set(v) = p.edit().putInt("cards_every", v).apply()
+    /** Hour of the day (local) after which no more reminders are sent. */
+    var quietHour: Int
+        get() = p.getInt("quiet_hour", 22)
+        set(v) = p.edit().putInt("quiet_hour", v.coerceIn(1, 24)).apply()
+    /** Last flashcard reminder or review, so reminders keep their cooldown. */
+    var cardsLastNudge: Long
+        get() = p.getLong("cards_last_nudge", 0)
+        set(v) = p.edit().putLong("cards_last_nudge", v).apply()
+
+    /** Only remind once at least this many cards are waiting. */
+    var cardsMin: Int
+        get() = p.getInt("cards_min", 1)
+        set(v) = p.edit().putInt("cards_min", v.coerceAtLeast(1)).apply()
+    /** Count new cards as "waiting", not just reviews that are due. */
+    var cardsIncludeNew: Boolean
+        get() = p.getBoolean("cards_include_new", true)
+        set(v) = p.edit().putBoolean("cards_include_new", v).apply()
+    /** "Later" on a card reminder holds the next one off for this many minutes. */
+    var cardsSnoozeMin: Int
+        get() = p.getInt("cards_snooze", 60)
+        set(v) = p.edit().putInt("cards_snooze", v).apply()
+    /** Remind about overdue tasks too, not only those due today. */
+    var tasksIncludeOverdue: Boolean
+        get() = p.getBoolean("tasks_overdue", true)
+        set(v) = p.edit().putBoolean("tasks_overdue", v).apply()
+    /** Only tasks at or above this priority (0 = all). */
+    var tasksMinPriority: Int
+        get() = p.getInt("tasks_min_priority", 0)
+        set(v) = p.edit().putInt("tasks_min_priority", v.coerceIn(0, 3)).apply()
+    /** Days of the week reminders are sent on, 1 = Monday … 7 = Sunday. */
+    var reminderDays: Set<Int>
+        get() = (p.getString("reminder_days", "1234567") ?: "1234567").mapNotNull { it.digitToIntOrNull() }.toSet()
+        set(v) = p.edit().putString("reminder_days", v.sorted().joinToString("")).apply()
+
     var user: User?
         get() = p.getString("user", null)?.let { runCatching { KernJson.decodeFromString<User>(it) }.getOrNull() }
         set(v) = p.edit().putString("user", v?.let { KernJson.encodeToString(it) }).apply()
