@@ -12,6 +12,8 @@
 	import TabBar from '#lib/components/TabBar.svelte';
 	import Toasts from '#lib/components/Toasts.svelte';
 	import CardEditor from '#lib/learn/CardEditor.svelte';
+	import { ai } from '#lib/ai/ai.svelte.ts';
+	import IntelPopup from '#lib/ai/IntelPopup.svelte';
 	import { flushAll, syncPending } from '#lib/editor/doc.svelte.ts';
 	import { CloudOff } from '@lucide/svelte';
 	import { counts } from '#lib/learn/util.svelte.ts';
@@ -105,6 +107,8 @@
 		};
 		if (is('search') && !(combo === 'Mod+K' && hasTextSelection())) return run(() => (ui.searchOpen ? (ui.searchOpen = false) : ui.openSearch()));
 		if (combo === 'Mod+P') return run(() => (ui.searchOpen ? (ui.searchOpen = false) : ui.openSearch()));
+		// Works while typing too: it is meant to be summoned from inside a page.
+		if (is('intelligence')) return run(() => (ai.popupOpen = !ai.popupOpen));
 		if (is('toggleSidebar')) return run(() => (prefs.sidebarOpen = !prefs.sidebarOpen));
 		if (is('togglePanel')) return run(() => (prefs.panelOpen = !prefs.panelOpen));
 		if (is('newPage')) return run(() => newPage());
@@ -148,6 +152,7 @@
 <ContextMenu />
 <ConfirmDialog />
 {#if ui.cardEditor}<CardEditor />{/if}
+{#if ai.popupOpen}<IntelPopup />{/if}
 <Toasts />
 
 <style>

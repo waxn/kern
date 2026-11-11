@@ -24,6 +24,9 @@
 	import EmojiPicker from './EmojiPicker.svelte';
 	import RightPanel from './RightPanel.svelte';
 	import GroupView from './GroupView.svelte';
+	import { ai } from '#lib/ai/ai.svelte.ts';
+	import Sparkle from '#lib/ai/Sparkle.svelte';
+	import { shortcut } from '#lib/state/prefs.svelte.ts';
 
 	let { id }: { id: string } = $props();
 	const doc = getDoc(id);
@@ -160,6 +163,8 @@
 					onclick={(e) => { e.preventDefault(); goto(`/review?doc=${id}`); }}><Layers size={13} />Study {doc.cardCount}</a>
 			{/if}
 			{#if meta}
+				<button class="icon-btn intel" class:on={ai.popupOpen} title="Intelligence ({shortcut('intelligence').replace('Mod', modKey).replace(/\+/g, ' ')})"
+					onclick={() => (ai.popupOpen = !ai.popupOpen)}><Sparkle size={15} /></button>
 				<button class="icon-btn" class:on={meta.is_favorite} title={meta.is_favorite ? 'Remove from favorites' : 'Add to favorites'}
 					onclick={() => ws.updateDoc(id, { is_favorite: !meta.is_favorite }).catch(() => {})}>
 					<Star size={15} fill={meta.is_favorite ? 'currentColor' : 'none'} />
@@ -285,6 +290,8 @@
 	.crumb { flex: 0 1 auto; max-width: 180px; padding: 2px 5px; border-radius: var(--radius-sm); text-decoration: none; }
 	a.crumb:hover { background: var(--hover); color: var(--text); }
 	.crumb.current { color: var(--text); flex-shrink: 0.3; }
+	.intel :global(.sparkle) { transition: transform .35s var(--ease); }
+	.intel:hover :global(.sparkle), .intel.on :global(.sparkle) { transform: rotate(45deg) scale(1.08); }
 	.study { height: 26px; padding: 0 8px; text-decoration: none; color: var(--c-purple); }
 	.save { display: flex; align-items: center; gap: 5px; margin-right: 6px; font-size: 12px; color: var(--text-3); opacity: 0; transition: opacity 0.4s 0.8s; white-space: nowrap; }
 	.save.show { opacity: 1; transition: opacity 0.1s; }

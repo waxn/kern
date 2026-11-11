@@ -945,6 +945,12 @@ export function getDoc(id: string): EditorDoc {
 	return doc;
 }
 
+/** Reload a document that changed on the server, if it is open here and has no unsaved edits. */
+export function refreshDoc(id: string) {
+	const doc = cache.get(id);
+	if (doc && !doc.hasUnsaved) doc.load();
+}
+
 export async function releaseDoc(id: string, keep = false) {
 	const doc = cache.get(id);
 	if (!doc) return;

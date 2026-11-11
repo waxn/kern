@@ -9,11 +9,14 @@ export interface AiConfig {
 	configured: boolean;
 	has_key: boolean;
 	key_hint: string;
+	web_search?: boolean;
 	providers: Record<string, { label: string; base_url: string; model: string; needs_key: boolean }>;
 }
 
 class AiState {
 	config = $state<AiConfig | null>(null);
+	/** The Intelligence popup over the current page. */
+	popupOpen = $state(false);
 	private loading: Promise<void> | null = null;
 
 	async load(force = false) {

@@ -32,7 +32,38 @@ How to work:
   rather than ids.
 - Before moving several pages to the trash or deleting a lot of content, ask the user to confirm,
   unless they clearly asked for exactly that.
-- Edits are reversible: pages keep version history and deleted pages go to the trash."""
+- Edits are reversible: pages keep version history and deleted pages go to the trash.
+
+Quizzing: when the user asks to be quizzed, read the relevant page first, then ask one question
+at a time and wait for their answer. Mark each answer right or wrong in a sentence, add a short
+explanation when they miss, then ask the next question. Mix recall, explanation and application
+questions, and get harder as they do well. When they stop, or after about ten questions, give
+the score and offer to save the questions they missed as flashcards on that page."""
+
+WEB_ON = """
+
+Web: you can search the web and read web pages. Use them when the user asks for more information,
+for current facts, or for something their notes do not cover. Say briefly what you found and where,
+and only put web material into their notes when they ask for that."""
+
+WEB_OFF = """
+
+Web: you cannot search the web with this provider (web search needs Claude). If the user asks for
+something that needs it, say so plainly, then help from their notes and your own knowledge, and
+say which is which."""
+
+# Claude models with the current web tools (dynamic filtering); older Claude models get basic search.
+WEB_MODELS = ("claude-opus-5", "claude-fable-5", "claude-sonnet-5", "claude-opus-4-8", "claude-opus-4-7",
+              "claude-opus-4-6", "claude-sonnet-4-6")
+
+
+def web_tools(cfg: dict) -> list[dict]:
+    if cfg["provider"] != "anthropic":
+        return []
+    if cfg["model"].startswith(WEB_MODELS):
+        return [{"type": "web_search_20260209", "name": "web_search"},
+                {"type": "web_fetch_20260209", "name": "web_fetch"}]
+    return [{"type": "web_search_20250305", "name": "web_search"}]
 
 
 def tool(name, description, props, required=()):
@@ -115,7 +146,12 @@ class Run:
 
     def __init__(self):
         self.actions: list[dict] = []
+        self.sources: list[dict] = []  # web pages the answer drew on
         self.snapshotted: set = set()
+
+    def add_source(self, url, title=""):
+        if url and url.startswith(("http://", "https://")) and all(x["url"] != url for x in self.sources):
+            self.sources.append({"url": url, "title": (title or url)[:200]})
 
     def act(self, verb: str, d: Document | None = None, detail: str = ""):
         item = {"verb": verb, "detail": detail}
@@ -527,7 +563,8 @@ def context_note(page_id) -> str:
     if page_id and _is_uuid(page_id):
         d = Document.objects.filter(id=page_id, trashed_at__isnull=True).first()
         if d:
-            note += f" The user is looking at the page “{d.title or 'Untitled'}” (id {d.id})."
+            note += (f" The user is looking at the page “{d.title or 'Untitled'}” (id {d.id}); "
+                     "“this page”, “this” and “here” mean it. Read it before answering about it.")
     return note
 
 
@@ -547,8 +584,10 @@ def chat_turn(chat: Chat, text: str, page_id=None) -> Chat:
         reply = _anthropic_loop(chat, cfg, user_msg, run)
     else:
         reply = _openai_loop(chat, cfg, user_msg, run)
-    chat.transcript = [*chat.transcript, {"role": "user", "text": text, "at": timezone.now().isoformat()},
-                       {"role": "assistant", "text": reply, "actions": run.actions, "at": timezone.now().isoformat()}]
+    answer = {"role": "assistant", "text": reply, "actions": run.actions, "at": timezone.now().isoformat()}
+    if run.sources:
+        answer["sources"] = run.sources[:8]
+    chat.transcript = [*chat.transcript, {"role": "user", "text": text, "at": timezone.now().isoformat()}, answer]
     if not chat.title:
         chat.title = one_line(text, 80)
     chat.save()
@@ -562,11 +601,15 @@ def _anthropic_loop(chat: Chat, cfg: dict, user_msg: str, run: Run) -> str:
     client = anthropic.Anthropic(api_key=key, timeout=300.0, max_retries=2)
     messages = [*chat.history, {"role": "user", "content": user_msg}]
     use_fallbacks = cfg["model"] in ("claude-opus-5-5", "claude-opus-5", "claude-fable-5-1", "claude-sonnet-5-5")
-    texts: list[str] = []
+    web = web_tools(cfg)
+    system = SYSTEM + (WEB_ON if web else WEB_OFF)
+    reply, container = "", None
     for _ in range(MAX_STEPS):
-        kwargs = dict(model=cfg["model"], max_tokens=ai.MAX_TOKENS, system=SYSTEM, tools=TOOLS, messages=messages)
+        kwargs = dict(model=cfg["model"], max_tokens=ai.MAX_TOKENS, system=system, tools=[*TOOLS, *web], messages=messages)
         if cfg["model"].startswith(ai.EFFORT_MODELS):
             kwargs["output_config"] = {"effort": "medium"}
+        if container:
+            kwargs["container"] = container  # web search filters results in a code container; keep using it
         try:
             if use_fallbacks:
                 msg = client.beta.messages.create(betas=["server-side-fallback-2026-07-01"], fallbacks="default", **kwargs)
@@ -587,9 +630,15 @@ def _anthropic_loop(chat: Chat, cfg: dict, user_msg: str, run: Run) -> str:
         # Keep the assistant turn exactly as returned (thinking and tool-use blocks included).
         content = [b.model_dump(mode="json", exclude_none=True) for b in msg.content]
         messages.append({"role": "assistant", "content": content})
-        texts += [b.text for b in msg.content if b.type == "text" and b.text.strip()]
+        if getattr(msg, "container", None):
+            container = msg.container.id
+        collect_sources(run, content)
+        # Web answers arrive as several text blocks (split at citations): join this turn's text.
+        text = "".join(b.text for b in msg.content if b.type == "text").strip()
+        if text:
+            reply = text
         if msg.stop_reason == "refusal":
-            texts.append("I can't help with that request.")
+            reply = "I can't help with that request."
             break
         if msg.stop_reason == "pause_turn":
             continue
@@ -599,9 +648,29 @@ def _anthropic_loop(chat: Chat, cfg: dict, user_msg: str, run: Run) -> str:
         results = [{"type": "tool_result", "tool_use_id": c.id, "content": execute(run, c.name, c.input)} for c in calls]
         messages.append({"role": "user", "content": results})
     else:
-        texts.append("(I stopped after many steps. Ask me to continue if there is more to do.)")
+        reply += "\n\n(I stopped after many steps. Ask me to continue if there is more to do.)"
     chat.history = messages
-    return texts[-1] if texts else "Done."
+    return reply or "Done."
+
+
+def collect_sources(run: Run, content: list[dict]) -> None:
+    """Pages the answer cites first, then (if it cites none) the pages its searches found."""
+    found = []
+    for b in content:
+        if b.get("type") == "text":
+            for c in b.get("citations") or []:
+                run.add_source(c.get("url"), c.get("title"))
+        elif b.get("type") == "web_search_tool_result":
+            results = b.get("content")
+            if isinstance(results, list):  # an error comes back as an object instead
+                found += [(r.get("url"), r.get("title")) for r in results if isinstance(r, dict)]
+        elif b.get("type") == "web_fetch_tool_result":
+            c = b.get("content")
+            if isinstance(c, dict) and c.get("url"):
+                found.append((c.get("url"), (c.get("content") or {}).get("title") if isinstance(c.get("content"), dict) else ""))
+    if not run.sources:
+        for url, title in found[:5]:
+            run.add_source(url, title)
 
 
 def _openai_loop(chat: Chat, cfg: dict, user_msg: str, run: Run) -> str:
@@ -613,7 +682,7 @@ def _openai_loop(chat: Chat, cfg: dict, user_msg: str, run: Run) -> str:
     messages = [*chat.history, {"role": "user", "content": user_msg}]
     reply = ""
     for _ in range(MAX_STEPS):
-        body = json.dumps({"model": cfg["model"], "messages": [{"role": "system", "content": SYSTEM}, *messages],
+        body = json.dumps({"model": cfg["model"], "messages": [{"role": "system", "content": SYSTEM + WEB_OFF}, *messages],
                            "tools": tools, "max_tokens": ai.MAX_TOKENS}).encode()
         headers = {"Content-Type": "application/json", **({"Authorization": f"Bearer {key}"} if key else {})}
         req = urllib.request.Request(cfg["base_url"] + "/chat/completions", data=body, headers=headers, method="POST")

@@ -714,3 +714,58 @@ class GroupTests(TestCase):
         self.assertEqual([t["title"] for t in a["tasks"]], ["Lab report"])
         p = self.c.patch(f"/api/documents/{g['id']}", {"kind": "page"}, format="json").json()
         self.assertEqual(p["doc"]["kind"] if "doc" in p else p["kind"], "page")
+
+
+class AgentClaudeTests(TestCase):
+    def setUp(self):
+        self.c = APIClient(HTTP_X_KERN="1")
+
+    def test_web_search_sources_and_page_context(self):
+        from unittest import mock
+
+        class Block:
+            def __init__(self, **kw):
+                self.__dict__.update(kw)
+            def model_dump(self, **_):
+                return {k: v for k, v in self.__dict__.items() if v is not None}
+
+        class Msg:
+            def __init__(self, content, stop):
+                self.content, self.stop_reason, self.container = content, stop, None
+
+        doc = self.c.post("/api/documents", {"title": "Photosynthesis"}, format="json").json()
+        replies = [
+            Msg([Block(type="tool_use", id="t1", name="read_page", input={"page_id": doc["id"]})], "tool_use"),
+            Msg([Block(type="server_tool_use", id="s1", name="web_search", input={"query": "chlorophyll"}),
+                 Block(type="web_search_tool_result", tool_use_id="s1", content=[
+                     {"type": "web_search_result", "url": "https://example.org/a", "title": "A"}]),
+                 Block(type="text", text="Chlorophyll absorbs ", citations=None),
+                 Block(type="text", text="red and blue light.", citations=[
+                     {"type": "web_search_result_location", "url": "https://example.org/a", "title": "A", "cited_text": "x"}])],
+                "end_turn"),
+        ]
+        calls = []
+
+        def create(**kw):
+            calls.append(kw)
+            return replies[len(calls) - 1]
+
+        fake = mock.MagicMock()
+        fake.beta.messages.create.side_effect = create
+        self.c.put("/api/ai/config", {"provider": "anthropic", "api_key": "sk-ant-test-123456789"}, format="json")
+        chat = self.c.post("/api/chats", {}, format="json").json()
+        with mock.patch("anthropic.Anthropic", return_value=fake):
+            r = self.c.post(f"/api/chats/{chat['id']}/message", {"text": "more on this?", "page": doc["id"]}, format="json")
+        self.assertEqual(r.status_code, 200, r.content)
+        last = r.json()["messages"][-1]
+        self.assertEqual(last["text"], "Chlorophyll absorbs red and blue light.")
+        self.assertEqual(last["sources"], [{"url": "https://example.org/a", "title": "A"}])
+        names = [t.get("name") for t in calls[0]["tools"]]
+        self.assertIn("web_search", names)
+        self.assertIn("web_fetch", names)
+        self.assertIn("search the web", calls[0]["system"])
+        sent = calls[-1]["messages"]  # one list, extended turn by turn
+        self.assertIn("Photosynthesis", sent[0]["content"])
+        self.assertEqual(sent[2]["content"][0]["type"], "tool_result")
+        self.assertIn("Photosynthesis", sent[2]["content"][0]["content"])
+        self.assertTrue(self.c.get("/api/ai/config").json()["web_search"])

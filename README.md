@@ -158,6 +158,15 @@ docker compose cp backend:/data/backups ./kern-backups
   under its reply with a link. Pages it edits get a version-history snapshot
   first, and what it deletes goes to the trash. With non-Claude providers the
   model must support tool calling.
+- Press Alt+I anywhere (also while typing; changeable in Settings →
+  Shortcuts), or the ✦ in a page's top bar, to open Intelligence over the
+  current page: ask about it, have it edit it, get quizzed on it (one question
+  at a time, with a score and the missed questions offered as flashcards), or
+  have it look things up. Each page keeps its own conversation, which also
+  appears on the Intelligence page.
+- With Claude it can search the web and read web pages, and lists the
+  sources under its answer. Other providers have no web search; the popup
+  says so.
 
 ## Development without Docker
 

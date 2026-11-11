@@ -33,6 +33,7 @@ const SYNCED: (keyof Prefs)[] = [
 
 export const SHORTCUT_ACTIONS: [string, string, string][] = [
 	['search', 'Search and quick switch', 'Mod+K'],
+	['intelligence', 'Intelligence on this page', 'Alt+I'],
 	['newPage', 'New page', 'Alt+N'],
 	['toggleSidebar', 'Toggle sidebar', 'Mod+\\'],
 	['togglePanel', 'Toggle page details', 'Mod+Shift+\\'],

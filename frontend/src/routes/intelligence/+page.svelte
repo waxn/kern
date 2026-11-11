@@ -5,17 +5,10 @@
 	import { onMount, tick } from 'svelte';
 	import { api, ApiError } from '#lib/api.ts';
 	import { ai } from '#lib/ai/ai.svelte.ts';
-	import { renderMarkdown } from '#lib/ai/md.ts';
+	import { sendChat, type Chat, type ChatSummary } from '#lib/ai/chat.ts';
+	import ChatThread from '#lib/ai/ChatThread.svelte';
 	import Sparkle from '#lib/ai/Sparkle.svelte';
-	import { releaseDoc } from '#lib/editor/doc.svelte.ts';
-	import { open } from '#lib/state/tabs.ts';
 	import { ui } from '#lib/state/ui.svelte.ts';
-	import { ws } from '#lib/state/workspace.svelte.ts';
-
-	interface Action { verb: string; detail: string; page?: { id: string; title: string; icon: string } }
-	interface Message { role: 'user' | 'assistant'; text: string; actions?: Action[]; at?: string }
-	interface ChatSummary { id: string; title: string; updated_at: string }
-	interface Chat extends ChatSummary { messages: Message[] }
 
 	let chats = $state<ChatSummary[]>([]);
 	let chat = $state<Chat | null>(null);
@@ -90,20 +83,10 @@
 		draft = '';
 		await scrollDown();
 		try {
-			let target = chat;
-			if (!target) {
-				target = await api.post<Chat>('/chats', {});
-				chat = target;
-				goto(`/intelligence?c=${target.id}`, { replaceState: true });
-			}
-			const updated = await api.post<Chat>(`/chats/${target.id}/message`, { text });
-			chat = updated;
-			const last = updated.messages[updated.messages.length - 1];
-			if (last?.actions?.length) {
-				// The assistant changed the workspace: drop cached copies so pages reload fresh.
-				for (const a of last.actions) if (a.page) await releaseDoc(a.page.id, false);
-				ws.load().catch(() => {});
-			}
+			chat = await sendChat(chat, text, null, (c) => {
+				chat = c;
+				goto(`/intelligence?c=${c.id}`, { replaceState: true });
+			});
 			loadList();
 		} catch (e) {
 			draft = text;
@@ -145,19 +128,6 @@
 		void draft;
 		autosize();
 	});
-
-	const linkFor = (title: string) => {
-		const d = Object.values(ws.docs).find((x) => x.title.trim().toLowerCase() === title.trim().toLowerCase());
-		return d ? `/doc/${d.id}` : null;
-	};
-
-	function clickProse(e: MouseEvent) {
-		const a = (e.target as HTMLElement).closest('a.ref') as HTMLAnchorElement | null;
-		if (a) {
-			e.preventDefault();
-			open(a.getAttribute('href')!, e);
-		}
-	}
 
 	function when(iso: string) {
 		const d = new Date(iso);
@@ -216,43 +186,7 @@
 					{/if}
 				</div>
 			{:else}
-				<div class="thread">
-					{#each chat?.messages ?? [] as m, i (i)}
-						{#if m.role === 'user'}
-							<div class="msg user"><div class="bubble">{m.text}</div></div>
-						{:else}
-							<div class="msg bot">
-								<span class="avatar"><Sparkle size={16} /></span>
-								<div class="body">
-									{#if m.actions?.length}
-										<div class="actions">
-											{#each m.actions as a, j (j)}
-												{#if a.page}
-													<a class="act" href="/doc/{a.page.id}" onclick={(e) => { e.preventDefault(); open(`/doc/${a.page!.id}`, e); }}>
-														<b>{a.verb}</b>
-														<span class="truncate">{a.page.icon ? a.page.icon + ' ' : ''}{a.page.title}</span>
-														{#if a.detail}<span class="faint truncate">· {a.detail}</span>{/if}
-													</a>
-												{:else}
-													<span class="act"><b>{a.verb}</b><span class="truncate">{a.detail}</span></span>
-												{/if}
-											{/each}
-										</div>
-									{/if}
-									<!-- svelte-ignore a11y_click_events_have_key_events, a11y_no_static_element_interactions -->
-									<div class="prose rt" onclick={clickProse}>{@html renderMarkdown(m.text, linkFor)}</div>
-								</div>
-							</div>
-						{/if}
-					{/each}
-					{#if sending}
-						<div class="msg user"><div class="bubble">{pendingText}</div></div>
-						<div class="msg bot">
-							<span class="avatar spin"><Sparkle size={16} /></span>
-							<div class="body"><span class="thinking">Working on it…</span></div>
-						</div>
-					{/if}
-				</div>
+				<div class="thread-wrap"><ChatThread messages={chat?.messages ?? []} {sending} {pendingText} /></div>
 			{/if}
 		</div>
 
@@ -305,28 +239,7 @@
 	.idea { padding: 10px 12px; border: 1px solid var(--border-strong); border-radius: 10px; background: var(--surface); color: var(--text-2); line-height: 1.4; transition: border-color .15s var(--ease), color .15s var(--ease), background .15s var(--ease); }
 	.idea:hover { color: var(--text); border-color: color-mix(in srgb, var(--accent) 45%, var(--border-strong)); background: color-mix(in srgb, var(--accent) 6%, var(--surface)); }
 
-	.thread { max-width: 760px; margin: 0 auto; padding: 24px 24px 12px; display: flex; flex-direction: column; gap: 18px; }
-	.msg.user { display: flex; justify-content: flex-end; }
-	.bubble { max-width: 80%; padding: 8px 13px; border-radius: 14px 14px 4px 14px; background: var(--surface-2); white-space: pre-wrap; overflow-wrap: anywhere; line-height: 1.5; }
-	.msg.bot { display: flex; gap: 12px; align-items: flex-start; }
-	.avatar { flex: none; display: grid; place-items: center; width: 28px; height: 28px; border-radius: 8px; border: 1px solid var(--border-strong); background: var(--surface); }
-	.avatar.spin :global(.sparkle) { animation: spin 1.6s linear infinite; }
-	@keyframes spin { to { transform: rotate(360deg); } }
-	.body { flex: 1; min-width: 0; padding-top: 3px; }
-	.thinking { color: var(--text-3); background: linear-gradient(90deg, var(--text-3), var(--text), var(--text-3)); background-size: 200% 100%; -webkit-background-clip: text; background-clip: text; color: transparent; animation: shimmer 1.8s linear infinite; }
-	@keyframes shimmer { from { background-position: 200% 0; } to { background-position: -200% 0; } }
-	.actions { display: flex; flex-direction: column; gap: 4px; margin-bottom: 8px; }
-	.act { display: flex; align-items: center; gap: 6px; max-width: 100%; width: fit-content; padding: 4px 10px; border-radius: 8px; font-size: 12.5px; text-decoration: none; color: var(--text-2);
-		border: 1px solid color-mix(in srgb, var(--accent) 25%, var(--border)); background: color-mix(in srgb, var(--accent) 6%, transparent); }
-	a.act:hover { color: var(--text); border-color: color-mix(in srgb, var(--accent) 50%, var(--border)); }
-	.act b { font-weight: 600; color: var(--accent); white-space: nowrap; }
-	.prose { line-height: 1.6; }
-	.prose :global(p) { margin: 0 0 8px; }
-	.prose :global(p:last-child) { margin-bottom: 0; }
-	.prose :global(ul), .prose :global(ol) { margin: 0 0 8px; padding-left: 22px; }
-	.prose :global(h4) { margin: 10px 0 4px; font-size: 14.5px; }
-	.prose :global(pre) { margin: 0 0 8px; padding: 10px 12px; border-radius: 8px; background: var(--code-bg); overflow-x: auto; font: 12.5px/1.5 var(--font-mono); }
-	.prose :global(pre code) { background: none; padding: 0; color: inherit; }
+	.thread-wrap { max-width: 760px; margin: 0 auto; padding: 24px 24px 12px; }
 
 	.composer-wrap { padding: 8px 24px 14px; }
 	.composer { max-width: 760px; margin: 0 auto; display: flex; align-items: flex-end; gap: 8px; padding: 8px 8px 8px 14px; border: 1px solid var(--border-strong); border-radius: 14px; background: var(--surface); transition: border-color .15s var(--ease), box-shadow .15s var(--ease); }
@@ -340,6 +253,6 @@
 	@media (max-width: 720px) {
 		.chats { display: none; }
 		.ideas { grid-template-columns: 1fr; }
-		.thread, .composer-wrap { padding-left: 14px; padding-right: 14px; }
+		.thread-wrap, .composer-wrap { padding-left: 14px; padding-right: 14px; }
 	}
 </style>
