@@ -72,7 +72,9 @@ def file_detail(request, file_id):
     except Attachment.DoesNotExist:
         raise Http404
     if request.method == "DELETE":
+        from .views_files import delete_version_files
         path = a.file.path if a.file else None
+        delete_version_files(a)
         a.delete()
         if path and os.path.exists(path):
             os.remove(path)

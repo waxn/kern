@@ -14,6 +14,7 @@
 	import CardEditor from '#lib/learn/CardEditor.svelte';
 	import { ai } from '#lib/ai/ai.svelte.ts';
 	import IntelPopup from '#lib/ai/IntelPopup.svelte';
+	import MediaPlayer from '#lib/files/MediaPlayer.svelte';
 	import { flushAll, syncPending } from '#lib/editor/doc.svelte.ts';
 	import { CloudOff } from '@lucide/svelte';
 	import { counts } from '#lib/learn/util.svelte.ts';
@@ -153,6 +154,7 @@
 <ConfirmDialog />
 {#if ui.cardEditor}<CardEditor />{/if}
 {#if ai.popupOpen}<IntelPopup />{/if}
+<MediaPlayer />
 <Toasts />
 
 <style>

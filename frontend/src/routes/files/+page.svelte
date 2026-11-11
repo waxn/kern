@@ -1,8 +1,10 @@
 <script lang="ts">
-	import { Copy, Download, Eye, FileText, Film, Image, Music, Pencil, Search, Trash2, Upload } from '@lucide/svelte';
+	import { AudioLines, Copy, Download, Eye, FileText, Film, Image, Music, Pencil, Play, Search, Trash2, Upload } from '@lucide/svelte';
 	import { onMount } from 'svelte';
 	import { api, qs } from '#lib/api.ts';
 	import FilePreview from '#lib/components/FilePreview.svelte';
+	import { fileKind, isMedia } from '#lib/files/kind.ts';
+	import { player } from '#lib/files/player.svelte.ts';
 	import { open } from '#lib/state/tabs.ts';
 	import { ui } from '#lib/state/ui.svelte.ts';
 	import { fileSize, relTime } from '#lib/util.ts';
@@ -60,6 +62,12 @@
 		load();
 	}
 
+	/** Media plays in the app-wide player (keeps going while you browse); everything else opens a viewer. */
+	function openFile(f: F) {
+		if (isMedia(f)) player.open(f);
+		else preview = f;
+	}
+
 	const icon = (m: string) => (m.startsWith('image/') ? Image : m.startsWith('video/') ? Film : m.startsWith('audio/') ? Music : FileText);
 	const types: [string, string][] = [['', 'All'], ['image', 'Images'], ['pdf', 'PDFs'], ['video', 'Video'], ['audio', 'Audio'], ['other', 'Other']];
 </script>
@@ -86,8 +94,11 @@
 				{#each shown as f (f.id)}
 					{@const Icon = icon(f.mime)}
 					<div class="file">
-						<button class="thumb" onclick={() => (preview = f)} title="Preview">
-							{#if f.mime.startsWith('image/')}<img src={f.url} alt="" loading="lazy" />{:else}<Icon size={view === 'grid' ? 28 : 16} strokeWidth={1.5} />{/if}
+						<button class="thumb" class:playing={player.file?.url === f.url} onclick={() => openFile(f)} title={isMedia(f) ? 'Play' : 'Open'}>
+							{#if f.mime.startsWith('image/')}<img src={f.url} alt="" loading="lazy" />
+							{:else if fileKind(f) === 'video' && view === 'grid'}<video src={f.url + '#t=1'} preload="metadata" muted playsinline tabindex="-1"></video><span class="playbadge"><Play size={16} fill="currentColor" /></span>
+							{:else}<Icon size={view === 'grid' ? 28 : 16} strokeWidth={1.5} />{/if}
+							{#if player.file?.url === f.url}<span class="nowplaying" title="Playing"><AudioLines size={13} /></span>{/if}
 						</button>
 						<div class="meta">
 							<span class="name truncate" title={f.name}>{f.name}</span>
@@ -99,7 +110,7 @@
 							</span>
 						</div>
 						<div class="acts">
-							<button class="icon-btn" title="Preview" onclick={() => (preview = f)}><Eye size={14} /></button>
+							<button class="icon-btn" title={isMedia(f) ? 'Play' : 'Open'} onclick={() => openFile(f)}>{#if isMedia(f)}<Play size={14} />{:else}<Eye size={14} />{/if}</button>
 							<a class="icon-btn" title="Download" href={f.url} download={f.name}><Download size={14} /></a>
 							<button class="icon-btn" title="Copy link" onclick={() => navigator.clipboard?.writeText(location.origin + f.url).then(() => ui.toast('Link copied'))}><Copy size={14} /></button>
 							<button class="icon-btn" title="Rename" onclick={() => rename(f)}><Pencil size={14} /></button>
@@ -114,7 +125,7 @@
 	</div>
 </div>
 
-{#if preview}<FilePreview file={preview} onclose={() => (preview = null)} />{/if}
+{#if preview}<FilePreview file={preview} onclose={() => (preview = null)} onchange={load} />{/if}
 
 <style>
 	.wide { max-width: 1100px; }
@@ -131,7 +142,12 @@
 	.grid { display: grid; grid-template-columns: repeat(auto-fill, minmax(190px, 1fr)); gap: 10px; }
 	.grid .file { position: relative; display: flex; flex-direction: column; border: 1px solid var(--border); border-radius: 8px; overflow: hidden; }
 	.grid .thumb { height: 120px; display: grid; place-items: center; background: var(--surface-2); color: var(--text-3); }
-	.grid .thumb img { width: 100%; height: 100%; object-fit: cover; }
+	.grid .thumb img, .grid .thumb video { width: 100%; height: 100%; object-fit: cover; pointer-events: none; }
+	.thumb { position: relative; }
+	.playbadge { position: absolute; width: 34px; height: 34px; display: grid; place-items: center; border-radius: 50%; color: #fff; background: rgba(0, 0, 0, 0.55); }
+	.nowplaying { position: absolute; left: 6px; bottom: 6px; display: grid; place-items: center; width: 22px; height: 22px; border-radius: 50%; color: #17130c; background: var(--accent); }
+	.list .nowplaying { left: auto; bottom: auto; width: 18px; height: 18px; }
+	.thumb.playing { color: var(--accent); }
 	.grid .meta { padding: 7px 9px; display: flex; flex-direction: column; min-width: 0; }
 	.grid .acts { position: absolute; top: 6px; right: 6px; display: none; gap: 1px; padding: 2px; border-radius: var(--radius); background: var(--surface); box-shadow: var(--shadow); }
 	.grid .file:hover .acts { display: flex; }

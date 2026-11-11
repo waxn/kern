@@ -10,10 +10,12 @@ export function tabInfo(path: string): { title: string; icon: string } {
 	}
 	const tag = path.match(/^\/tag\/([^/]+)/);
 	if (tag) return { title: '#' + (ws.tagMap[tag[1]]?.name ?? 'tag'), icon: '' };
+	const repo = path.match(/^\/git\/([^/]+)/);
+	if (repo) return { title: repo[1], icon: '' };
 	const names: Record<string, string> = {
 		'/': 'Home', '/tags': 'Tags', '/trash': 'Trash', '/archive': 'Archive', '/settings': 'Settings',
 		'/templates': 'Templates', '/graph': 'Graph', '/tasks': 'Tasks', '/cards': 'Flashcards', '/review': 'Review',
-		'/files': 'Files', '/developer': 'API', '/search': 'Search', '/intelligence': 'Intelligence'
+		'/files': 'Files', '/developer': 'API', '/search': 'Search', '/intelligence': 'Intelligence', '/git': 'Git'
 	};
 	return { title: names[path] ?? 'Kern', icon: '' };
 }

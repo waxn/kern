@@ -5,10 +5,24 @@
 		reverse_proxy backend:8000
 	}
 
-	# Uploaded files are served straight from the shared data volume.
+	# Git smart HTTP (clone/fetch/push): stream both ways, no size limit, no buffering.
+	@git path_regexp ^/git/[^/]+\.git/
+	handle @git {
+		reverse_proxy backend:8000 {
+			flush_interval -1
+			transport http {
+				read_timeout 10m
+				write_timeout 10m
+			}
+		}
+	}
+
+	# Uploaded files are served straight from the shared data volume. file_server answers
+	# HTTP range requests, so audio, video and big PDFs stream and seek. Text files can be
+	# edited in place under the same URL, so browsers revalidate (cheap 304s via ETag).
 	handle /media/* {
 		root * /data
-		header Cache-Control "private, max-age=31536000, immutable"
+		header Cache-Control "private, no-cache"
 		file_server
 	}
 

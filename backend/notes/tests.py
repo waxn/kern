@@ -832,3 +832,248 @@ class WebArchiveTests(TestCase):
         self.assertEqual(detect_kind("https://www.youtube.com/watch?v=1"), "video")
         self.assertEqual(detect_kind("https://x.org/a.PNG"), "image")
         self.assertEqual(detect_kind("https://x.org/a"), "web")
+
+
+class FileEditingTests(TestCase):
+    """In-place editing with versions, PDF annotations and range-aware media serving."""
+
+    def setUp(self):
+        import tempfile
+        from django.test import override_settings
+        self.media = tempfile.mkdtemp()
+        self._override = override_settings(MEDIA_ROOT=self.media)
+        self._override.enable()
+        self.c = APIClient(HTTP_X_KERN="1")
+
+    def tearDown(self):
+        import shutil
+        self._override.disable()
+        shutil.rmtree(self.media, ignore_errors=True)
+
+    def upload(self, name, data, mime="text/plain"):
+        from django.core.files.uploadedfile import SimpleUploadedFile
+        r = self.c.post("/api/files", {"file": SimpleUploadedFile(name, data, content_type=mime)}, format="multipart")
+        self.assertEqual(r.status_code, 201, r.content)
+        return r.json()
+
+    def media_bytes(self, url, **headers):
+        r = self.client.get(url, **headers)
+        body = b"".join(r.streaming_content) if r.streaming else r.content
+        return r, body
+
+    def test_edit_keeps_previous_version_and_restores(self):
+        f = self.upload("notes.md", b"# One\n")
+        meta = self.c.get(f"/api/library/{f['id']}/content").json()
+        self.assertEqual(meta["versions"], 0)
+        r = self.c.put(f"/api/library/{f['id']}/content", {"content": "# Two\n", "base": meta["base"]}, format="json")
+        self.assertEqual(r.status_code, 200, r.content)
+        saved = r.json()
+        self.assertEqual(saved["size"], 6)
+        self.assertEqual(saved["url"], f["url"])  # same URL, so pages that link to it keep working
+        _, body = self.media_bytes(f["url"])
+        self.assertEqual(body, b"# Two\n")
+        # A stale base is refused instead of overwriting the newer save.
+        r = self.c.put(f"/api/library/{f['id']}/content", {"content": "# Stale\n", "base": meta["base"]}, format="json")
+        self.assertEqual(r.status_code, 409)
+        self.assertTrue(r.json()["conflict"])
+        hist = self.c.get(f"/api/library/{f['id']}/versions").json()
+        self.assertEqual(len(hist["versions"]), 1)
+        old = hist["versions"][0]
+        _, body = self.media_bytes(old["url"])
+        self.assertEqual(body, b"# One\n")
+        r = self.c.post(f"/api/library/{f['id']}/versions/{old['id']}/restore")
+        self.assertEqual(r.status_code, 200, r.content)
+        _, body = self.media_bytes(f["url"])
+        self.assertEqual(body, b"# One\n")
+        # Restoring kept "# Two" as a version too.
+        self.assertEqual(len(self.c.get(f"/api/library/{f['id']}/versions").json()["versions"]), 2)
+
+    def test_replace_with_uploaded_file_and_delete_cleans_versions(self):
+        import os
+        from django.core.files.uploadedfile import SimpleUploadedFile
+        f = self.upload("a.pdf", b"%PDF-1 old", "application/pdf")
+        r = self.c.put(f"/api/library/{f['id']}/content", {"file": SimpleUploadedFile("a.pdf", b"%PDF-1 new!")}, format="multipart")
+        self.assertEqual(r.status_code, 200, r.content)
+        self.assertEqual(r.json()["size"], 11)
+        hist = self.c.get(f"/api/library/{f['id']}/versions").json()["versions"]
+        vpath = os.path.join(self.media, hist[0]["url"].removeprefix("/media/"))
+        self.assertTrue(os.path.exists(vpath))
+        self.assertEqual(self.c.delete(f"/api/library/{f['id']}").status_code, 204)
+        self.assertFalse(os.path.exists(vpath))
+
+    def test_bad_content_and_missing_file(self):
+        f = self.upload("x.txt", b"x")
+        self.assertEqual(self.c.put(f"/api/library/{f['id']}/content", {"content": 5}, format="json").status_code, 400)
+        self.assertEqual(self.c.put(f"/api/library/{uid()}/content", {"content": "y"}, format="json").status_code, 404)
+
+    def test_annotations_crud(self):
+        f = self.upload("paper.pdf", b"%PDF-1.4", "application/pdf")
+        base = f"/api/library/{f['id']}/annotations"
+        r = self.c.post(base, {"page": 2, "kind": "highlight", "color": "green", "rects": [[0.1, 0.2, 0.5, 0.03]],
+                               "text": "important bit"}, format="json")
+        self.assertEqual(r.status_code, 201, r.content)
+        a = r.json()
+        self.assertEqual((a["page"], a["color"], a["rects"]), (2, "green", [[0.1, 0.2, 0.5, 0.03]]))
+        self.assertEqual(self.c.post(base, {"page": 1, "rects": []}, format="json").status_code, 400)
+        self.assertEqual(self.c.post(base, {"page": 1, "kind": "scribble", "rects": [[0, 0, 1, 1]]}, format="json").status_code, 400)
+        r = self.c.patch(f"{base}/{a['id']}", {"note": "Remember this", "color": "nope"}, format="json")
+        self.assertEqual(r.json()["note"], "Remember this")
+        self.assertEqual(r.json()["color"], "yellow")
+        self.c.post(base, {"page": 1, "kind": "note", "rects": [[2, -1, 0, 0]], "note": "first page"}, format="json")
+        listed = self.c.get(base).json()
+        self.assertEqual([n["page"] for n in listed], [1, 2])
+        self.assertEqual(listed[0]["rects"], [[1.0, 0.0, 0.0, 0.0]])  # clamped to the page
+        self.assertEqual(self.c.delete(f"{base}/{a['id']}").status_code, 204)
+        self.assertEqual(len(self.c.get(base).json()), 1)
+
+    def test_media_range_requests(self):
+        data = bytes(range(256)) * 40  # 10240 bytes
+        f = self.upload("clip.mp4", data, "video/mp4")
+        r, body = self.media_bytes(f["url"])
+        self.assertEqual(r.status_code, 200)
+        self.assertEqual(r["Accept-Ranges"], "bytes")
+        self.assertEqual(body, data)
+        r, body = self.media_bytes(f["url"], HTTP_RANGE="bytes=100-199")
+        self.assertEqual(r.status_code, 206)
+        self.assertEqual(r["Content-Range"], f"bytes 100-199/{len(data)}")
+        self.assertEqual(body, data[100:200])
+        r, body = self.media_bytes(f["url"], HTTP_RANGE="bytes=10000-")
+        self.assertEqual(body, data[10000:])
+        r, body = self.media_bytes(f["url"], HTTP_RANGE="bytes=-40")
+        self.assertEqual(body, data[-40:])
+        r, _ = self.media_bytes(f["url"], HTTP_RANGE="bytes=20000-")
+        self.assertEqual(r.status_code, 416)
+        self.assertEqual(self.client.get("/media/../secret_key").status_code, 404)
+
+
+
+# ------------------------------------------------------------------- git hosting
+
+import shutil as _shutil  # noqa: E402
+import subprocess as _sp  # noqa: E402
+import tempfile as _tempfile  # noqa: E402
+
+from django.test import LiveServerTestCase, override_settings  # noqa: E402
+
+
+class _GitRootMixin:
+    def setUp(self):
+        super().setUp()
+        self.git_root = _tempfile.mkdtemp(prefix="kern-git-test-")
+        self._override = override_settings(KERN_GIT_ROOT=self.git_root)
+        self._override.enable()
+        self.c = APIClient(HTTP_X_KERN="1")
+
+    def tearDown(self):
+        self._override.disable()
+        _shutil.rmtree(self.git_root, ignore_errors=True)
+        super().tearDown()
+
+
+class GitApiTests(_GitRootMixin, TestCase):
+    def test_create_list_delete(self):
+        r = self.c.post("/api/git/repos", {"name": "proj", "description": "My project"}, format="json")
+        self.assertEqual(r.status_code, 201, r.content)
+        self.assertTrue(r.json()["empty"])
+        import os
+        self.assertTrue(os.path.isfile(os.path.join(self.git_root, "proj.git", "HEAD")))
+        self.assertFalse(os.listdir(os.path.join(self.git_root, "proj.git", "hooks")) if os.path.isdir(
+            os.path.join(self.git_root, "proj.git", "hooks")) else [])
+        r = self.c.get("/api/git/repos")
+        self.assertEqual([x["name"] for x in r.json()], ["proj"])
+        self.assertEqual(r.json()[0]["description"], "My project")
+        self.assertEqual(self.c.post("/api/git/repos", {"name": "proj"}, format="json").status_code, 409)
+        r = self.c.patch("/api/git/repos/proj", {"description": "Renamed"}, format="json")
+        self.assertEqual(r.json()["description"], "Renamed")
+        self.assertEqual(self.c.delete("/api/git/repos/proj").status_code, 204)
+        self.assertEqual(self.c.get("/api/git/repos").json(), [])
+        self.assertEqual(self.c.get("/api/git/repos/proj").status_code, 404)
+
+    def test_name_validation(self):
+        for bad_name in ["", "../evil", "a/b", ".hidden", "-opt", "x.git", "a..b", "x" * 65, "sp ace", "ü"]:
+            r = self.c.post("/api/git/repos", {"name": bad_name}, format="json")
+            self.assertEqual(r.status_code, 400, bad_name)
+        self.assertEqual(self.c.get("/api/git/repos/..%2Fetc").status_code, 404)
+
+    def test_guard_and_protocol_scoping(self):
+        self.assertEqual(APIClient().post("/api/git/repos", {"name": "x"}, format="json").status_code, 403)
+        self.c.post("/api/git/repos", {"name": "x"}, format="json")
+        plain = APIClient()
+        # Smart HTTP lives outside /api and needs no X-Kern header...
+        r = plain.get("/git/x.git/info/refs?service=git-upload-pack")
+        self.assertEqual(r.status_code, 200)
+        self.assertEqual(r["Content-Type"], "application/x-git-upload-pack-advertisement")
+        # ...but only git's own content types are accepted for POST, which browsers cannot forge cross-site.
+        r = plain.post("/git/x.git/git-receive-pack", "x", content_type="text/plain")
+        self.assertEqual(r.status_code, 415)
+        self.assertEqual(plain.get("/git/x.git/info/refs").status_code, 403)  # dumb protocol
+        self.assertEqual(plain.get("/git/x.git/config").status_code, 404)
+        self.assertEqual(plain.get("/git/nope.git/info/refs?service=git-upload-pack").status_code, 404)
+
+    def test_password_setting_is_private(self):
+        r = self.c.put("/api/git/config", {"mode": "push"}, format="json")
+        self.assertEqual(r.status_code, 400)
+        r = self.c.put("/api/git/config", {"mode": "all", "password": "secret-pw"}, format="json")
+        self.assertEqual(r.json(), {"mode": "all", "has_password": True})
+        self.assertNotIn("git_auth", self.c.get("/api/settings").json())
+        self.c.post("/api/git/repos", {"name": "x"}, format="json")
+        url = "/git/x.git/info/refs?service=git-upload-pack"
+        self.assertEqual(APIClient().get(url).status_code, 401)
+        import base64
+        ok = base64.b64encode(b"me:secret-pw").decode()
+        self.assertEqual(APIClient().get(url, HTTP_AUTHORIZATION="Basic " + ok).status_code, 200)
+
+
+@override_settings(STATIC_URL="/static/")  # the live server's static handler needs one
+class GitProtocolTests(_GitRootMixin, LiveServerTestCase):
+    """Push and clone with a real git client against a live server."""
+
+    def run_git(self, *args, cwd=None):
+        env = {"PATH": __import__("os").environ["PATH"], "HOME": self.git_root, "GIT_CONFIG_NOSYSTEM": "1",
+               "GIT_TERMINAL_PROMPT": "0", "GIT_AUTHOR_NAME": "Ada", "GIT_AUTHOR_EMAIL": "ada@example.com",
+               "GIT_COMMITTER_NAME": "Ada", "GIT_COMMITTER_EMAIL": "ada@example.com"}
+        r = _sp.run(["git", *args], cwd=cwd, env=env, capture_output=True, text=True)
+        self.assertEqual(r.returncode, 0, r.stderr)
+        return r.stdout
+
+    def test_push_clone_browse(self):
+        import os
+        self.c.post("/api/git/repos", {"name": "site"}, format="json")
+        work = _tempfile.mkdtemp(dir=self.git_root, prefix="work-")
+        self.run_git("init", "-q", "-b", "main", cwd=work)
+        os.makedirs(os.path.join(work, "src"))
+        with open(os.path.join(work, "README.md"), "w") as f:
+            f.write("# Site\n\nHello.\n")
+        with open(os.path.join(work, "src", "app.py"), "w") as f:
+            f.write("print('hi')\n")
+        self.run_git("add", "-A", cwd=work)
+        self.run_git("commit", "-qm", "First", cwd=work)
+        self.run_git("tag", "v1", cwd=work)
+        url = f"{self.live_server_url}/git/site.git"
+        self.run_git("push", "-q", url, "main", "--tags", cwd=work)
+
+        clone = os.path.join(self.git_root, "clone")
+        self.run_git("clone", "-q", url, clone)
+        self.assertTrue(os.path.isfile(os.path.join(clone, "src", "app.py")))
+        self.assertIn("First", self.run_git("log", "--oneline", cwd=clone))
+
+        info = self.c.get("/api/git/repos/site").json()
+        self.assertFalse(info["empty"])
+        self.assertEqual(info["default_branch"], "main")
+        self.assertTrue(info["last_push"])
+        self.assertEqual([t["name"] for t in info["tag_list"]], ["v1"])
+        tree = self.c.get("/api/git/repos/site/tree").json()
+        self.assertEqual([e["name"] for e in tree["entries"]], ["src", "README.md"])
+        self.assertEqual(tree["readme"]["name"], "README.md")
+        blob = self.c.get("/api/git/repos/site/blob", {"path": "src/app.py", "ref": "v1"}).json()
+        self.assertEqual(blob["text"], "print('hi')\n")
+        sha = self.c.get("/api/git/repos/site/commits").json()["commits"][0]["sha"]
+        diff = self.c.get(f"/api/git/repos/site/commits/{sha}").json()
+        self.assertEqual({f["new_path"] for f in diff["files"]}, {"README.md", "src/app.py"})
+        stats = self.c.get("/api/git/repos/site/stats").json()
+        self.assertEqual(stats["totals"]["commits"], 1)
+        self.assertEqual(stats["totals"]["files"], 2)
+        self.assertEqual(stats["totals"]["lines"], 4)
+        self.assertEqual({l["name"] for l in stats["languages"]}, {"Markdown", "Python"})
+        self.assertEqual(self.c.get("/api/git/repos/site/tree", {"ref": "--help"}).status_code, 404)
+        self.assertEqual(self.c.get("/api/git/repos/site/blob", {"path": "../../etc/passwd"}).status_code, 404)

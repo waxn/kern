@@ -33,7 +33,25 @@ sw.addEventListener('fetch', (event) => {
 	if (url.origin !== location.origin) return;
 
 	if (url.pathname.startsWith('/media/')) {
-		// Attachments never change once uploaded: cache first.
+		// Audio/video stream with HTTP range requests (seeking, big files): straight to the network.
+		if (req.headers.has('range') || req.destination === 'audio' || req.destination === 'video' || req.cache === 'no-store') return;
+		const kind = req.destination;
+		if (kind !== 'image') {
+			// Documents can be edited in place under the same URL: network first, cached copy offline.
+			event.respondWith(
+				fetch(req)
+					.then((res) => {
+						if (res.ok && res.status === 200 && Number(res.headers.get('content-length') ?? 0) < 25 * 1024 * 1024) {
+							const copy = res.clone();
+							caches.open(MEDIA).then((c) => c.put(req, copy));
+						}
+						return res;
+					})
+					.catch(async () => (await caches.match(req)) ?? Response.error())
+			);
+			return;
+		}
+		// Images never change once uploaded: cache first.
 		event.respondWith(
 			caches.open(MEDIA).then(async (cache) => {
 				const hit = await cache.match(req);

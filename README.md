@@ -33,6 +33,34 @@ backups off the machine:
 docker compose cp backend:/data/backups ./kern-backups
 ```
 
+### Git server
+
+Kern can host git repositories. Open **Git** in the sidebar, create a
+repository, then push to it from any git client:
+
+```bash
+git remote add kern http://localhost:8420/git/my-project.git
+git push -u kern main
+git clone http://localhost:8420/git/my-project.git
+```
+
+The Git page lists your repositories (size, last push, clone URL); each
+repository has a file browser for any branch, tag or commit with a rendered
+README, the commit log, single-commit diffs, branches and tags, and a Stats tab
+(contribution heatmap, commits per month, when commits happen, languages, top
+contributors, totals).
+
+- Repositories are bare repos in the data volume (`/data/git/<name>.git`).
+  They are not part of Kern's `.zip` backups; they are git repos, so a
+  `git clone --mirror` is the backup. To copy them off the machine:
+  `docker compose cp backend:/data/git ./kern-git`.
+- Clone, fetch and push use git's smart HTTP protocol (`git http-backend`).
+  Like the rest of Kern there is no login, so anyone who can reach the port can
+  push. **Git → Access** sets a password for pushes or for all git access (git
+  asks for a username; any name works).
+- Repository names: letters, digits, `.`, `-`, `_`, up to 64 characters. Server-side
+  hooks are disabled and pushed objects are checked (`receive.fsckObjects`).
+
 ## What is implemented
 
 **Priority 1 — core knowledge management**
@@ -107,6 +135,22 @@ docker compose cp backend:/data/backups ./kern-backups
   previews (images, PDF, audio, video), rename, download, delete with a
   warning when still in use. Media blocks can reuse any uploaded file; PDF
   file blocks show an inline viewer.
+- Built-in viewers in Files:
+  - Audio/video player with seek bar (buffered range), volume, speed,
+    keyboard shortcuts (Space/K, ←/→, J/L, ↑/↓, M, F, P, 0–9, `<` `>`),
+    full screen and picture-in-picture for video, a waveform and cover view
+    for audio. Esc or the minimise button keeps it playing in a corner dock
+    while you browse other files and pages.
+  - PDF viewer (pdf.js): thumbnails, zoom, page navigation, search, text
+    selection, coloured highlights and notes. Annotations are stored in Kern,
+    never in the file; "Save a copy" writes a new PDF with them burned in.
+  - Text, Markdown and code files are editable in place (Markdown has a
+    live preview). Each save keeps the previous content as a version
+    (History, last 50), restorable at any time.
+  - Word (.docx) documents are viewable, converted to HTML in the browser;
+    they cannot be edited. Other office formats are download-only.
+  - Media is streamed with HTTP range requests (Caddy in Docker, a
+    range-aware fallback view in development), so big files seek instantly.
 - Import: Markdown files or whole folders (front-matter tags, `[[wiki
   links]]` resolved by title, images brought along, Notion/Obsidian folder
   layout), HTML, OPML, CSV (becomes a database with inferred column types),
@@ -179,7 +223,9 @@ cd backend && python3 -m venv .venv && .venv/bin/pip install -r requirements.txt
 cd frontend && npm install && npm run dev
 ```
 
-The Vite dev server proxies `/api` and `/media` to `127.0.0.1:8421`.
+The Vite dev server proxies `/api`, `/media` and git traffic (`/git/<name>.git/…`) to
+`127.0.0.1:8421`. Large pushes are sent chunked, which `runserver` cannot read; run the
+backend with gunicorn (as in Docker) to test those.
 Backend tests: `cd backend && .venv/bin/python manage.py test notes` (30 tests).
 The service worker only runs in a production build: `npm run build && npm run preview`
 (also proxies the API).
@@ -196,6 +242,9 @@ backend/   Django project (kern/) and app (notes/)
   notes/fsrs.py       FSRS-5 scheduler
   notes/tasks.py      recurrence, task ⇄ block/entry sync
   notes/views_data.py files, versions, import/export, backups endpoints
+  notes/gitrepo.py    git hosting: repo storage, safe git calls, tree/log/diff/stats
+  notes/views_git.py  git API (/api/git) and smart-HTTP protocol (/git/<name>.git)
+  notes/views_files.py in-place file edits with versions, PDF annotations, range-aware /media
   notes/porting.py    Markdown/HTML/OPML/CSV/JSON/Anki import and export
   notes/versions.py   version snapshots, pruning, restore
   notes/backup.py     backups, restore, automatic daily backup
