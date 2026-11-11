@@ -1089,9 +1089,9 @@ def health(request):
     
     # Check yt-dlp availability for web archiving
     try:
-        import youtube_dl
-        result["yt_dlp"] = "available"
+        import yt_dlp
+        result["yt_dlp"] = yt_dlp.version.__version__
     except ImportError:
-        result["yt_dlp"] = "not installed - run: pip install youtube-dlc yt_dlp"
+        result["yt_dlp"] = None
     
     return Response(result)

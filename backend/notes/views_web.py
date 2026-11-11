@@ -1,39 +1,213 @@
-"""API views for web archive functionality."""
+"""API views for the web archive (bookmarks, saved pages, downloaded videos)."""
 
-import json
-import os
+import html as htmllib
+import ipaddress
 import re
-import tempfile
-from datetime import datetime
+import shutil
+import socket
+import threading
+from urllib.parse import urljoin, urlparse
 
+import nh3
 import requests
-from django.db import transaction, models
-from django.http import HttpResponse, Http404
-from rest_framework.decorators import api_view, parser_classes
-from rest_framework.parsers import JSONParser
+from django.conf import settings
+from django.db import close_old_connections
+from django.db.models import Q
+from django.http import Http404
+from django.utils import timezone
+from rest_framework.decorators import api_view
 from rest_framework.response import Response
 
 from .models_web import WebArchive
 from .views import bad
 
+VIDEO_HOSTS = ("youtube.com", "youtu.be", "vimeo.com", "twitch.tv", "tiktok.com", "dailymotion.com")
+IMAGE_RE = re.compile(r"\.(jpe?g|png|gif|webp|bmp|svg|avif)$", re.I)
+MAX_HTML = 5_000_000
+USER_AGENT = "Mozilla/5.0 (compatible; KernArchive/1.0)"
+QUALITY_HEIGHT = {"1080p": 1080, "720p": 720, "480p": 480}
+
 
 # ------------------------------------------------------------------ utils
 
 
-def detect_kind_from_url(url: str) -> str:
-    """Detect the content type from URL patterns."""
-    url_lower = url.lower()
-    
-    # Video platforms
-    if any(v in url_lower for v in ["youtube.com", "youtu.be", "vimeo.com", "twitch.tv", "tiktok.com"]):
+def detect_kind(url: str) -> str:
+    p = urlparse(url)
+    host = (p.hostname or "").lower()
+    if any(host == h or host.endswith("." + h) for h in VIDEO_HOSTS):
         return "video"
-    
-    # Image extensions
-    ext = re.search(r'\.(jpg|jpeg|png|gif|webp|bmp|svg)$', url, re.IGNORECASE)
-    if ext:
+    if IMAGE_RE.search(p.path):
         return "image"
-    
     return "web"
+
+
+def check_url(url: str):
+    """Return an error string if the URL must not be fetched server-side, else None.
+
+    Blocks non-http(s) schemes and hosts resolving to private/loopback/link-local addresses.
+    """
+    p = urlparse(url)
+    if p.scheme not in ("http", "https") or not p.hostname:
+        return "Only http(s) URLs can be archived."
+    try:
+        infos = socket.getaddrinfo(p.hostname, p.port or (443 if p.scheme == "https" else 80))
+    except socket.gaierror:
+        return "Could not resolve that host."
+    for info in infos:
+        ip = ipaddress.ip_address(info[4][0])
+        if ip.is_private or ip.is_loopback or ip.is_link_local or ip.is_reserved or ip.is_multicast:
+            return "That address is not allowed."
+    return None
+
+
+def meta_content(page: str, *names: str) -> str:
+    for name in names:
+        for pat in (
+            rf'<meta[^>]+(?:property|name)=["\']{re.escape(name)}["\'][^>]*content=["\']([^"\']*)["\']',
+            rf'<meta[^>]+content=["\']([^"\']*)["\'][^>]*(?:property|name)=["\']{re.escape(name)}["\']',
+        ):
+            m = re.search(pat, page, re.I)
+            if m and m.group(1).strip():
+                return htmllib.unescape(m.group(1).strip())
+    return ""
+
+
+def page_title(page: str) -> str:
+    m = re.search(r"<title[^>]*>(.*?)</title>", page, re.I | re.S)
+    return htmllib.unescape(re.sub(r"\s+", " ", m.group(1)).strip()) if m else ""
+
+
+def video_dir(archive) -> str:
+    return str(settings.MEDIA_ROOT / "web" / str(archive.id))
+
+
+def video_url(archive):
+    return settings.MEDIA_URL + archive.video_path if archive.video_path else ""
+
+
+def summary(a: WebArchive) -> dict:
+    return {
+        "id": str(a.id),
+        "url": a.url,
+        "title": a.title,
+        "kind": a.kind,
+        "thumbnail": a.thumbnail,
+        "duration": a.duration,
+        "author": a.author,
+        "description": a.description[:300],
+        "notes_count": 1 if a.notes.strip() else 0,
+        "todo_count": len(a.todos or []),
+        "is_processed": a.is_processed,
+        "error_message": a.error_message,
+        "video_status": a.video_status,
+        "video_url": video_url(a),
+        "created_at": a.created_at.isoformat(),
+        "updated_at": a.updated_at.isoformat(),
+    }
+
+
+def detail(a: WebArchive) -> dict:
+    d = summary(a)
+    d.update(
+        description=a.description,
+        has_html=bool(a.html_content),
+        download_video=a.download_video,
+        video_format=a.video_format,
+        video_quality=a.video_quality,
+        notes=a.notes,
+        todos=a.todos or [],
+        last_viewed_at=a.last_viewed_at.isoformat() if a.last_viewed_at else None,
+    )
+    return d
+
+
+def get_archive(archive_id) -> WebArchive:
+    try:
+        return WebArchive.objects.get(id=int(archive_id))
+    except (WebArchive.DoesNotExist, ValueError):
+        raise Http404
+
+
+def clean_todos(value):
+    """Todos are stored as [{"text": str, "done": bool}]; plain strings are accepted."""
+    out = []
+    for t in value if isinstance(value, list) else []:
+        if isinstance(t, dict):
+            text, done = str(t.get("text", "")).strip(), bool(t.get("done"))
+        else:
+            text, done = str(t).strip(), False
+        if text:
+            out.append({"text": text[:500], "done": done})
+    return out
+
+
+def fetch_page(url: str):
+    """GET a page following redirects manually so every hop passes check_url."""
+    for _ in range(5):
+        err = check_url(url)
+        if err:
+            raise ValueError(err)
+        r = requests.get(
+            url, timeout=20, stream=True, allow_redirects=False,
+            headers={"User-Agent": USER_AGENT, "Accept": "text/html,*/*;q=0.5"},
+        )
+        if r.is_redirect and r.headers.get("location"):
+            url = urljoin(url, r.headers["location"])
+            r.close()
+            continue
+        r.raise_for_status()
+        raw = r.raw.read(MAX_HTML, decode_content=True)
+        r.close()
+        enc = r.encoding or "utf-8"
+        return url, r.headers.get("content-type", ""), raw.decode(enc, errors="replace")
+    raise ValueError("Too many redirects.")
+
+
+def process(a: WebArchive):
+    """Fetch the page, store sanitised HTML and fill in missing metadata."""
+    a.error_message = None
+    try:
+        final, ctype, body = fetch_page(a.url)
+        if a.kind == "image" or ctype.startswith("image/"):
+            a.kind = "image"
+            a.thumbnail = a.thumbnail or a.url
+        else:
+            if a.download_html:
+                a.html_content = nh3.clean(
+                    body,
+                    tags=nh3.ALLOWED_TAGS | {"article", "section", "header", "footer", "main", "figure", "figcaption"},
+                )
+            a.title = a.title or meta_content(body, "og:title", "twitter:title") or page_title(body)
+            a.description = a.description or meta_content(body, "og:description", "description", "twitter:description")
+            a.author = a.author or meta_content(body, "author", "article:author", "og:site_name")
+            thumb = meta_content(body, "og:image", "og:image:url", "twitter:image")
+            if thumb and not a.thumbnail:
+                a.thumbnail = urljoin(final, thumb)[:2048]
+        a.is_processed = True
+    except Exception as e:
+        a.is_processed = False
+        a.error_message = f"Failed to fetch: {e}"[:1000]
+
+    if a.kind == "video":
+        try:
+            import yt_dlp
+
+            with yt_dlp.YoutubeDL({"quiet": True, "no_warnings": True, "skip_download": True, "noplaylist": True}) as ydl:
+                info = ydl.extract_info(a.url, download=False)
+            a.title = a.title or str(info.get("title") or "")[:500]
+            a.author = a.author or str(info.get("uploader") or "")[:255]
+            a.description = a.description or str(info.get("description") or "")[:10000]
+            a.duration = a.duration or info.get("duration")
+            if info.get("thumbnail") and not a.thumbnail:
+                a.thumbnail = str(info["thumbnail"])[:2048]
+            a.is_processed = True
+            a.error_message = None
+        except ImportError:
+            pass
+        except Exception as e:
+            if not a.is_processed:
+                a.error_message = f"Failed to read video: {e}"[:1000]
+    a.save()
 
 
 # ------------------------------------------------------------------ views
@@ -41,370 +215,143 @@ def detect_kind_from_url(url: str) -> str:
 
 @api_view(["GET"])
 def web_list(request):
-    """List all archived webpages/videos/images."""
-    try:
-        q = request.query_params.get("q", "")
-        kind = request.query_params.get("kind", "")
-        
-        qs = WebArchive.objects.filter()
-        if q:
-            qs = qs.filter(
-                models.Q(title__icontains=q) | 
-                models.Q(description__icontains=q) |
-                models.Q(url__icontains=q)
-            )
-        if kind:
-            qs = qs.filter(kind=kind)
-        
-        archives = list(qs.order_by("-created_at"))
-        return Response([{
-            "id": str(a.id),
-            "url": a.url,
-            "title": a.title,
-            "kind": a.kind,
-            "thumbnail": a.thumbnail,
-            "duration": a.duration,
-            "author": a.author,
-            "created_at": a.created_at.isoformat(),
-            "updated_at": a.updated_at.isoformat(),
-            "is_processed": a.is_processed,
-            "error_message": a.error_message,
-        }] for a in archives)
-    except Exception as e:
-        return bad(str(e), 500)
-
-
-@api_view(["GET"])
-def web_detail(request, archive_id):
-    """Get details of an archived item."""
-    try:
-        archive = WebArchive.objects.get(id=archive_id)
-        data = {
-            "id": str(archive.id),
-            "url": archive.url,
-            "title": archive.title,
-            "kind": archive.kind,
-            "thumbnail": archive.thumbnail,
-            "duration": archive.duration,
-            "author": archive.author,
-            "description": archive.description,
-            "html_content": archive.html_content[:2000] + ("..." if len(archive.html_content) > 2000 else ""),
-            "download_html": archive.download_html,
-            "download_images": archive.download_images,
-            "download_video": archive.download_video,
-            "video_format": archive.video_format,
-            "video_quality": archive.video_quality,
-            "notes": archive.notes,
-            "todos": archive.todos,
-            "is_processed": archive.is_processed,
-            "error_message": archive.error_message,
-            "created_at": archive.created_at.isoformat(),
-            "updated_at": archive.updated_at.isoformat(),
-            "last_viewed_at": archive.last_viewed_at.isoformat() if archive.last_viewed_at else None,
-        }
-        return Response(data)
-    except WebArchive.DoesNotExist:
-        raise Http404
+    q = request.query_params.get("q", "").strip()
+    kind = request.query_params.get("kind", "")
+    qs = WebArchive.objects.all()
+    if q:
+        qs = qs.filter(Q(title__icontains=q) | Q(description__icontains=q) | Q(url__icontains=q) | Q(notes__icontains=q))
+    if kind:
+        qs = qs.filter(kind=kind)
+    return Response([summary(a) for a in qs.order_by("-created_at")])
 
 
 @api_view(["POST"])
 def web_create(request):
-    """Create a new web archive entry from a URL."""
-    try:
-        data = request.data
-        url = str(data.get("url", ""))
-        
-        if not url:
-            return bad("URL is required.", 400)
-        
-        with transaction.atomic():
-            kind = data.get("kind") or detect_kind_from_url(url)
-            
-            archive = WebArchive.objects.create(
-                url=url,
-                title=str(data.get("title", ""))[:500],
-                kind=kind,
-                author=str(data.get("author", ""))[:255],
-                description=str(data.get("description", "")),
-                thumbnail=str(data.get("thumbnail", ""))[:2048],
-                download_html=bool(data.get("download_html", True)),
-                download_images=bool(data.get("download_images", False)),
-                download_video=bool(data.get("download_video", False)),
-                video_format=data.get("video_format", "best"),
-                video_quality=data.get("video_quality", ""),
-                notes=str(data.get("notes", "")),
-            )
-            
-            return Response({
-                "id": str(archive.id),
-                "url": archive.url,
-                "title": archive.title,
-                "kind": archive.kind,
-            }, status=201)
-    except Exception as e:
-        return bad(str(e), 500)
+    url = str(request.data.get("url", "")).strip()
+    if "://" not in url:
+        url = "https://" + url
+    err = check_url(url)
+    if err:
+        return bad(err)
+    kind = request.data.get("kind") or detect_kind(url)
+    if kind not in ("web", "video", "image", "mixed"):
+        return bad("Invalid kind.")
+    a = WebArchive.objects.create(
+        url=url[:2048],
+        kind=kind,
+        title=str(request.data.get("title", ""))[:500],
+        notes=str(request.data.get("notes", "")),
+        download_video=bool(request.data.get("download_video", False)),
+        video_format=request.data.get("video_format") or "best",
+        video_quality=request.data.get("video_quality") or "",
+    )
+    process(a)
+    return Response(detail(a), status=201)
 
 
-@api_view(["GET", "PATCH"])
-def web_detail_process(request, archive_id):
-    """Process and fetch content for a web archive."""
-    try:
-        archive = WebArchive.objects.get(id=archive_id)
-    except WebArchive.DoesNotExist:
-        raise Http404
-    
-    if request.method == "GET":
-        # Fetch HTML/content
-        try:
-            headers = {}
-            auth = None
-            
-            # Handle authentication URLs
-            username = os.environ.get("WEB_ARCHIVE_USER")
-            password = os.environ.get("WEB_ARCHIVE_PASS")
-            if username and password:
-                auth = (username, password)
-            
-            resp = requests.get(str(archive.url), timeout=30, headers=headers, auth=auth)
-            resp.raise_for_status()
-            
-            archive.html_content = resp.text
-            archive.is_processed = True
-            
-            # Try to extract thumbnail from HTML for all kinds
-            try:
-                # Try meta og:image first
-                meta_thumb_match = re.search(
-                    r'<meta[^>]*property=["\']og:image["\'][^>]*content=["\']([^"\'>]+)', 
-                    resp.text, 
-                    re.IGNORECASE
-                )
-                if meta_thumb_match:
-                    archive.thumbnail = meta_thumb_match.group(1)[:2048]
-                
-                # Try og:image:url as fallback
-                elif not archive.thumbnail:
-                    og_image_url_match = re.search(
-                        r'<meta[^>]*property=["\']og:image:url["\'][^>]*content=["\']([^"\'>]+)', 
-                        resp.text, 
-                        re.IGNORECASE
-                    )
-                    if og_image_url_match:
-                        archive.thumbnail = og_image_url_match.group(1)[:2048]
-                
-                # Try twitter card image
-                elif not archive.thumbnail:
-                    twitter_img_match = re.search(
-                        r'<meta[^>]*property=["\']twitter:image["\'][^>]*content=["\']([^"\'>]+)', 
-                        resp.text, 
-                        re.IGNORECASE
-                    )
-                    if twitter_img_match:
-                        archive.thumbnail = twitter_img_match.group(1)[:2048]
-                        
-            except:
-                pass
-            
-            # Extract video info if it's a video URL
-            if archive.kind == "video":
-                try:
-                    from youtube_dl import YoutubeDL
-                    
-                    ydl_opts = {
-                        'quiet': True,
-                        'no_warnings': True,
-                        'extract_flat': False,
-                    }
-                    
-                    with YoutubeDL(ydl_opts) as ydl:
-                        info = ydl.extract_info(str(archive.url), download=False)
-                        
-                        archive.title = str(info.get('title', ''))[:500]
-                        archive.author = str(info.get('uploader', ''))[:255]
-                        archive.duration = info.get('duration')
-                        archive.description = str(info.get('description', ''))[:10000]
-                        
-                        # Get thumbnail from video info
-                        if info.get('thumbnail'):
-                            archive.thumbnail = str(info.get('thumbnail', ''))[:2048]
-                        
-                        # Get first video URL
-                        formats = info.get('formats', [])
-                        if formats:
-                            vid_formats = [f for f in formats if 'vcodec' in f.get('format_id', '') or f.get('acodec') == 'none']
-                            if vid_formats:
-                                best_vid = max(vid_formats, key=lambda x: int(x.get('tbr', 0)))
-                                archive.url = best_vid.get('url')
-                        
-                        # Get description image for thumbnail fallback
-                        desc_thumb = info.get('thumbnail_url')
-                        if desc_thumb and not archive.thumbnail:
-                            archive.thumbnail = str(desc_thumb)[:2048]
-                            
-                except ImportError:
-                    pass  # yt-dlp not available
-                    
-                except Exception as dl_err:
-                    # yt-dlp might fail, that's okay for now - continue with HTML content
-                    pass
-            
-            archive.save()
-            
-        except requests.RequestException as e:
-            if not archive.error_message:
-                archive.error_message = f"Failed to fetch: {str(e)}"
-            archive.is_processed = False
-            archive.save()
-            
-    elif request.method == "PATCH":
-        # Update archive with new notes/todos or processing options
+@api_view(["GET", "PATCH", "DELETE"])
+def web_detail(request, archive_id):
+    a = get_archive(archive_id)
+
+    if request.method == "DELETE":
+        shutil.rmtree(video_dir(a), ignore_errors=True)
+        a.delete()
+        return Response(status=204)
+
+    if request.method == "PATCH":
+        d = request.data
         fields = []
-        
-        if "notes" in request.data:
-            archive.notes = str(request.data["notes"])[:5000]
-            fields.append("notes")
-        
-        if "todos" in request.data:
-            archive.todos = [str(t) for t in request.data["todos"]]
+        for name, limit in (("title", 500), ("author", 255), ("description", 10000), ("notes", 50000)):
+            if name in d:
+                setattr(a, name, str(d[name])[:limit])
+                fields.append(name)
+        if "todos" in d:
+            a.todos = clean_todos(d["todos"])
             fields.append("todos")
-            
+        if "video_format" in d and d["video_format"] in ("best", "audio"):
+            a.video_format = d["video_format"]
+            fields.append("video_format")
+        if "video_quality" in d and d["video_quality"] in ("", "1080p", "720p", "480p"):
+            a.video_quality = d["video_quality"]
+            fields.append("video_quality")
         if fields:
-            archive.updated_at = datetime.now()
-            archive.save(update_fields=fields)
-        
-        return Response({
-            "id": str(archive.id),
-            "notes": archive.notes,
-            "todos": archive.todos,
-        })
-    
-    archive.last_viewed_at = datetime.now()
-    archive.save()
-    
-    data = {
-        "id": str(archive.id),
-        "url": archive.url,
-        "title": archive.title,
-        "kind": archive.kind,
-        "thumbnail": archive.thumbnail,
-        "duration": archive.duration,
-        "author": archive.author,
-        "description": archive.description,
-        "html_content": archive.html_content[:2000] + ("..." if len(archive.html_content) > 2000 else ""),
-        "download_html": archive.download_html,
-        "download_images": archive.download_images,
-        "download_video": archive.download_video,
-        "video_format": archive.video_format,
-        "video_quality": archive.video_quality,
-        "notes": archive.notes,
-        "todos": archive.todos,
-        "is_processed": archive.is_processed,
-        "error_message": archive.error_message,
-    }
-    
-    return Response(data)
+            a.save(update_fields=fields + ["updated_at"])
+        return Response(detail(a))
+
+    a.last_viewed_at = timezone.now()
+    a.save(update_fields=["last_viewed_at"])
+    return Response(detail(a))
+
+
+@api_view(["POST"])
+def web_detail_process(request, archive_id):
+    """Re-fetch the page and refresh missing metadata."""
+    a = get_archive(archive_id)
+    process(a)
+    return Response(detail(a))
+
+
+def _download(archive_id: int):
+    close_old_connections()
+    a = WebArchive.objects.get(id=archive_id)
+    try:
+        import yt_dlp
+
+        out = video_dir(a)
+        shutil.rmtree(out, ignore_errors=True)
+        opts = {"quiet": True, "no_warnings": True, "noplaylist": True, "outtmpl": out + "/%(id)s.%(ext)s"}
+        if a.video_format == "audio":
+            opts["format"] = "bestaudio/best"
+        else:
+            h = QUALITY_HEIGHT.get(a.video_quality)
+            opts["format"] = f"bv*[height<={h}]+ba/b[height<={h}]/b" if h else "bv*+ba/b"
+            opts["merge_output_format"] = "mp4"
+        with yt_dlp.YoutubeDL(opts) as ydl:
+            info = ydl.extract_info(a.url, download=True)
+            path = ydl.prepare_filename(info)
+            if info.get("requested_downloads"):
+                path = info["requested_downloads"][0].get("filepath") or path
+        a.video_path = str(path).replace(str(settings.MEDIA_ROOT) + "/", "", 1)
+        a.video_status = "done"
+        a.error_message = None
+        a.duration = a.duration or info.get("duration")
+    except Exception as e:
+        a.video_status = "error"
+        a.error_message = f"Download failed: {e}"[:1000]
+    a.save()
+    close_old_connections()
 
 
 @api_view(["POST"])
 def web_download_video(request, archive_id):
-    """Download video using yt-dlp with specified options."""
+    """Start a background yt-dlp download; poll the detail endpoint for video_status."""
+    a = get_archive(archive_id)
     try:
-        archive = WebArchive.objects.get(id=archive_id)
-    except WebArchive.DoesNotExist:
-        raise Http404
-    
-    if not archive.download_video:
-        return bad("Video download is not enabled for this item.", 400)
-    
-    try:
-        from youtube_dl import YoutubeDL
-        
-        url = str(archive.url)
-        
-        # Build options
-        ydl_opts = {
-            'quiet': False,  # Show progress
-            'no_warnings': True,
-            'extract_flat': False,
-            'skip_download': True,  # We'll download manually
-            'format': '',
-            'outtmpl': tempfile.gettempdir() + '/%_(title)s.%(ext)s',
-        }
-        
-        # Apply format selection if video_format is set
-        if archive.video_format == "audio":
-            ydl_opts['format'] = 'bestaudio/best'
-            ydl_opts['postprocessors'] = [{
-                'key': 'FFmpegExtractAudio',
-                'preferredcodec': 'mp3',
-                'preferredquality': '192',
-            }]
-        elif archive.video_format == "best" and archive.video_quality:
-            q_map = {"1080p": "best[height<=1080]", "720p": "best[height<=720]", "480p": "best[height<=480]"}
-            ydl_opts['format'] = q_map.get(archive.video_quality, 'best')
-        
-        try:
-            with YoutubeDL(ydl_opts) as ydl:
-                ydl.download([url])
-            
-            archive.download_video = True
-            archive.is_processed = True
-            archive.save()
-            
-            return Response({
-                "status": "success",
-                "message": f"Video downloaded from {archive.title or archive.url}",
-            })
-        except Exception as dl_err:
-            if not archive.error_message:
-                archive.error_message = str(dl_err)
-            archive.download_video = False
-            archive.is_processed = True
-            archive.save()
-            
-            return bad(f"yt-dlp error: {str(dl_err)}", 500)
-            
+        import yt_dlp  # noqa: F401
     except ImportError:
-        return bad("yt-dlp is not installed. Run: pip install youtube-dlc yt_dlp", 500)
-    
-    except Exception as e:
-        if not archive.error_message:
-            archive.error_message = str(e)
-        archive.save()
-        return bad(str(e), 500)
+        return bad("yt-dlp is not installed on the server (pip install yt-dlp).", 500)
+    if a.video_status == "downloading":
+        return bad("Already downloading.", 409)
+    err = check_url(a.url)
+    if err:
+        return bad(err)
+    for name in ("video_format", "video_quality"):
+        if name in request.data:
+            setattr(a, name, request.data[name])
+    a.download_video = True
+    a.video_status = "downloading"
+    a.error_message = None
+    a.save()
+    threading.Thread(target=_download, args=(a.id,), daemon=True).start()
+    return Response(detail(a), status=202)
 
 
 @api_view(["GET"])
 def web_preview(request, archive_id):
-    """Get a preview of the archived content."""
-    try:
-        archive = WebArchive.objects.get(id=archive_id)
-    except WebArchive.DoesNotExist:
-        raise Http404
-    
-    if archive.kind == "image" and archive.thumbnail:
-        # Return thumbnail info
-        return Response({
-            "type": "url",
-            "url": str(archive.thumbnail),
-            "mimeType": archive.image_mime or "",
-        })
-    
-    if archive.html_content:
-        # Return HTML preview with sanitization
-        sanitized = archive.html_content[:5000] + ("..." if len(archive.html_content) > 5000 else "")
-        return Response({
-            "type": "html",
-            "content": sanitized,
-        })
-    
-    if archive.thumbnail:
-        return Response({
-            "type": "url",
-            "url": str(archive.thumbnail),
-        })
-    
-    return Response({
-        "type": "link",
-        "url": archive.url,
-    })
+    """Sanitised archived HTML (render it in a sandboxed iframe), or an image/link fallback."""
+    a = get_archive(archive_id)
+    if a.html_content:
+        return Response({"type": "html", "content": a.html_content})
+    if a.thumbnail:
+        return Response({"type": "image", "url": a.thumbnail})
+    return Response({"type": "link", "url": a.url})

@@ -769,3 +769,66 @@ class AgentClaudeTests(TestCase):
         self.assertEqual(sent[2]["content"][0]["type"], "tool_result")
         self.assertIn("Photosynthesis", sent[2]["content"][0]["content"])
         self.assertTrue(self.c.get("/api/ai/config").json()["web_search"])
+
+
+from notes.views_web import check_url as real_check_url
+
+
+class WebArchiveTests(TestCase):
+    PAGE = (
+        '<html><head><title>Hello</title><meta property="og:title" content="OG Title">'
+        '<meta property="og:image" content="/img.png"><meta name="description" content="Desc">'
+        "<script>alert(1)</script></head><body><p>Body</p></body></html>"
+    )
+
+    def setUp(self):
+        from unittest import mock
+
+        self.c = APIClient(HTTP_X_KERN="1")
+        p = mock.patch("notes.views_web.check_url", return_value=None)
+        p.start()
+        self.addCleanup(p.stop)
+        f = mock.patch("notes.views_web.fetch_page", side_effect=lambda u: (u, "text/html", self.PAGE))
+        f.start()
+        self.addCleanup(f.stop)
+
+    def test_create_list_edit_delete(self):
+        r = self.c.post("/api/web/archive", {"url": "example.com/a"}, format="json")
+        self.assertEqual(r.status_code, 201, r.content)
+        a = r.json()
+        self.assertEqual(a["url"], "https://example.com/a")
+        self.assertEqual(a["title"], "OG Title")
+        self.assertEqual(a["description"], "Desc")
+        self.assertEqual(a["thumbnail"], "https://example.com/img.png")
+        self.assertTrue(a["is_processed"])
+
+        self.assertEqual(len(self.c.get("/api/web/list").json()), 1)
+        self.assertEqual(len(self.c.get("/api/web/list?q=nomatch").json()), 0)
+
+        r = self.c.patch(f"/api/web/{a['id']}", {"notes": "n", "todos": ["x", {"text": "y", "done": True}]}, format="json")
+        self.assertEqual(r.json()["todos"], [{"text": "x", "done": False}, {"text": "y", "done": True}])
+
+        pv = self.c.get(f"/api/web/{a['id']}/preview").json()
+        self.assertEqual(pv["type"], "html")
+        self.assertNotIn("<script", pv["content"])
+
+        self.assertEqual(self.c.delete(f"/api/web/{a['id']}").status_code, 204)
+        self.assertEqual(self.c.get(f"/api/web/{a['id']}").status_code, 404)
+
+    def test_rejects_bad_urls(self):
+        from unittest import mock
+
+        with mock.patch("notes.views_web.check_url", return_value="That address is not allowed."):
+            r = self.c.post("/api/web/archive", {"url": "http://127.0.0.1/"}, format="json")
+        self.assertEqual(r.status_code, 400)
+
+    def test_check_url_blocks_private(self):
+        self.assertIsNotNone(real_check_url("file:///etc/passwd"))
+        self.assertIsNotNone(real_check_url("http://127.0.0.1:8000/"))
+
+    def test_detect_kind(self):
+        from notes.views_web import detect_kind
+
+        self.assertEqual(detect_kind("https://www.youtube.com/watch?v=1"), "video")
+        self.assertEqual(detect_kind("https://x.org/a.PNG"), "image")
+        self.assertEqual(detect_kind("https://x.org/a"), "web")

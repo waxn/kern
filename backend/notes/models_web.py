@@ -49,6 +49,9 @@ class WebArchive(models.Model):
         default=""
     )
     
+    video_path = models.CharField(max_length=500, blank=True, default="")  # relative to MEDIA_ROOT
+    video_status = models.CharField(max_length=16, blank=True, default="")  # "", downloading, done, error
+
     # Notes and tasks
     notes = models.TextField(blank=True, default="")
     todos = models.JSONField(default=list, blank=True)  # list of strings

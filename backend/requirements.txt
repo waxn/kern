@@ -3,3 +3,4 @@ djangorestframework==3.18.3
 gunicorn==26.2.0
 nh3==0.3.7
 anthropic==2.8.0
+yt-dlp==2026.3.17

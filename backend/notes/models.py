@@ -157,6 +157,35 @@ class Attachment(models.Model):
     mime = models.CharField(max_length=127, blank=True, default="")
     size = models.BigIntegerField(default=0)
     created_at = models.DateTimeField(auto_now_add=True)
+    updated_at = models.DateTimeField(null=True, blank=True)
+
+
+class AttachmentVersion(models.Model):
+    id = models.UUIDField(primary_key=True, default=uuid.uuid4, editable=False)
+    attachment = models.ForeignKey(Attachment, on_delete=models.CASCADE, related_name="versions")
+    file = models.FileField(upload_to="file-versions/%Y/%m")
+    size = models.BigIntegerField(default=0)
+    reason = models.CharField(max_length=20, default="edit")
+    created_at = models.DateTimeField(auto_now_add=True)
+
+    class Meta:
+        ordering = ["-created_at"]
+
+
+class FileAnnotation(models.Model):
+    id = models.UUIDField(primary_key=True, default=uuid.uuid4, editable=False)
+    attachment = models.ForeignKey(Attachment, on_delete=models.CASCADE, related_name="annotations")
+    page = models.PositiveIntegerField()
+    kind = models.CharField(max_length=12, default="highlight")
+    color = models.CharField(max_length=20, default="yellow")
+    rects = models.JSONField(default=list)
+    text = models.TextField(blank=True, default="")
+    note = models.TextField(blank=True, default="")
+    created_at = models.DateTimeField(auto_now_add=True)
+    updated_at = models.DateTimeField(auto_now=True)
+
+    class Meta:
+        ordering = ["page", "created_at"]
 
 
 class Setting(models.Model):
