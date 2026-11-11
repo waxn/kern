@@ -1,0 +1,38 @@
+# Kern — personal knowledge management.
+#   docker compose up -d --build     then open http://localhost:8420
+name: kern
+
+services:
+  backend:
+    build: ./backend
+    restart: unless-stopped
+    environment:
+      KERN_DATA_DIR: /data
+    volumes:
+      - kern_data:/data
+    extra_hosts:
+      # Lets the AI assistant reach a local model server (e.g. Ollama) on this machine.
+      - "host.docker.internal:host-gateway"
+    healthcheck:
+      test: ["CMD", "python", "-c", "import urllib.request as u; u.urlopen('http://127.0.0.1:8000/api/health')"]
+      interval: 15s
+      timeout: 5s
+      retries: 5
+      start_period: 30s
+      start_interval: 2s
+
+  web:
+    build: ./frontend
+    restart: unless-stopped
+    depends_on:
+      backend:
+        condition: service_healthy
+    volumes:
+      - kern_data:/data:ro
+    ports:
+      # Kern has no login. It listens on localhost only unless you change KERN_BIND.
+      - "${KERN_BIND:-127.0.0.1}:${KERN_PORT:-8420}:80"
+
+volumes:
+  # SQLite database and uploaded files. Survives rebuilds and `docker compose down`.
+  kern_data:
