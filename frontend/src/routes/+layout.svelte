@@ -1,6 +1,5 @@
 <script lang="ts">
 	import '../app.css';
-	import 'katex/dist/katex.min.css';
 	import { goto } from '$app/navigation';
 	import { page } from '$app/state';
 	import { onMount } from 'svelte';

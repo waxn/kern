@@ -1,4 +1,4 @@
-import katex from 'katex';
+import { loadKatex, math } from './katex.svelte.ts';
 
 export function blockEl(id: string): HTMLElement | null {
 	return document.querySelector<HTMLElement>(`[data-block-id="${id}"]`);
@@ -36,7 +36,16 @@ export function readHtml(el: HTMLElement): string {
 }
 
 export function renderMath(el: HTMLElement) {
-	el.querySelectorAll<HTMLElement>('.math').forEach((m) => {
+	const spans = el.querySelectorAll<HTMLElement>('.math');
+	if (!spans.length) return;
+	const katex = math.katex;
+	if (!katex) {
+		// Show the raw TeX until KaTeX arrives, then render for real.
+		spans.forEach((m) => (m.contentEditable = 'false'));
+		loadKatex().then(() => el.isConnected && renderMath(el));
+		return;
+	}
+	spans.forEach((m) => {
 		const tex = m.dataset.math ?? '';
 		if (m.dataset.rendered === tex) return;
 		try {

@@ -1,5 +1,5 @@
 <script lang="ts">
-	import katex from 'katex';
+	import { loadKatex, math } from '../katex.svelte.ts';
 	import { tick } from 'svelte';
 	import type { Block } from '#lib/types.ts';
 	import { getEditor } from '../context';
@@ -10,7 +10,11 @@
 	let draft = $state('');
 	let area = $state<HTMLTextAreaElement>();
 
+	loadKatex();
+
 	let rendered = $derived.by(() => {
+		const katex = math.katex;
+		if (!katex) return '';
 		try {
 			return katex.renderToString(editing ? draft : (block.props.tex ?? ''), { displayMode: true, throwOnError: false });
 		} catch {
