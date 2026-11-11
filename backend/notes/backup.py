@@ -3,7 +3,9 @@
 A backup holds everything in the data folder that matters: the database (pages, settings,
 bookmarks with their saved pages, the AI key), uploaded files and their versions, and the git
 repositories. Downloaded videos are optional ("backup_downloads" in the "data" setting), since
-they are large and can be downloaded again. Not included: the backups themselves and the
+they are large and can be downloaded again. account.json holds the account the backup belongs
+to (username, email, password hash) and, for administrators, the server settings, so a new
+server can be set up straight from a backup. Not included: the backups themselves and the
 secret key (a new one is made when missing).
 """
 import datetime as dt
@@ -100,6 +102,32 @@ def _latest_migration() -> str:
     return max(names) if names else ""
 
 
+def _account() -> dict | None:
+    """The signed-in owner of this workspace, for restoring onto a fresh server."""
+    uid = tenancy.current_uid()
+    if uid is None:
+        return None
+    from django.contrib.auth.models import User
+    u = User.objects.filter(id=uid).first()
+    if u is None:
+        return None
+    out = {"username": u.username, "email": u.email, "password": u.password,
+           "is_admin": u.is_staff, "date_joined": u.date_joined.isoformat()}
+    if u.is_staff:
+        from accounts import site
+        out["site"] = site.get_all()
+    return out
+
+
+def read_account(zip_path) -> dict | None:
+    """account.json from a backup (None for backups made before it existed)."""
+    with zipfile.ZipFile(zip_path) as z:
+        if "account.json" not in z.namelist():
+            return None
+        data = json.loads(z.read("account.json"))
+    return data if isinstance(data, dict) else None
+
+
 def create(kind: str = "manual", downloads: bool | None = None) -> dict:
     """Write kern-YYYYmmdd-HHMMSS[-kind].zip: a consistent copy of the database, all files and
     the git repositories, plus downloaded videos when asked (default: the backup setting)."""
@@ -127,10 +155,13 @@ def create(kind: str = "manual", downloads: bool | None = None) -> dict:
             from .models_web import WebArchive
             git = _git_root()
             repos = sorted(d for d in os.listdir(git) if d.endswith(".git") and os.path.isdir(git / d))
+            account = _account()
             manifest = {
                 "app": "kern", "format": 2, "created_at": timezone.now().isoformat(), "kind": kind,
                 "migration": _latest_migration(),
-                "contents": {"database": True, "files": True, "git": True, "downloads": bool(downloads)},
+                "contents": {"database": True, "files": True, "git": True, "downloads": bool(downloads),
+                             "account": account is not None, "server_settings": bool(account and "site" in account)},
+                "owner": account["username"] if account else None,
                 "counts": {"documents": Document.objects.count(), "cards": Card.objects.count(),
                            "files": Attachment.objects.count(), "bookmarks": WebArchive.objects.count(),
                            "repositories": len(repos)},
@@ -153,6 +184,8 @@ def create(kind: str = "manual", downloads: bool | None = None) -> dict:
                         if rel.endswith(".lock"):  # a push in progress; its result is not final yet
                             continue
                         z.write(full, f"git/{repo}/{rel}")
+                if account is not None:
+                    z.writestr("account.json", json.dumps(account, indent=2))
                 z.writestr("manifest.json", json.dumps(manifest, indent=2))
             os.replace(partial, path)
         finally:
@@ -165,8 +198,9 @@ def contents_of(manifest: dict) -> dict:
     """What a backup holds. Backups from before format 2 had the database and all files (videos
     included, as they lived under media/) but no git repositories."""
     if manifest.get("format", 1) >= 2:
-        return {"database": True, "files": True, "git": False, "downloads": False, **(manifest.get("contents") or {})}
-    return {"database": True, "files": True, "git": False, "downloads": True}
+        return {"database": True, "files": True, "git": False, "downloads": False, "account": False,
+                "server_settings": False, **(manifest.get("contents") or {})}
+    return {"database": True, "files": True, "git": False, "downloads": True, "account": False, "server_settings": False}
 
 
 def info(path) -> dict:
@@ -224,12 +258,13 @@ def validate(zip_path) -> dict:
     return manifest
 
 
-def restore(zip_path) -> dict:
-    """Replace the whole workspace with a backup. A safety backup is taken first."""
+def restore(zip_path, safety: bool = True) -> dict:
+    """Replace the whole workspace with a backup. A safety backup is taken first, unless the
+    workspace is brand new (restoring during setup)."""
     manifest = validate(zip_path)
     contents = contents_of(manifest)
     # The safety copy holds whatever the restore replaces (videos too, if the backup brings its own).
-    safety = create("prerestore", downloads=contents["downloads"])
+    safety_copy = create("prerestore", downloads=contents["downloads"]) if safety else None
     git = _git_root()
     with _lock:
         tmpdir = tempfile.mkdtemp(dir=tenancy.data_dir())
@@ -281,7 +316,7 @@ def restore(zip_path) -> dict:
                 shutil.rmtree(git_tmp, ignore_errors=True)
     call_command("migrate", "notes", database=tenancy.current_alias(), interactive=False, verbosity=0)  # backups from older versions
     _forget_missing_videos()
-    return {"restored": manifest, "contents": contents, "safety_backup": safety["name"]}
+    return {"restored": manifest, "contents": contents, "safety_backup": safety_copy["name"] if safety_copy else None}
 
 
 def _swap(new: str, live: str) -> None:

@@ -123,6 +123,8 @@ def ensure_db(uid: int) -> str:
 
 def forget_db(uid: int) -> None:
     alias = alias_of(uid)
+    if alias == "default":  # tests share the default database; never unregister it
+        return
     with _lock:
         try:
             connections[alias].close()

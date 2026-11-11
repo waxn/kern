@@ -8,7 +8,7 @@ from . import tenancy
 SAFE = {"GET", "HEAD", "OPTIONS"}
 
 # Reachable without signing in. Everything else under /api and /media needs a signed-in, active user.
-PUBLIC = {"/api/health", "/api/site", "/api/setup", "/api/auth/login", "/api/auth/logout", "/api/auth/signup"}
+PUBLIC = {"/api/health", "/api/site", "/api/setup", "/api/setup/restore", "/api/auth/login", "/api/auth/logout", "/api/auth/signup"}
 
 
 class ApiGuardMiddleware:

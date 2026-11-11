@@ -1,12 +1,20 @@
 <script lang="ts">
-	import { ArrowLeft, ArrowRight, Check, Globe, GitBranch, KeyRound, Loader, LockKeyhole, ShieldCheck, UserPlus, Users } from '@lucide/svelte';
+	import { ArchiveRestore, ArrowLeft, ArrowRight, Check, FileArchive, Globe, GitBranch, KeyRound, Loader, LockKeyhole, ShieldCheck, UserPlus, UserRound, Users } from '@lucide/svelte';
 	import { ApiError } from '#lib/api.ts';
-	import { finishSetup } from '#lib/state/session.svelte.ts';
+	import { finishRestore, finishSetup } from '#lib/state/session.svelte.ts';
 	import AuthFrame from './AuthFrame.svelte';
 	import Toggle from './Toggle.svelte';
 
-	const steps = ['Welcome', 'Administrator', 'Access', 'Finish'];
+	let mode = $state<'new' | 'restore'>('new');
+	const steps = $derived(mode === 'restore' ? ['Welcome', 'Restore'] : ['Welcome', 'Administrator', 'Access', 'Finish']);
 	let step = $state(0);
+
+	// Restoring from a backup
+	let file = $state<File | null>(null);
+	let dragging = $state(false);
+	let needAccount = $state(false); // older backups carry no account
+	let progress = $state<number | null>(null);
+	let phase = $state('');
 	let busy = $state(false);
 	let error = $state('');
 
@@ -32,8 +40,63 @@
 	});
 
 	const canNext = $derived(
-		step === 0 ? code.trim().length >= 4 : step === 1 ? userOk && pwOk : step === 2 ? true : siteName.trim().length > 0
+		step === 0 ? code.trim().length >= 4
+		: mode === 'restore' ? !!file && (!needAccount || (userOk && pwOk))
+		: step === 1 ? userOk && pwOk : step === 2 ? true : siteName.trim().length > 0
 	);
+
+	function pick(f: File | null | undefined) {
+		if (!f) return;
+		error = '';
+		needAccount = false;
+		file = f;
+	}
+
+	function size(n: number) {
+		return n < 1024 * 1024 ? `${Math.max(1, Math.round(n / 1024))} KB` : n < 1024 ** 3 ? `${(n / 1024 / 1024).toFixed(1)} MB` : `${(n / 1024 ** 3).toFixed(2)} GB`;
+	}
+
+	/** Upload with progress (fetch cannot report upload progress). */
+	function restore() {
+		if (busy || !file) return;
+		busy = true;
+		error = '';
+		progress = 0;
+		phase = 'Uploading';
+		const form = new FormData();
+		form.append('code', code.trim());
+		form.append('file', file);
+		if (needAccount) {
+			form.append('username', username.trim());
+			form.append('email', email.trim());
+			form.append('password', password);
+		}
+		const xhr = new XMLHttpRequest();
+		xhr.open('POST', '/api/setup/restore');
+		xhr.setRequestHeader('X-Kern', '1');
+		xhr.upload.onprogress = (e) => { if (e.lengthComputable) progress = e.loaded / e.total; };
+		xhr.upload.onload = () => { progress = null; phase = 'Restoring pages, files and repositories'; };
+		const fail = (msg: string) => {
+			error = msg;
+			busy = false;
+			progress = null;
+			phase = '';
+			if (/code/i.test(msg)) step = 0;
+		};
+		xhr.onerror = () => fail('Cannot reach the server.');
+		xhr.onload = () => {
+			let data: any = null;
+			try { data = JSON.parse(xhr.responseText); } catch { /* not json */ }
+			if (xhr.status >= 200 && xhr.status < 300 && data?.user) {
+				phase = 'Done — opening your workspace';
+				finishRestore(data);
+				return;
+			}
+			if (data?.need_account) needAccount = true;
+			fail(data?.detail ?? (xhr.status === 413 ? 'This backup is larger than the server accepts.' : `Restore failed (${xhr.status}).`));
+		};
+		xhr.send(form);
+	}
 
 	function next() {
 		error = '';
@@ -90,8 +153,56 @@
 			<small>Proves you control this server. Find it with <code>docker compose logs backend</code> — it is printed in a box near the start.</small>
 		</label>
 	{:else if step === 1}
-		<h1>Create the administrator</h1>
-		<p class="sub">The administrator manages users and server settings. You can add more administrators later.</p>
+		<h1>{mode === 'restore' ? 'Restore from a backup' : 'Create the administrator'}</h1>
+		<p class="sub">
+			{mode === 'restore'
+				? 'Upload a backup from Settings → Data & backups. Your account, pages, files, cards, bookmarks, repositories and server settings come back as they were.'
+				: 'The administrator manages users and server settings. You can add more administrators later.'}
+		</p>
+		<div class="modes">
+			<button type="button" class="choice" class:on={mode === 'new'} onclick={() => { mode = 'new'; error = ''; }} disabled={busy}>
+				<UserRound size={16} /><span><b>Start fresh</b><small>Create a new administrator.</small></span><i class="radio"></i>
+			</button>
+			<button type="button" class="choice" class:on={mode === 'restore'} onclick={() => { mode = 'restore'; error = ''; }} disabled={busy}>
+				<ArchiveRestore size={16} /><span><b>Restore from a backup</b><small>Bring back a previous Kern server.</small></span><i class="radio"></i>
+			</button>
+		</div>
+	{/if}
+	{#if step === 1 && mode === 'restore'}
+		<label
+			class="drop"
+			class:over={dragging}
+			class:has={!!file}
+			ondragover={(e) => { e.preventDefault(); dragging = true; }}
+			ondragleave={() => (dragging = false)}
+			ondrop={(e) => { e.preventDefault(); dragging = false; pick(e.dataTransfer?.files?.[0]); }}
+		>
+			<input type="file" accept=".zip,application/zip" hidden disabled={busy} onchange={(e) => pick((e.currentTarget as HTMLInputElement).files?.[0])} />
+			<FileArchive size={22} />
+			{#if file}
+				<b>{file.name}</b><small>{size(file.size)} · click to choose another</small>
+			{:else}
+				<b>Choose a backup file</b><small>or drop a <code>kern-….zip</code> here</small>
+			{/if}
+		</label>
+		{#if needAccount}
+			<p class="sub warn">This backup was made before backups saved the account. Choose the administrator's username and password; everything else is restored from the backup.</p>
+			<div class="grid">
+				<label><span>Username</span><input class="input" bind:value={username} autocomplete="username" autocapitalize="none" spellcheck="false" /></label>
+				<label><span>Email <em>optional</em></span><input class="input" type="email" bind:value={email} autocomplete="email" /></label>
+				<label><span>Password</span><input class="input" type="password" bind:value={password} autocomplete="new-password" /><small>At least 10 characters.</small></label>
+				<label><span>Repeat password</span><input class="input" type="password" bind:value={confirm} autocomplete="new-password" class:badline={confirm && confirm !== password} /></label>
+			</div>
+		{:else}
+			<p class="note"><ShieldCheck size={14} /> Sign in afterwards with the username and password the backup was made with.</p>
+		{/if}
+		{#if busy}
+			<div class="progress">
+				<div class="bar"><i style:width={progress === null ? '100%' : `${Math.round(progress * 100)}%`} class:indeterminate={progress === null}></i></div>
+				<small>{phase}{progress !== null ? ` · ${Math.round(progress * 100)}%` : '…'}</small>
+			</div>
+		{/if}
+	{:else if step === 1}
 		<div class="grid">
 			<label>
 				<span>Username</span>
@@ -132,7 +243,7 @@
 			<span><b>Show a public landing page</b><small>Visitors who are not signed in see a page that introduces Kern, with sign-in and sign-up buttons. Off: they go straight to the sign-in form.</small></span>
 			<Toggle bind:checked={landing} label="Show a public landing page" />
 		</div>
-	{:else}
+	{:else if step === 3}
 		<h1>Almost done</h1>
 		<p class="sub">A few last details. You can change everything here later under Settings → Server.</p>
 		<label>
@@ -160,7 +271,11 @@
 
 	<div class="nav">
 		{#if step > 0}<button class="btn ghost" onclick={back} disabled={busy}><ArrowLeft size={14} />Back</button>{:else}<span></span>{/if}
-		{#if step < steps.length - 1}
+		{#if step === 1 && mode === 'restore'}
+			<button class="btn primary" onclick={restore} disabled={!canNext || busy}>
+				{#if busy}<Loader size={14} class="spin" />{/if}Restore server
+			</button>
+		{:else if step < steps.length - 1}
 			<button class="btn primary" onclick={next} disabled={!canNext}>Continue<ArrowRight size={14} /></button>
 		{:else}
 			<button class="btn primary" onclick={finish} disabled={!canNext || busy}>
@@ -214,6 +329,19 @@
 	.summary dt { color: var(--text-3); }
 	.summary dd { margin: 0; color: var(--text); font-weight: 550; }
 	.note { display: flex; align-items: center; gap: 6px; margin: 10px 0 0; font-size: 12px; color: var(--text-3); }
+	.modes { display: grid; grid-template-columns: 1fr 1fr; gap: 6px; margin-bottom: 16px; }
+	@media (max-width: 560px) { .modes { grid-template-columns: 1fr; } }
+	.drop { display: flex; flex-direction: column; align-items: center; gap: 4px; padding: 22px 14px; margin-bottom: 12px; border: 1.5px dashed var(--border-strong); border-radius: 10px; background: var(--bg); color: var(--text-3); cursor: pointer; text-align: center; transition: border-color 0.12s, background 0.12s; }
+	.drop:hover, .drop.over { border-color: var(--accent); background: color-mix(in srgb, var(--accent) 6%, var(--bg)); }
+	.drop.has { border-style: solid; color: var(--accent); }
+	.drop b { color: var(--text); font-weight: 600; word-break: break-all; }
+	.warn { color: var(--c-orange); margin-bottom: 12px; }
+	.progress { display: flex; flex-direction: column; gap: 6px; margin-top: 6px; }
+	.progress .bar { height: 4px; border-radius: 2px; background: var(--surface-2); overflow: hidden; }
+	.progress .bar i { display: block; height: 100%; background: var(--accent); transition: width 0.2s; }
+	.progress .bar i.indeterminate { width: 35% !important; animation: slide 1.1s ease-in-out infinite; }
+	@keyframes slide { from { transform: translateX(-100%); } to { transform: translateX(300%); } }
+	.progress small { color: var(--text-3); font-size: 12px; }
 	.err { margin-top: 6px; padding: 8px 10px; border-radius: var(--radius); font-size: 12.5px; color: var(--danger); background: color-mix(in srgb, var(--danger) 11%, transparent); border: 1px solid color-mix(in srgb, var(--danger) 30%, transparent); }
 	.nav { display: flex; justify-content: space-between; align-items: center; margin-top: 20px; padding-top: 16px; border-top: 1px solid var(--border); }
 	.nav .btn { height: 32px; padding: 0 14px; }

@@ -56,6 +56,91 @@ class SetupTests(TestCase):
         self.assertEqual(r.status_code, 409)
 
 
+def fake_backup(path, account=None):
+    """A minimal valid Kern backup zip (the restore itself is mocked in these tests)."""
+    import json
+    import sqlite3
+    import zipfile
+    db = str(path) + ".db"
+    con = sqlite3.connect(db)
+    con.execute("CREATE TABLE notes_document (id integer)")
+    con.commit()
+    con.close()
+    with zipfile.ZipFile(path, "w") as z:
+        z.write(db, "kern.sqlite3")
+        z.writestr("manifest.json", json.dumps({"app": "kern", "format": 2, "counts": {"documents": 3},
+                                                "contents": {"account": account is not None}}))
+        if account is not None:
+            z.writestr("account.json", json.dumps(account))
+    return path
+
+
+class SetupRestoreTests(TestCase):
+    def setUp(self):
+        self.tmp = Path(tempfile.mkdtemp(prefix="kern-setup-restore-"))
+        from unittest import mock
+        from notes import backup
+        self.restore = mock.patch.object(backup, "restore", return_value={
+            "restored": {"counts": {"documents": 3}, "created_at": "2026-01-01T00:00:00Z"},
+            "contents": {"database": True}, "safety_backup": None})
+        self.mock = self.restore.start()
+
+    def tearDown(self):
+        self.restore.stop()
+        shutil.rmtree(self.tmp, ignore_errors=True)
+
+    def post(self, zip_path, **fields):
+        with open(zip_path, "rb") as f:
+            return client().post("/api/setup/restore", {"code": site.setup_code(), "file": f, **fields}, format="multipart")
+
+    def test_restores_the_account_and_server_settings_from_the_backup(self):
+        from django.contrib.auth.hashers import make_password
+        acct = {"username": "linus", "email": "l@example.org", "password": make_password(PW), "is_admin": True,
+                "site": {"site_name": "Home Kern", "signup_mode": "approval", "landing_enabled": True, "allow_git": False}}
+        r = self.post(fake_backup(self.tmp / "b.zip", acct))
+        self.assertEqual(r.status_code, 201, r.content)
+        j = r.json()
+        self.assertEqual(j["user"]["username"], "linus")
+        self.assertTrue(j["user"]["is_admin"])
+        self.assertEqual((j["site_name"], j["signup_mode"], j["landing_enabled"], j["allow_git"]),
+                         ("Home Kern", "approval", True, False))
+        self.assertEqual(j["restored"]["counts"], {"documents": 3})
+        self.assertFalse(self.mock.call_args.kwargs["safety"])  # nothing to keep on a new server
+        self.assertTrue(site.setup_complete())
+        # The old password works; setup is locked now.
+        self.assertEqual(client().post("/api/auth/login", {"username": "linus", "password": PW}, format="json").status_code, 200)
+        self.assertEqual(self.post(fake_backup(self.tmp / "c.zip", acct)).status_code, 409)
+
+    def test_wrong_code_and_not_a_backup_are_refused(self):
+        zp = fake_backup(self.tmp / "b.zip", {"username": "linus", "password": "x"})
+        with open(zp, "rb") as f:
+            r = client().post("/api/setup/restore", {"code": "WRONG", "file": f}, format="multipart")
+        self.assertEqual(r.status_code, 403)
+        junk = self.tmp / "junk.zip"
+        junk.write_bytes(b"not a zip")
+        self.assertEqual(self.post(junk).status_code, 400)
+        self.assertFalse(User.objects.exists())
+
+    def test_old_backups_ask_for_an_account(self):
+        zp = fake_backup(self.tmp / "old.zip")
+        r = self.post(zp)
+        self.assertEqual(r.status_code, 400)
+        self.assertTrue(r.json()["need_account"])
+        self.assertFalse(User.objects.exists())
+        r = self.post(zp, username="admin", password=PW)
+        self.assertEqual(r.status_code, 201, r.content)
+        self.assertEqual(r.json()["user"]["username"], "admin")
+
+    def test_a_failed_restore_leaves_the_server_unset(self):
+        from django.contrib.auth.hashers import make_password
+        self.mock.side_effect = ValueError("The database in this backup is damaged.")
+        r = self.post(fake_backup(self.tmp / "b.zip", {"username": "linus", "password": make_password(PW)}))
+        self.assertEqual(r.status_code, 400)
+        self.assertIn("damaged", r.json()["detail"])
+        self.assertFalse(User.objects.exists())
+        self.assertFalse(site.setup_complete())
+
+
 class AuthTests(TestCase):
     def setUp(self):
         self.admin = User.objects.create_user("admin", password=PW, is_staff=True, is_superuser=True)

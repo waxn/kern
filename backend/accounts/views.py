@@ -1,16 +1,18 @@
 import os
 import re
 import shutil
+import tempfile
 
 from django.conf import settings
 from django.contrib.auth import login, logout, update_session_auth_hash
-from django.contrib.auth.hashers import check_password, make_password
+from django.contrib.auth.hashers import check_password, identify_hasher, make_password
 from django.contrib.auth.models import User
 from django.contrib.auth.password_validation import validate_password
 from django.core.exceptions import ValidationError
 from django.core.validators import validate_email
 from django.db import transaction
-from rest_framework.decorators import api_view, permission_classes
+from rest_framework.decorators import api_view, parser_classes, permission_classes
+from rest_framework.parsers import MultiPartParser
 from rest_framework.permissions import AllowAny
 from rest_framework.response import Response
 
@@ -148,6 +150,89 @@ def setup(request):
     throttle.clear(ip_key)
     sign_in(request, user)
     return Response(site_json(request, user), status=201)
+
+
+@api_view(["POST"])
+@permission_classes([AllowAny])
+@parser_classes([MultiPartParser])
+def setup_restore(request):
+    """First run from a backup: recreate the administrator (and the server settings) saved in it
+    and restore their whole workspace. Older backups without an account need a username and
+    password in the form."""
+    from notes import backup
+
+    if site.setup_complete():
+        return bad("Setup is already finished.", 409)
+    ip_key = f"setup:{throttle.client_ip(request)}"
+    wait = throttle.locked(ip_key)
+    if wait:
+        return bad("Too many attempts. Try again later.", 429, retry_after=wait)
+    data = request.data
+    if not site.check_setup_code(data.get("code")):
+        throttle.fail(ip_key, 8)
+        return bad("That setup code is not right. It is printed in the server log.", 403)
+    f = request.FILES.get("file")
+    if not f:
+        return bad("Choose a backup file.")
+    settings.DATA_DIR.mkdir(parents=True, exist_ok=True)
+    tmp = tempfile.NamedTemporaryFile(suffix=".zip", delete=False, dir=settings.DATA_DIR)
+    user = None
+    try:
+        for chunk in f.chunks():
+            tmp.write(chunk)
+        tmp.close()
+        try:
+            backup.validate(tmp.name)
+            acct = backup.read_account(tmp.name) or {}
+        except Exception as e:
+            return bad(f"Could not read this backup: {e}" if not isinstance(e, ValueError) else str(e))
+        try:
+            username = check_username(data.get("username") or acct.get("username"))
+            email = check_email(data["email"] if data.get("email") else acct.get("email"))
+            if data.get("password"):
+                pw_hash = make_password(check_password_ok(data.get("password"), username, email))
+            else:
+                pw_hash = acct.get("password") or ""
+                identify_hasher(pw_hash)  # a real Django password hash, or this raises
+        except ValueError as e:
+            if not acct.get("username") or not acct.get("password"):
+                return bad("This backup is from an older version and has no account in it. "
+                           "Choose a username and password for the administrator.", need_account=True)
+            return bad(str(e))
+        with transaction.atomic():
+            if site.setup_complete():
+                return bad("Setup is already finished.", 409)
+            user = User(username=username, email=email, is_staff=True, is_superuser=True)
+            user.password = pw_hash
+            user.save()
+            cfg = acct.get("site") if isinstance(acct.get("site"), dict) else {}
+            if isinstance(data.get("site_name"), str) and data["site_name"].strip():
+                cfg = {**cfg, "site_name": data["site_name"]}
+            site.update(cfg)
+            site.mark_setup_complete()
+        tenancy.ensure_db(user.id)
+        try:
+            with tenancy.use(user.id):
+                result = backup.restore(tmp.name, safety=False)
+        except Exception as e:
+            # Leave the server as it was so setup can be tried again.
+            tenancy.forget_db(user.id)
+            shutil.rmtree(tenancy.user_dir(user.id), ignore_errors=True)
+            user.delete()
+            from .models import SiteSetting
+            SiteSetting.objects.filter(key="setup_complete").delete()
+            user = None
+            return bad(str(e) if isinstance(e, (ValueError, OSError)) else f"Could not restore this backup: {e}")
+    finally:
+        if os.path.exists(tmp.name):
+            os.remove(tmp.name)
+    site.retire_setup_code()
+    throttle.clear(ip_key)
+    sign_in(request, user)
+    out = site_json(request, user)
+    out["restored"] = {"counts": result["restored"].get("counts", {}), "created_at": result["restored"].get("created_at"),
+                       "contents": result["contents"], "from_account": bool(acct)}
+    return Response(out, status=201)
 
 
 @api_view(["POST"])

@@ -94,6 +94,11 @@ export async function finishSetup(body: unknown) {
 	enter(await api.post<Site>('/setup', body));
 }
 
+/** Setup finished by restoring a backup: the server already signed this browser in. */
+export function finishRestore(site: Site) {
+	enter(site);
+}
+
 /** Start the app fresh as this user (a reload resets every in-memory store). */
 function enter(site: Site) {
 	session.site = site;

@@ -1151,7 +1151,13 @@ class FullBackupTests(TransactionTestCase):
         names = zipfile.ZipFile(backup.BACKUP_DIR / plain["name"]).namelist()
         self.assertIn("git/proj.git/HEAD", names)
         self.assertFalse([n for n in names if n.startswith("media/web/")])
-        self.assertEqual(plain["contents"], {"database": True, "files": True, "git": True, "downloads": False})
+        self.assertEqual(plain["contents"], {"database": True, "files": True, "git": True, "downloads": False,
+                                             "account": True, "server_settings": True})
+        # The owner's account and the server settings travel with the backup, for a restore at setup.
+        acct = backup.read_account(backup.BACKUP_DIR / plain["name"])
+        self.assertEqual(acct["username"], "tester")
+        self.assertTrue(acct["password"].startswith("pbkdf2_"))
+        self.assertIn("signup_mode", acct["site"])
 
         self.c.patch("/api/settings", {"data": {"auto_backup": True, "backup_downloads": True}}, format="json")
         full = self.c.post("/api/backups").json()

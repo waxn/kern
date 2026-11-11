@@ -25,6 +25,14 @@ one in `.env`). The first visit shows the **setup wizard**:
 Everything chosen there can be changed later under **Settings → Server**; add,
 approve, disable and remove accounts under **Settings → Users**.
 
+**Moving to a new server, or starting over:** on the second step of the wizard choose
+**Restore from a backup** and upload a backup from Settings → Data & backups. It recreates
+the account it was made with (same username and password) and, if that account was an
+administrator, the server settings, then restores the whole workspace. Backups made before
+this existed have no account in them; the wizard then asks for a username and password.
+Other people's accounts are not part of your backup: each user restores their own after
+signing up.
+
 - Data lives in the `kern_data` Docker volume and survives rebuilds,
   `docker compose down` and updates. Only `docker compose down -v` deletes it.
 - Kern listens on `0.0.0.0` by default so you can reach it on a server. Set
@@ -60,7 +68,8 @@ Settings → Data & backups creates a backup of **your** workspace, restores one
 automatic daily backup (the last 7) inside the data volume. A backup is one
 `.zip` with everything: pages, databases, cards, tasks, uploaded files and
 their versions, bookmarks and their saved pages, git repositories, and
-settings (including the AI key, so keep backups private). Videos downloaded
+settings (including the AI key), and your account: username, email and password hash,
+plus the server settings for administrators — so keep backups private. Videos downloaded
 for bookmarks are left out unless you turn on "Include downloaded videos",
 since they are large and can be downloaded again. Restoring always saves a
 safety copy first; restoring a backup without videos keeps the videos you have. To copy
