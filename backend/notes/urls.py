@@ -101,4 +101,5 @@ urlpatterns = [
     path("web/<str:archive_id>/process", web.web_detail_process),
     path("web/<str:archive_id>/download-video", web.web_download_video),
     path("web/<str:archive_id>/preview", web.web_preview),
+    path("web/<str:archive_id>/snapshot", web.web_snapshot),
 ]

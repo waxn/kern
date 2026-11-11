@@ -51,6 +51,8 @@ class WebArchive(models.Model):
     
     video_path = models.CharField(max_length=500, blank=True, default="")  # relative to MEDIA_ROOT
     video_status = models.CharField(max_length=16, blank=True, default="")  # "", downloading, done, error
+    # While downloading: {"phase", "part", "parts", "percent", "downloaded", "total", "speed", "eta"}
+    video_progress = models.JSONField(default=dict, blank=True)
 
     # Notes and tasks
     notes = models.TextField(blank=True, default="")

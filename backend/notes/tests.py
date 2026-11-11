@@ -809,8 +809,10 @@ class WebArchiveTests(TestCase):
         self.assertEqual(r.json()["todos"], [{"text": "x", "done": False}, {"text": "y", "done": True}])
 
         pv = self.c.get(f"/api/web/{a['id']}/preview").json()
-        self.assertEqual(pv["type"], "html")
-        self.assertNotIn("<script", pv["content"])
+        self.assertEqual(pv["type"], "snapshot")
+        page = self.c.get(pv["url"])
+        self.assertIn(b"<p>Body</p>", page.content)
+        self.assertNotIn(b"<script", page.content)
 
         self.assertEqual(self.c.delete(f"/api/web/{a['id']}").status_code, 204)
         self.assertEqual(self.c.get(f"/api/web/{a['id']}").status_code, 404)
@@ -1077,3 +1079,213 @@ class GitProtocolTests(_GitRootMixin, LiveServerTestCase):
         self.assertEqual({l["name"] for l in stats["languages"]}, {"Markdown", "Python"})
         self.assertEqual(self.c.get("/api/git/repos/site/tree", {"ref": "--help"}).status_code, 404)
         self.assertEqual(self.c.get("/api/git/repos/site/blob", {"path": "../../etc/passwd"}).status_code, 404)
+
+
+class FullBackupTests(TransactionTestCase):
+    """Backups hold git repositories too; downloaded videos only when asked."""
+
+    def setUp(self):
+        import tempfile
+        from pathlib import Path
+        from django.conf import settings
+        self.tmp = Path(tempfile.mkdtemp(prefix="kern-backup-test-"))
+        self._old_media = settings.MEDIA_ROOT
+        settings.MEDIA_ROOT = self.tmp / "media"
+        settings.MEDIA_ROOT.mkdir()
+        self._git = override_settings(KERN_GIT_ROOT=str(self.tmp / "git"))
+        self._git.enable()
+        from unittest import mock
+        from notes import backup
+        self._bdir = mock.patch.object(backup, "BACKUP_DIR", self.tmp / "backups")
+        self._bdir.start()
+        self.c = APIClient(HTTP_X_KERN="1")
+
+    def tearDown(self):
+        import shutil
+        from django.conf import settings
+        self._bdir.stop()
+        self._git.disable()
+        settings.MEDIA_ROOT = self._old_media
+        shutil.rmtree(self.tmp, ignore_errors=True)
+
+    def _video(self, archive_id, data=b"fake mp4"):
+        from django.conf import settings
+        d = settings.MEDIA_ROOT / "web" / str(archive_id)
+        d.mkdir(parents=True, exist_ok=True)
+        (d / "v.mp4").write_bytes(data)
+        return f"web/{archive_id}/v.mp4"
+
+    def test_git_and_optional_videos_round_trip(self):
+        import zipfile
+        from notes import backup
+        from notes.models_web import WebArchive
+        self.assertEqual(self.c.post("/api/git/repos", {"name": "proj"}, format="json").status_code, 201)
+        a = WebArchive.objects.create(url="https://example.org/v", kind="video")
+        a.video_path, a.video_status = self._video(a.id), "done"
+        a.save()
+
+        plain = self.c.post("/api/backups").json()
+        names = zipfile.ZipFile(backup.BACKUP_DIR / plain["name"]).namelist()
+        self.assertIn("git/proj.git/HEAD", names)
+        self.assertFalse([n for n in names if n.startswith("media/web/")])
+        self.assertEqual(plain["contents"], {"database": True, "files": True, "git": True, "downloads": False})
+
+        self.c.patch("/api/settings", {"data": {"auto_backup": True, "backup_downloads": True}}, format="json")
+        full = self.c.post("/api/backups").json()
+        self.assertNotEqual(full["name"], plain["name"])  # same second: must not overwrite
+        self.assertIn(f"media/{a.video_path}", zipfile.ZipFile(backup.BACKUP_DIR / full["name"]).namelist())
+        self.assertTrue(full["contents"]["downloads"])
+
+        # Delete the repo, then restore the backup without videos: the repo comes back, the video stays.
+        self.assertEqual(self.c.delete("/api/git/repos/proj").status_code, 204)
+        r = self.c.post(f"/api/backups/{plain['name']}/restore")
+        self.assertEqual(r.status_code, 200, r.content)
+        listing = self.c.get("/api/git/repos")
+        self.assertEqual(listing.status_code, 200, listing.content)
+        self.assertEqual([x["name"] for x in listing.json()], ["proj"])
+        a.refresh_from_db()
+        self.assertEqual(a.video_status, "done")
+        from django.conf import settings
+        self.assertTrue((settings.MEDIA_ROOT / a.video_path).is_file())
+
+        # A video missing after a restore puts its bookmark back to "not downloaded".
+        (settings.MEDIA_ROOT / a.video_path).unlink()
+        r = self.c.post(f"/api/backups/{plain['name']}/restore")
+        self.assertEqual(r.status_code, 200, r.content)
+        a.refresh_from_db()
+        self.assertEqual((a.video_status, a.video_path), ("", ""))
+
+        # Restoring the backup with videos brings the file back.
+        self.c.post(f"/api/backups/{full['name']}/restore")
+        a.refresh_from_db()
+        self.assertEqual(a.video_status, "done")
+        self.assertEqual((settings.MEDIA_ROOT / a.video_path).read_bytes(), b"fake mp4")
+        st = self.c.get("/api/storage").json()
+        self.assertGreater(st["git_bytes"], 0)
+        self.assertEqual(st["downloads_bytes"], len(b"fake mp4"))
+
+    def test_older_backup_keeps_current_repositories(self):
+        import json
+        import zipfile
+        from notes import backup
+        self.c.post("/api/git/repos", {"name": "keep"}, format="json")
+        b = self.c.post("/api/backups").json()
+        # Rewrite it as a format-1 backup (no git section), as made before this change.
+        src = backup.BACKUP_DIR / b["name"]
+        old = backup.BACKUP_DIR / "kern-20200101-000000.zip"
+        with zipfile.ZipFile(src) as zin, zipfile.ZipFile(old, "w") as zout:
+            for n in zin.namelist():
+                if n.startswith("git/"):
+                    continue
+                data = zin.read(n)
+                if n == "manifest.json":
+                    m = json.loads(data)
+                    m["format"] = 1
+                    m.pop("contents")
+                    data = json.dumps(m)
+                zout.writestr(n, data)
+        self.assertEqual(backup.info(old)["contents"]["git"], False)
+        self.assertEqual(self.c.post(f"/api/backups/{old.name}/restore").status_code, 200)
+        self.assertEqual([x["name"] for x in self.c.get("/api/git/repos").json()], ["keep"])
+
+
+class SnapshotTests(TestCase):
+    """Web pages are saved with their styles, images and fonts, and nothing that can run."""
+
+    PAGE = """<!doctype html><html><head><meta charset="iso-8859-1"><title>Shop</title>
+<link rel="stylesheet" href="/css/main.css" media="screen">
+<link rel="preload" href="/big.js" as="script"><script src="/app.js"></script>
+<style>.hero{background:url('img/hero.png')}</style></head>
+<body onload="steal()"><h1 style="background-image:url(/img/dot.png)">Hi</h1>
+<img data-src="/img/lazy.jpg" src="data:image/gif;base64,R0lGOD" alt="x">
+<img srcset="/img/a-400.png 400w, /img/a-1200.png 1200w, /img/a-3000.png 3000w">
+<img src="/img/logo.svg"><a href="javascript:alert(1)">bad</a> <a href="/about">About</a>
+<iframe src="https://ads.example/"><p>ad</p></iframe><noscript><p>Enable JS</p></noscript>
+<object data="/x.swf"></object><p>café &lt;ok&gt;</p></body></html>"""
+
+    def fake_fetch(self, url, accept, limit, budget=None):
+        files = {
+            "https://shop.test/css/main.css": ("text/css", b"@import url('base.css'); body{color:red} @font-face{src:url(../f/a.woff2)}"),
+            "https://shop.test/css/base.css": ("text/css", b"h1{margin:0;background:url(/img/bg.webp)}"),
+            "https://shop.test/f/a.woff2": ("font/woff2", b"wOF2"),
+            "https://shop.test/img/hero.png": ("image/png", b"\x89PNG"),
+            "https://shop.test/img/dot.png": ("image/png", b"\x89PNG"),
+            "https://shop.test/img/bg.webp": ("image/webp", b"RIFF"),
+            "https://shop.test/img/lazy.jpg": ("image/jpeg", b"\xff\xd8"),
+            "https://shop.test/img/a-1200.png": ("image/png", b"\x89PNG"),
+            "https://shop.test/img/logo.svg": ("image/svg+xml", b"<svg/>"),
+        }
+        if url not in files:
+            raise ValueError("404")
+        self.fetched.append(url)
+        ctype, data = files[url]
+        return url, ctype, data, ctype
+
+    def test_snapshot_rewrites_and_sanitises(self):
+        import os
+        import tempfile
+        from unittest import mock
+        from django.conf import settings
+        from notes import snapshot
+        self.fetched = []
+        with tempfile.TemporaryDirectory() as media, override_settings(MEDIA_ROOT=media), \
+                mock.patch.object(snapshot, "fetch", self.fake_fetch):
+            out = snapshot.Snapshot(7, "https://shop.test/").build(self.PAGE)
+            saved = os.listdir(os.path.join(media, "web-pages", "7"))
+        self.assertTrue(out.startswith(snapshot.MARKER))
+        for bad in ("<script", "steal()", "javascript:", "<iframe", "<object", "ads.example", "preload", "iso-8859-1"):
+            self.assertNotIn(bad, out)
+        self.assertIn("body{color:red}", out)                   # stylesheet inlined
+        self.assertIn("margin:0", out)                          # its @import inlined too
+        self.assertIn('media="screen"', out)
+        self.assertNotIn("shop.test/img", out.split("<body")[0])  # every asset rewritten to the local copy
+        self.assertIn("/media/web-pages/7/", out)
+        self.assertIn("data:image/svg+xml;base64,", out)        # SVG never saved as a file
+        self.assertNotIn("a-3000", out)                         # one srcset candidate kept
+        self.assertNotIn("https://shop.test/img/a-3000.png", self.fetched)
+        self.assertIn('href="https://shop.test/about"', out)
+        self.assertIn("<p>Enable JS</p>", out)
+        self.assertIn("café &lt;ok&gt;", out)
+        self.assertEqual(len(saved), 6)  # font, hero, dot, bg, lazy, a-1200; the SVG is inline, not a file
+        self.assertFalse([n for n in saved if n.endswith(".svg")])
+
+    def test_non_asset_types_are_refused(self):
+        import tempfile
+        from unittest import mock
+        from notes import snapshot
+        page = '<html><head><style>@font-face{src:url(/evil.woff)}</style></head><body><img src="/x.png"></body></html>'
+
+        def fetch(url, *a, **k):
+            return url, "text/html", b"<script>alert(1)</script>", "text/html"
+        with tempfile.TemporaryDirectory() as media, override_settings(MEDIA_ROOT=media), mock.patch.object(snapshot, "fetch", fetch):
+            out = snapshot.Snapshot(8, "https://x.test/").build(page)
+        self.assertIn('url("")', out)
+        self.assertNotIn("x.test/x.png", out)
+
+    def test_snapshot_endpoint_is_sandboxed(self):
+        from notes.models_web import WebArchive
+        from notes.snapshot import MARKER
+        a = WebArchive.objects.create(url="https://shop.test/", kind="web", html_content=MARKER + "\n<html><body>Hi</body></html>")
+        c = APIClient()
+        r = c.get(f"/api/web/{a.id}/snapshot")
+        self.assertEqual(r.status_code, 200)
+        self.assertTrue(r["Content-Security-Policy"].startswith("sandbox"))
+        self.assertIn("default-src 'none'", r["Content-Security-Policy"])
+        self.assertIn(b"Hi", r.content)
+        self.assertTrue(c.get(f"/api/web/{a.id}").json()["has_snapshot"])
+        # Saved assets are inlined when served: a sandboxed page cannot rely on fetching them.
+        import os
+        import tempfile
+        with tempfile.TemporaryDirectory() as media, override_settings(MEDIA_ROOT=media):
+            d = os.path.join(media, "web-pages", str(a.id))
+            os.makedirs(d)
+            with open(os.path.join(d, "0123456789abcdef0123.png"), "wb") as f:
+                f.write(b"PNGDATA")
+            a.html_content = MARKER + f'<img src="/media/web-pages/{a.id}/0123456789abcdef0123.png">'
+            a.save()
+            body = c.get(f"/api/web/{a.id}/snapshot").content
+        self.assertIn(b'src="data:image/png;base64,UE5HREFUQQ=="', body)
+        self.assertNotIn(b"/media/", body)
+        self.assertIn("img-src data:;", r["Content-Security-Policy"])  # nothing fetched, not even from Kern
+        b = WebArchive.objects.create(url="https://old.test/", kind="web", html_content="<p>old</p>")
+        self.assertEqual(c.get(f"/api/web/{b.id}/snapshot").status_code, 404)

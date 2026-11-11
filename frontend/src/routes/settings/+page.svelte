@@ -72,8 +72,8 @@
 	const accents = ['#e2a85a', '#d98a6a', '#c9a227', '#7fbf8f', '#5fb3a8', '#74a9e0', '#a996e0', '#dc8fb9'];
 
 	let fc = $state({ new_per_day: 20, reviews_per_day: 200, retention: 0.9, show_intervals: true });
-	let data = $state({ auto_backup: true });
-	let backups = $state<{ name: string; size: number; created_at: string; kind: string }[]>([]);
+	let data = $state({ auto_backup: true, backup_downloads: false });
+	let backups = $state<{ name: string; size: number; created_at: string; kind: string; contents: { git: boolean; downloads: boolean } | null }[]>([]);
 	let storage = $state<any>(null);
 	let busy = $state('');
 	let capturing = $state<string | null>(null);
@@ -125,7 +125,7 @@
 	async function restore(name: string | null, file?: File) {
 		const ok = await ui.confirm({
 			title: 'Restore this backup?',
-			message: 'Everything in the workspace — pages, databases, cards, tasks and files — is replaced by the backup. A safety backup of the current state is made first.',
+			message: 'Everything in the workspace — pages, databases, cards, tasks, files, bookmarks, git repositories and settings — is replaced by the backup. A safety backup of the current state is made first. (Backups without videos keep the videos you have now; older backups without git repositories keep your current repositories.)',
 			confirmLabel: 'Restore backup', danger: true
 		});
 		if (!ok) return;
@@ -365,7 +365,9 @@
 			<div class="group">
 				<div class="item"><div><b>Automatic daily backup</b><span>Keeps the last 7, inside the data volume. Copy them elsewhere for safety.</span></div>
 					<input type="checkbox" bind:checked={data.auto_backup} onchange={saveData} /></div>
-				<div class="item"><div><b>Back up now</b><span>Database and every uploaded file in one .zip.</span></div>
+				<div class="item"><div><b>Include downloaded videos</b><span>Videos saved from bookmarks{storage ? ` (${fileSize(storage.downloads_bytes)} now)` : ''}. They can be downloaded again, so they're left out unless this is on.</span></div>
+					<input type="checkbox" bind:checked={data.backup_downloads} onchange={saveData} /></div>
+				<div class="item"><div><b>Back up now</b><span>Pages, databases, cards, tasks, files and their versions, bookmarks, git repositories and settings in one .zip.</span></div>
 					<div class="row">
 						<button class="btn primary" disabled={!!busy} onclick={backupNow}><HardDrive size={14} />{busy === 'backup' ? 'Backing up…' : 'Create backup'}</button>
 						<input type="file" hidden accept=".zip" bind:this={restoreInput} onchange={(e) => { const f = e.currentTarget.files?.[0]; e.currentTarget.value = ''; if (f) restore(null, f); }} />
@@ -374,7 +376,7 @@
 				</div>
 				{#each backups as b (b.name)}
 					<div class="item tight">
-						<div><b>{fullDate(b.created_at)}</b><span>{b.kind === 'auto' ? 'Automatic' : b.kind === 'prerestore' ? 'Safety copy before a restore' : 'Manual'} · {fileSize(b.size)} · {b.name}</span></div>
+						<div><b>{fullDate(b.created_at)}</b><span>{b.kind === 'auto' ? 'Automatic' : b.kind === 'prerestore' ? 'Safety copy before a restore' : 'Manual'} · {fileSize(b.size)}{b.contents ? (b.contents.git ? '' : ' · no git repositories (older backup)') + (b.contents.downloads ? ' · with videos' : '') : ''} · {b.name}</span></div>
 						<div class="row">
 							<a class="btn ghost" href="/api/backups/{b.name}" download><Download size={13} />Download</a>
 							<button class="btn ghost" disabled={!!busy} onclick={() => restore(b.name)}><RotateCcw size={13} />Restore</button>
@@ -387,7 +389,9 @@
 				<div class="section-title">Storage</div>
 				<div class="group stats">
 					<div><b>{fileSize(storage.database_bytes)}</b><span>Database</span></div>
-					<div><b>{fileSize(storage.media_bytes)}</b><span>Files</span></div>
+					<div><b>{fileSize(storage.media_bytes - (storage.downloads_bytes ?? 0))}</b><span>Files</span></div>
+					<div><b>{fileSize(storage.downloads_bytes ?? 0)}</b><span>Videos</span></div>
+					<div><b>{fileSize(storage.git_bytes ?? 0)}</b><span>Git</span></div>
 					<div><b>{fileSize(storage.backups_bytes)}</b><span>Backups</span></div>
 					{#each Object.entries(storage.counts) as [k, v] (k)}<div><b>{Number(v).toLocaleString()}</b><span>{k}</span></div>{/each}
 				</div>

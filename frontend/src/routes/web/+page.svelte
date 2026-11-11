@@ -1,5 +1,5 @@
 <script lang="ts">
-	import { ArrowLeft, Bookmark, Check, Download, ExternalLink, FileText, Film, Image as ImageIcon, Plus, RefreshCw, Search, Trash2, X } from '@lucide/svelte';
+	import { ArrowLeft, Bookmark, Check, Download, ExternalLink, FileText, Film, Image as ImageIcon, Play, Plus, RefreshCw, Search, Trash2, X } from '@lucide/svelte';
 	import { onDestroy, onMount } from 'svelte';
 	import { api, qs } from '#lib/api.ts';
 	import { ui } from '#lib/state/ui.svelte.ts';
@@ -7,14 +7,19 @@
 
 	type Kind = 'web' | 'video' | 'image' | 'mixed';
 	interface Todo { text: string; done: boolean }
+	interface Progress {
+		phase?: 'starting' | 'video' | 'audio' | 'merging'; part?: number; parts?: number; percent?: number | null;
+		downloaded?: number; total?: number | null; speed?: number | null; eta?: number | null;
+	}
 	interface Item {
 		id: string; url: string; title: string; kind: Kind; thumbnail: string; duration: number | null;
 		author: string; description: string; is_processed: boolean; error_message: string | null;
-		video_status: '' | 'downloading' | 'done' | 'error'; video_url: string; created_at: string;
+		video_status: '' | 'downloading' | 'done' | 'error'; video_url: string; created_at: string; updated_at?: string;
+		video_progress: Progress | null;
 		todo_count: number;
 	}
 	interface Detail extends Item {
-		has_html: boolean; notes: string; todos: Todo[]; video_format: 'best' | 'audio'; video_quality: '' | '1080p' | '720p' | '480p';
+		has_html: boolean; has_snapshot: boolean; notes: string; todos: Todo[]; video_format: 'best' | 'audio'; video_quality: '' | '1080p' | '720p' | '480p';
 	}
 
 	let list = $state<Item[]>([]);
@@ -33,6 +38,36 @@
 	let notes = $state('');
 	let todoText = $state('');
 	let poll: ReturnType<typeof setInterval> | undefined;
+	// The online player loads only when asked, so opening a bookmark contacts no video site.
+	let playing = $state(false);
+
+	/** Privacy-enhanced embed URL for videos we know how to play in place. */
+	function embedUrl(raw: string): string | null {
+		let u: URL;
+		try {
+			u = new URL(raw);
+		} catch {
+			return null;
+		}
+		const host = u.hostname.replace(/^(www|m|music)\./, '');
+		const start = (() => {
+			const t = u.searchParams.get('t') ?? u.searchParams.get('start') ?? '';
+			const m = t.match(/^(?:(\d+)h)?(?:(\d+)m)?(?:(\d+)s?)?$/);
+			const secs = m ? (+(m[1] ?? 0)) * 3600 + (+(m[2] ?? 0)) * 60 + (+(m[3] ?? 0)) : 0;
+			return secs ? `&start=${secs}` : '';
+		})();
+		let id: string | null = null;
+		if (host === 'youtu.be') id = u.pathname.slice(1).split('/')[0];
+		else if (host === 'youtube.com' || host === 'youtube-nocookie.com') {
+			id = u.searchParams.get('v') ?? u.pathname.match(/^\/(?:embed|shorts|live|v)\/([^/?#]+)/)?.[1] ?? null;
+		}
+		if (id && /^[\w-]{6,20}$/.test(id)) return `https://www.youtube-nocookie.com/embed/${id}?autoplay=1&rel=0${start}`;
+		if (host === 'vimeo.com' || host === 'player.vimeo.com') {
+			const v = u.pathname.match(/(?:^|\/)(\d{5,})(?:\/|$)/)?.[1];
+			if (v) return `https://player.vimeo.com/video/${v}?autoplay=1&dnt=1`;
+		}
+		return null;
+	}
 
 	const kinds: { id: string; label: string }[] = [
 		{ id: '', label: 'All' }, { id: 'web', label: 'Pages' }, { id: 'video', label: 'Videos' }, { id: 'image', label: 'Images' }
@@ -59,7 +94,7 @@
 		detail = d;
 		title = d.title; author = d.author; description = d.description; notes = d.notes;
 		clearInterval(poll);
-		if (d.video_status === 'downloading') poll = setInterval(refresh, 2000);
+		if (d.video_status === 'downloading') poll = setInterval(refresh, 1000);
 	}
 
 	async function refresh() {
@@ -67,7 +102,7 @@
 		try {
 			const d = await api.get<Detail>('/web/' + detail.id);
 			const was = detail.video_status;
-			detail = { ...detail, video_status: d.video_status, video_url: d.video_url, error_message: d.error_message, duration: d.duration };
+			detail = { ...detail, video_status: d.video_status, video_progress: d.video_progress, video_url: d.video_url, error_message: d.error_message, duration: d.duration };
 			if (d.video_status !== 'downloading') {
 				clearInterval(poll);
 				if (was === 'downloading' && d.video_status === 'done') ui.toast('Video downloaded');
@@ -82,7 +117,8 @@
 		try {
 			setDetail(await api.get<Detail>('/web/' + id));
 			html = '';
-			if (detail?.has_html) {
+			playing = false;
+			if (detail?.has_html && !detail.has_snapshot && detail.kind !== 'video') {
 				const p = await api.get<{ type: string; content?: string }>(`/web/${id}/preview`);
 				if (p.type === 'html') html = p.content ?? '';
 			}
@@ -154,7 +190,7 @@
 			const d = await api.post<Detail>(`/web/${detail.id}/download-video`, { video_format: detail.video_format, video_quality: detail.video_quality });
 			detail = { ...detail, video_status: d.video_status, error_message: null };
 			clearInterval(poll);
-			poll = setInterval(refresh, 2000);
+			poll = setInterval(refresh, 1000);
 		} catch (e) {
 			ui.error(e);
 		}
@@ -177,6 +213,17 @@
 	}
 
 	const host = (u: string) => { try { return new URL(u).hostname.replace(/^www\./, ''); } catch { return u; } };
+	const mb = (n: number) => (n >= 1e9 ? `${(n / 1e9).toFixed(2)} GB` : `${(n / 1e6).toFixed(n >= 1e8 ? 0 : 1)} MB`);
+	function progressLabel(p: Progress): string {
+		if (!p.phase || p.phase === 'starting') return 'Starting…';
+		if (p.phase === 'merging') return 'Merging video and audio…';
+		const parts: string[] = [];
+		parts.push((p.phase === 'audio' ? 'Audio' : 'Video') + (p.parts && p.parts > 1 ? ` (${p.part} of ${p.parts})` : ''));
+		if (p.downloaded) parts.push(p.total ? `${mb(p.downloaded)} of ${mb(p.total)}` : mb(p.downloaded));
+		if (p.speed) parts.push(`${mb(p.speed)}/s`);
+		if (p.eta != null && p.eta > 0) parts.push(`${dur(p.eta)} left`);
+		return parts.join(' · ');
+	}
 	const dur = (s: number | null) => (s ? `${Math.floor(s / 60)}:${String(Math.floor(s % 60)).padStart(2, '0')}` : '');
 	const frameDoc = (h: string) => `<base target="_blank"><style>body{font-family:system-ui,sans-serif;line-height:1.5;padding:12px;max-width:900px;margin:auto}img{max-width:100%;height:auto}</style>${h}`;
 </script>
@@ -198,7 +245,28 @@
 				<div class="main">
 					{#if detail.video_url}
 						<!-- svelte-ignore a11y_media_has_caption -->
-						<video class="media" src={detail.video_url} controls preload="metadata"></video>
+						<video class="media" src={detail.video_url} poster={detail.thumbnail || undefined} controls preload="metadata"></video>
+					{:else if detail.kind === 'video'}
+						{@const embed = embedUrl(detail.url)}
+						{#if embed && playing}
+							<iframe class="player" title={detail.title || 'Video'} src={embed} allow="autoplay; encrypted-media; fullscreen; picture-in-picture"
+								allowfullscreen referrerpolicy="strict-origin-when-cross-origin"></iframe>
+						{:else}
+							<div class="poster">
+								{#if detail.thumbnail}<img src={detail.thumbnail} alt="" referrerpolicy="no-referrer" />{:else}<Film size={72} strokeWidth={1.25} />{/if}
+								{#if embed}
+									<button class="play" title="Play here" onclick={() => (playing = true)}><Play size={30} fill="currentColor" /></button>
+								{:else}
+									<a class="play" title="Watch on {host(detail.url)}" href={detail.url} target="_blank" rel="noopener noreferrer"><Play size={30} fill="currentColor" /></a>
+								{/if}
+								{#if detail.duration}<span class="dur">{dur(detail.duration)}</span>{/if}
+							</div>
+							<p class="faint small hint">{embed ? `Plays from ${host(detail.url)}. Download it to keep a copy that plays offline.` : `Opens on ${host(detail.url)}. Download it to watch here.`}</p>
+						{/if}
+					{:else if detail.has_snapshot}
+						<!-- The server sandboxes it too (CSP): no scripts, nothing loaded from the internet. -->
+						<iframe class="frame snap" title="Saved page" src="/api/web/{detail.id}/snapshot?v={encodeURIComponent(detail.updated_at ?? '')}"
+							sandbox="allow-popups allow-popups-to-escape-sandbox" referrerpolicy="no-referrer"></iframe>
 					{:else if html}
 						<iframe class="frame" title="Archived page" sandbox="" srcdoc={frameDoc(html)}></iframe>
 					{:else if detail.kind === 'image' && detail.thumbnail}
@@ -236,6 +304,17 @@
 									{:else}<Download size={14} />Download{/if}
 								</button>
 							</div>
+							{#if detail.video_status === 'downloading'}
+								{@const p = detail.video_progress ?? {}}
+								<div class="progress" role="progressbar" aria-valuemin="0" aria-valuemax="100" aria-valuenow={p.percent ?? undefined}
+									aria-label="Download progress">
+									<div class="bar" class:indeterminate={p.percent == null || p.phase === 'merging'} style:width="{p.percent ?? 0}%"></div>
+								</div>
+								<div class="pmeta faint small">
+									<span>{progressLabel(p)}</span>
+									{#if p.percent != null && p.phase !== 'merging'}<b>{Math.floor(p.percent)}%</b>{/if}
+								</div>
+							{/if}
 						</div>
 					{/if}
 
@@ -345,6 +424,19 @@
 	.content { display: grid; grid-template-columns: minmax(0, 1.8fr) minmax(280px, 380px); gap: 24px; align-items: start; }
 	.media { width: 100%; max-height: 70vh; border-radius: 10px; background: #000; object-fit: contain; }
 	.frame { width: 100%; height: 70vh; border: 1px solid var(--border); border-radius: 10px; background: #fff; }
+	.player { display: block; width: 100%; aspect-ratio: 16 / 9; border: 0; border-radius: 10px; background: #000; }
+	.poster { position: relative; display: grid; place-items: center; aspect-ratio: 16 / 9; border-radius: 10px; overflow: hidden; background: #000; color: var(--text-3); }
+	.poster img { position: absolute; inset: 0; width: 100%; height: 100%; object-fit: cover; opacity: 0.85; }
+	.play { position: relative; display: grid; place-items: center; width: 76px; height: 76px; padding-left: 4px; border-radius: 50%; color: #fff; background: rgba(0, 0, 0, 0.6); backdrop-filter: blur(4px); box-shadow: 0 0 0 1px rgba(255, 255, 255, 0.25); transition: transform .15s var(--ease), background .15s var(--ease); }
+	.play:hover { transform: scale(1.06); background: color-mix(in srgb, var(--accent) 85%, #000); color: #17130c; }
+	.dur { position: absolute; right: 10px; bottom: 10px; padding: 2px 6px; border-radius: 4px; font-size: 12px; color: #fff; background: rgba(0, 0, 0, 0.75); }
+	.hint { margin: 8px 2px 0; }
+	.progress { position: relative; height: 6px; margin-top: 4px; border-radius: 3px; overflow: hidden; background: color-mix(in srgb, var(--text-3) 25%, transparent); }
+	.progress .bar { height: 100%; border-radius: 3px; background: var(--accent); transition: width 0.4s var(--ease); }
+	.progress .bar.indeterminate { position: absolute; width: 35% !important; animation: slide 1.2s ease-in-out infinite; }
+	@keyframes slide { from { left: -35%; } to { left: 100%; } }
+	.pmeta { display: flex; justify-content: space-between; gap: 8px; }
+	.pmeta b { color: var(--text-2); font-variant-numeric: tabular-nums; }
 	.placeholder { display: grid; place-items: center; min-height: 260px; background: var(--surface-2); border-radius: 10px; color: var(--text-3); overflow: hidden; }
 	.placeholder img { max-width: 100%; max-height: 420px; }
 	.side { display: flex; flex-direction: column; gap: 12px; }

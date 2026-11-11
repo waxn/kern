@@ -6,6 +6,7 @@ import re
 import shutil
 import socket
 import threading
+import time
 from urllib.parse import urljoin, urlparse
 
 import nh3
@@ -100,6 +101,7 @@ def summary(a: WebArchive) -> dict:
         "is_processed": a.is_processed,
         "error_message": a.error_message,
         "video_status": a.video_status,
+        "video_progress": a.video_progress if a.video_status == "downloading" else None,
         "video_url": video_url(a),
         "created_at": a.created_at.isoformat(),
         "updated_at": a.updated_at.isoformat(),
@@ -111,6 +113,7 @@ def detail(a: WebArchive) -> dict:
     d.update(
         description=a.description,
         has_html=bool(a.html_content),
+        has_snapshot=a.html_content.startswith("<!-- kern:snapshot"),
         download_video=a.download_video,
         video_format=a.video_format,
         video_quality=a.video_quality,
@@ -158,25 +161,35 @@ def fetch_page(url: str):
         r.raise_for_status()
         raw = r.raw.read(MAX_HTML, decode_content=True)
         r.close()
-        enc = r.encoding or "utf-8"
-        return url, r.headers.get("content-type", ""), raw.decode(enc, errors="replace")
+        # The header's charset, else the page's own <meta charset>, else UTF-8 (requests would
+        # guess ISO-8859-1 for text/html without a charset, garbling most pages).
+        from .snapshot import decode_html
+        return url, r.headers.get("content-type", ""), decode_html(raw, r.headers.get("content-type", ""))
     raise ValueError("Too many redirects.")
 
 
 def process(a: WebArchive):
     """Fetch the page, store sanitised HTML and fill in missing metadata."""
     a.error_message = None
+    # What was already set (by the user, or an earlier fetch) is kept; this run only fills gaps.
+    had = {"title": a.title, "author": a.author, "description": a.description, "thumbnail": a.thumbnail}
     try:
         final, ctype, body = fetch_page(a.url)
         if a.kind == "image" or ctype.startswith("image/"):
             a.kind = "image"
             a.thumbnail = a.thumbnail or a.url
         else:
-            if a.download_html:
-                a.html_content = nh3.clean(
-                    body,
-                    tags=nh3.ALLOWED_TAGS | {"article", "section", "header", "footer", "main", "figure", "figcaption"},
-                )
+            if a.download_html and a.kind != "video":
+                # A full snapshot: the page with its styles, images and fonts saved locally.
+                from . import snapshot
+                try:
+                    a.html_content = snapshot.Snapshot(a.id, final).build(body)
+                except Exception:
+                    snapshot.remove(a.id)
+                    a.html_content = nh3.clean(
+                        body,
+                        tags=nh3.ALLOWED_TAGS | {"article", "section", "header", "footer", "main", "figure", "figcaption"},
+                    )
             a.title = a.title or meta_content(body, "og:title", "twitter:title") or page_title(body)
             a.description = a.description or meta_content(body, "og:description", "description", "twitter:description")
             a.author = a.author or meta_content(body, "author", "article:author", "og:site_name")
@@ -194,12 +207,18 @@ def process(a: WebArchive):
 
             with yt_dlp.YoutubeDL({"quiet": True, "no_warnings": True, "skip_download": True, "noplaylist": True}) as ydl:
                 info = ydl.extract_info(a.url, download=False)
-            a.title = a.title or str(info.get("title") or "")[:500]
-            a.author = a.author or str(info.get("uploader") or "")[:255]
-            a.description = a.description or str(info.get("description") or "")[:10000]
+            # For videos, the site's own details beat the page's generic tags (on YouTube those
+            # name the site as author and can describe a different video).
+            found = {
+                "title": str(info.get("title") or "")[:500],
+                "author": str(info.get("uploader") or info.get("channel") or "")[:255],
+                "description": str(info.get("description") or "")[:10000],
+                "thumbnail": str(info.get("thumbnail") or "")[:2048],
+            }
+            for field, value in found.items():
+                if value and not had[field]:
+                    setattr(a, field, value)
             a.duration = a.duration or info.get("duration")
-            if info.get("thumbnail") and not a.thumbnail:
-                a.thumbnail = str(info["thumbnail"])[:2048]
             a.is_processed = True
             a.error_message = None
         except ImportError:
@@ -255,6 +274,8 @@ def web_detail(request, archive_id):
 
     if request.method == "DELETE":
         shutil.rmtree(video_dir(a), ignore_errors=True)
+        from . import snapshot
+        snapshot.remove(a.id)
         a.delete()
         return Response(status=204)
 
@@ -299,15 +320,49 @@ def _download(archive_id: int):
 
         out = video_dir(a)
         shutil.rmtree(out, ignore_errors=True)
-        opts = {"quiet": True, "no_warnings": True, "noplaylist": True, "outtmpl": out + "/%(id)s.%(ext)s"}
+        state = {"part": 0, "parts": 1, "last": 0.0}
+
+        def report(**progress):
+            # Shared through the database: the page may poll a different worker process.
+            WebArchive.objects.filter(id=a.id).update(video_progress=progress)
+
+        def on_progress(d):
+            if d.get("status") == "finished":
+                state["part"] = min(state["part"] + 1, state["parts"])
+                return
+            if d.get("status") != "downloading":
+                return
+            now = time.monotonic()
+            if now - state["last"] < 0.5:
+                return
+            state["last"] = now
+            total = d.get("total_bytes") or d.get("total_bytes_estimate")
+            done = d.get("downloaded_bytes") or 0
+            frac = (done / total) if total else None
+            fmt = d.get("info_dict") or {}
+            report(phase="audio" if fmt.get("vcodec") == "none" else "video",
+                   part=state["part"] + 1, parts=state["parts"],
+                   percent=round(100 * (state["part"] + frac) / state["parts"], 1) if frac is not None else None,
+                   downloaded=done, total=total, speed=d.get("speed"), eta=d.get("eta"))
+
+        def on_postprocess(d):
+            if d.get("status") == "started" and d.get("postprocessor") in ("Merger", "FFmpegMerger", "VideoConvertor", "FFmpegVideoConvertor"):
+                report(phase="merging", percent=100)
+
+        opts = {"quiet": True, "no_warnings": True, "noplaylist": True, "outtmpl": out + "/%(id)s.%(ext)s",
+                "progress_hooks": [on_progress], "postprocessor_hooks": [on_postprocess]}
         if a.video_format == "audio":
             opts["format"] = "bestaudio/best"
         else:
             h = QUALITY_HEIGHT.get(a.video_quality)
             opts["format"] = f"bv*[height<={h}]+ba/b[height<={h}]/b" if h else "bv*+ba/b"
             opts["merge_output_format"] = "mp4"
+        report(phase="starting")
         with yt_dlp.YoutubeDL(opts) as ydl:
-            info = ydl.extract_info(a.url, download=True)
+            # Pick formats first, so progress knows how many parts (video + audio) to expect.
+            info = ydl.extract_info(a.url, download=False)
+            state["parts"] = len(info.get("requested_formats") or []) or 1
+            info = ydl.process_ie_result(info, download=True)
             path = ydl.prepare_filename(info)
             if info.get("requested_downloads"):
                 path = info["requested_downloads"][0].get("filepath") or path
@@ -318,7 +373,9 @@ def _download(archive_id: int):
     except Exception as e:
         a.video_status = "error"
         a.error_message = f"Download failed: {e}"[:1000]
-    a.save()
+    a.video_progress = {}
+    # Only the download's own fields: notes or a title edited meanwhile are kept.
+    a.save(update_fields=["video_path", "video_status", "error_message", "duration", "video_progress", "updated_at"])
     close_old_connections()
 
 
@@ -340,6 +397,7 @@ def web_download_video(request, archive_id):
             setattr(a, name, request.data[name])
     a.download_video = True
     a.video_status = "downloading"
+    a.video_progress = {"phase": "starting"}
     a.error_message = None
     a.save()
     threading.Thread(target=_download, args=(a.id,), daemon=True).start()
@@ -350,8 +408,36 @@ def web_download_video(request, archive_id):
 def web_preview(request, archive_id):
     """Sanitised archived HTML (render it in a sandboxed iframe), or an image/link fallback."""
     a = get_archive(archive_id)
+    from .snapshot import is_snapshot
+    if is_snapshot(a.html_content):
+        return Response({"type": "snapshot", "url": f"/api/web/{a.id}/snapshot"})
     if a.html_content:
         return Response({"type": "html", "content": a.html_content})
     if a.thumbnail:
         return Response({"type": "image", "url": a.thumbnail})
     return Response({"type": "link", "url": a.url})
+
+
+# Served with a policy that makes the snapshot inert: no scripts, no forms, its own origin (so it
+# cannot touch Kern even when opened directly), and nothing loaded from the internet.
+SNAPSHOT_CSP = (
+    "sandbox allow-popups allow-popups-to-escape-sandbox; default-src 'none'; img-src data:; "
+    "style-src 'unsafe-inline'; font-src data:; media-src data:; frame-ancestors 'self'; "
+    "base-uri 'none'; form-action 'none'"
+)
+
+
+def web_snapshot(request, archive_id):
+    """The saved page itself, as HTML, for the bookmark view's iframe."""
+    from django.http import HttpResponse
+
+    from .snapshot import is_snapshot, self_contained
+    a = get_archive(archive_id)
+    if request.method != "GET" or not is_snapshot(a.html_content):
+        raise Http404
+    r = HttpResponse(self_contained(a.id, a.html_content), content_type="text/html; charset=utf-8")
+    r["Content-Security-Policy"] = SNAPSHOT_CSP
+    r["X-Content-Type-Options"] = "nosniff"
+    r["Referrer-Policy"] = "no-referrer"
+    r["Cache-Control"] = "private, no-cache"
+    return r

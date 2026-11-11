@@ -24,9 +24,14 @@ Then open <http://localhost:8420>.
 
 ### Backups
 
-Settings → Data & backups creates a backup (`.zip` with the database and all
-uploaded files), restores one, and keeps an automatic daily backup (the last
-7) inside the data volume. Restoring always saves a safety copy first. To copy
+Settings → Data & backups creates a backup, restores one, and keeps an
+automatic daily backup (the last 7) inside the data volume. A backup is one
+`.zip` with everything: pages, databases, cards, tasks, uploaded files and
+their versions, bookmarks and their saved pages, git repositories, and
+settings (including the AI key, so keep backups private). Videos downloaded
+for bookmarks are left out unless you turn on "Include downloaded videos",
+since they are large and can be downloaded again. Restoring always saves a
+safety copy first; restoring a backup without videos keeps the videos you have. To copy
 backups off the machine:
 
 ```bash
@@ -51,15 +56,28 @@ README, the commit log, single-commit diffs, branches and tags, and a Stats tab
 contributors, totals).
 
 - Repositories are bare repos in the data volume (`/data/git/<name>.git`).
-  They are not part of Kern's `.zip` backups; they are git repos, so a
-  `git clone --mirror` is the backup. To copy them off the machine:
-  `docker compose cp backend:/data/git ./kern-git`.
+  They are included in Kern's backups (Settings → Data & backups). To copy
+  them off the machine directly: `docker compose cp backend:/data/git ./kern-git`.
 - Clone, fetch and push use git's smart HTTP protocol (`git http-backend`).
   Like the rest of Kern there is no login, so anyone who can reach the port can
   push. **Git → Access** sets a password for pushes or for all git access (git
   asks for a username; any name works).
 - Repository names: letters, digits, `.`, `-`, `_`, up to 64 characters. Server-side
   hooks are disabled and pushed objects are checked (`receive.fsckObjects`).
+
+### Bookmarks
+
+**Bookmarks** in the sidebar saves web pages, images and videos from a URL.
+
+- Web pages are saved as a full snapshot: the page with its stylesheets, images
+  and web fonts stored locally (`/data/media/web-pages/<id>/`), so it looks like
+  the real page and still opens when the site changes or goes away. Scripts,
+  frames and embeds are removed, and the snapshot is shown sandboxed with a
+  policy that blocks scripts and every request to the internet. Use the refresh
+  button on a bookmark to re-capture it.
+- Videos (YouTube, Vimeo, …) play in place from the site, or can be downloaded
+  with yt-dlp (video or audio only, a chosen quality) with live progress.
+  YouTube downloads need a JavaScript runtime; the Docker image includes Deno.
 
 ## What is implemented
 
