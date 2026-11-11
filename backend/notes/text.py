@@ -10,7 +10,7 @@ INLINE_TAGS = {
 INLINE_ATTRS = {
     "a": {"href", "class", "contenteditable", "data-ref", "data-c"},
     "span": {"class", "contenteditable", "data-math", "data-color"},
-    "mark": {"data-bg"},
+    "mark": {"data-bg", "data-note"},
 }
 
 _TAG_RE = re.compile(r"<[^>]+>")

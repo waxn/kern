@@ -189,6 +189,8 @@ kbd {
 .rt [data-color='purple'] { color: var(--c-purple); } .rt [data-color='pink'] { color: var(--c-pink); }
 .rt [data-color='red'] { color: var(--c-red); }
 .rt mark { color: inherit; border-radius: 3px; padding: 1px 0; background: color-mix(in srgb, var(--c-yellow) 30%, transparent); }
+.rt mark[data-note] { background: color-mix(in srgb, var(--accent) 16%, transparent); border-bottom: 1.5px dotted color-mix(in srgb, var(--accent) 80%, transparent); border-radius: 2px 2px 0 0; cursor: help; }
+.rt mark[data-note]:hover { background: color-mix(in srgb, var(--accent) 26%, transparent); }
 .rt mark[data-bg='gray'] { background: color-mix(in srgb, var(--c-gray) 28%, transparent); }
 .rt mark[data-bg='orange'] { background: color-mix(in srgb, var(--c-orange) 28%, transparent); }
 .rt mark[data-bg='green'] { background: color-mix(in srgb, var(--c-green) 28%, transparent); }

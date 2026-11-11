@@ -1,5 +1,5 @@
 <script lang="ts">
-	import { Baseline, Bold, Braces, Code, Highlighter, Italic, Link, Sigma, Strikethrough, Underline } from '@lucide/svelte';
+	import { Baseline, Bold, Braces, Code, Highlighter, Italic, Link, Sigma, Strikethrough, Underline, StickyNote } from '@lucide/svelte';
 	import { tick } from 'svelte';
 	import { COLORS, HIGHLIGHTS } from './blockTypes';
 	import { applyWrap, mathHtml, notifyInput, renderMath, toggleWrap } from './dom';
@@ -8,7 +8,9 @@
 
 	let el = $state<HTMLElement | null>(null);
 	let rect = $state<DOMRect | null>(null);
-	let mode = $state<'main' | 'link' | 'color' | 'bg'>('main');
+	let mode = $state<'main' | 'link' | 'color' | 'bg' | 'note'>('main');
+	let noteText = $state('');
+	let noteInput = $state<HTMLTextAreaElement>();
 	let url = $state('');
 	let saved: Range | null = null;
 	let bar = $state<HTMLElement>();
@@ -18,6 +20,7 @@
 
 	function update() {
 		if (mode === 'link' && document.activeElement === linkInput) return;
+		if (mode === 'note' && document.activeElement === noteInput) return;
 		const sel = getSelection();
 		const node = sel?.anchorNode;
 		const host = (node instanceof Element ? node : node?.parentElement)?.closest<HTMLElement>('[data-editable]:not([data-plain])');
@@ -69,6 +72,24 @@
 		const sel = getSelection()!;
 		sel.removeAllRanges();
 		sel.addRange(saved);
+	}
+
+	async function openNote() {
+		const sel = getSelection()!;
+		saved = sel.getRangeAt(0).cloneRange();
+		const existing = (sel.anchorNode?.parentElement)?.closest<HTMLElement>('mark[data-note]');
+		noteText = existing?.dataset.note ?? '';
+		mode = 'note';
+		await tick();
+		noteInput?.focus();
+	}
+
+	function applyNote() {
+		restore();
+		const text = noteText.trim();
+		if (el) applyWrap(el, 'mark', 'data-note', text);
+		mode = 'main';
+		getSelection()?.collapseToEnd();
 	}
 
 	async function openLink() {
@@ -124,6 +145,14 @@
 			<button title="Link (Ctrl+K)" onclick={openLink}><Link size={15} /></button>
 			<button title="Text color" onclick={() => (mode = 'color')}><Baseline size={15} /></button>
 			<button title="Highlight" onclick={() => (mode = 'bg')}><Highlighter size={15} /></button>
+			<span class="sep"></span>
+			<button class="txt note" title="Attach a note to this text" onclick={openNote}><StickyNote size={14} />Note</button>
+		{:else if mode === 'note'}
+			<form class="noteform" onsubmit={(e) => { e.preventDefault(); applyNote(); }}>
+				<textarea bind:this={noteInput} bind:value={noteText} rows="3" placeholder="Write a note about this text…"
+					onkeydown={(e) => { e.stopPropagation(); if (e.key === 'Escape') { restore(); mode = 'main'; } if (e.key === 'Enter' && !e.shiftKey) { e.preventDefault(); applyNote(); } }}></textarea>
+				<div class="noteacts"><span class="faint">Enter to save · Shift+Enter for a new line</span><button type="submit" class="txt">Save</button></div>
+			</form>
 		{:else if mode === 'link'}
 			<form onsubmit={(e) => { e.preventDefault(); applyLink(); }}>
 				<input bind:this={linkInput} bind:value={url} placeholder="Paste or type a link…"
@@ -147,6 +176,10 @@
 	button { min-width: 28px; height: 28px; display: grid; place-items: center; border-radius: 4px; color: var(--text-2); }
 	button:hover { background: var(--hover); color: var(--text); }
 	.txt { padding: 0 8px; font-size: 12.5px; }
+	.note { display: flex; align-items: center; gap: 5px; }
+	.noteform { display: flex; flex-direction: column; gap: 4px; width: 300px; padding: 2px; }
+	.noteform textarea { width: 100%; resize: vertical; border: 0; outline: 0; background: var(--bg); border-radius: 4px; padding: 6px 8px; font: inherit; font-size: 13px; }
+	.noteacts { display: flex; align-items: center; justify-content: space-between; font-size: 11px; }
 	.sep { width: 1px; height: 18px; margin: 0 3px; background: var(--border); }
 	form { display: flex; align-items: center; }
 	input { width: 240px; height: 28px; padding: 0 8px; border: 0; outline: 0; background: none; }

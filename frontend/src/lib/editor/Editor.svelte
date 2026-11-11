@@ -569,6 +569,44 @@
 		if (id) doc.selectionAnchor = id;
 	}
 
+	// ----- notes attached to text: show after a short hover
+	let noteTip = $state<{ el: HTMLElement; x: number; y: number; text: string; editing: boolean } | null>(null);
+	let noteTimer: ReturnType<typeof setTimeout> | undefined;
+	let hideTimer: ReturnType<typeof setTimeout> | undefined;
+
+	function onNoteOver(e: MouseEvent) {
+		const m = (e.target as HTMLElement).closest?.<HTMLElement>('mark[data-note]');
+		if (!m || !root?.contains(m)) return;
+		clearTimeout(hideTimer);
+		if (noteTip?.el === m) return;
+		clearTimeout(noteTimer);
+		noteTimer = setTimeout(() => {
+			const r = m.getBoundingClientRect();
+			noteTip = { el: m, x: Math.min(r.left, innerWidth - 300), y: r.bottom + 6, text: m.dataset.note ?? '', editing: false };
+		}, 350);
+	}
+
+	function onNoteOut(e: MouseEvent) {
+		const m = (e.target as HTMLElement).closest?.('mark[data-note]');
+		if (!m) return;
+		clearTimeout(noteTimer);
+		hideTimer = setTimeout(() => { if (!noteTip?.editing) noteTip = null; }, 250);
+	}
+
+	function saveNoteTip(remove = false) {
+		const t = noteTip;
+		noteTip = null;
+		if (!t) return;
+		const host = t.el.closest<HTMLElement>('[data-editable]');
+		if (remove || !t.text.trim()) {
+			t.el.replaceWith(...t.el.childNodes);
+		} else t.el.dataset.note = t.text.trim();
+		if (host) {
+			host.normalize();
+			notifyInput(host);
+		}
+	}
+
 	function onMouseMove(e: MouseEvent) {
 		if (!mine(e)) return;
 		if (!(e.buttons & 1) || !dragFrom) return;
@@ -832,6 +870,7 @@
 <div class="editor" bind:this={root} data-editor={doc.id} tabindex="-1" role="document"
 	onkeydown={onKeydown} oninput={onInput} onbeforeinput={onBeforeInput}
 	onmousedown={onMouseDown} onmousemove={onMouseMove} onclick={onClick} oncontextmenu={onContextMenu}
+	onmouseover={onNoteOver} onmouseout={onNoteOut}
 	oncopy={(e) => onCopy(e)} oncut={(e) => onCopy(e, true)} onpaste={onPaste}
 	ondragover={onDragOver} ondrop={onDrop} ondragend={endDrag}
 	ondragleave={(e) => { if (!root?.contains(e.relatedTarget as Node)) indicator = null; }}>
@@ -863,6 +902,22 @@
 		onclose={() => { const id = aiAt?.id; aiAt = null; if (id && doc.blocks[id]) doc.focus(id, 'end'); }} />
 {/if}
 
+{#if noteTip}
+	<!-- svelte-ignore a11y_no_static_element_interactions -->
+	<div class="notetip popover" style:left="{noteTip.x}px" style:top="{noteTip.y}px"
+		onmouseenter={() => clearTimeout(hideTimer)} onmouseleave={() => { if (!noteTip?.editing) noteTip = null; }}>
+		{#if noteTip.editing}
+			<!-- svelte-ignore a11y_autofocus -->
+			<textarea class="input" rows="3" autofocus bind:value={noteTip.text}
+				onkeydown={(e) => { e.stopPropagation(); if (e.key === 'Escape') noteTip = null; if (e.key === 'Enter' && !e.shiftKey) { e.preventDefault(); saveNoteTip(); } }}></textarea>
+			<div class="tipacts"><button class="btn ghost" onclick={() => saveNoteTip(true)}>Remove</button><button class="btn primary" onclick={() => saveNoteTip()}>Save</button></div>
+		{:else}
+			<p class="tiptext">{noteTip.text}</p>
+			<div class="tipacts"><button class="btn ghost" onclick={() => noteTip && (noteTip.editing = true)}>Edit</button><button class="btn ghost" onclick={() => saveNoteTip(true)}>Remove note</button></div>
+		{/if}
+	</div>
+{/if}
+
 {#if math}
 	<!-- svelte-ignore a11y_no_static_element_interactions -->
 	<div class="backdrop" onmousedown={saveMath}></div>
@@ -880,6 +935,11 @@
 	.gone { padding: 6px 4px; color: var(--text-3); font-style: italic; }
 	.drop { position: absolute; height: 2px; background: var(--accent); border-radius: 1px; pointer-events: none; z-index: 5; }
 	.backdrop { position: fixed; inset: 0; z-index: 595; }
+	.notetip { position: fixed; z-index: 597; width: 280px; padding: 10px 12px 8px; font-family: var(--font-sans); }
+	.tiptext { margin: 0 0 6px; white-space: pre-wrap; font-size: 13px; line-height: 1.5; }
+	.notetip textarea { width: 100%; margin-bottom: 6px; }
+	.tipacts { display: flex; justify-content: flex-end; gap: 4px; }
+	.tipacts .btn { height: 24px; padding: 0 8px; font-size: 12px; }
 	.math-pop { position: fixed; z-index: 596; display: flex; gap: 6px; padding: 6px; width: 330px; }
 	.math-pop .input { flex: 1; font-family: var(--font-mono); font-size: 13px; }
 </style>
