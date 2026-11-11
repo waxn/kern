@@ -1051,7 +1051,7 @@ def suggest(request):
 
 @api_view(["GET", "PATCH"])
 def settings_view(request):
-    private = {"ai", "ai_secret"}  # managed by /api/ai/config; the key never leaves the server
+    private = {"ai", "ai_secret", "git_auth"}  # managed by /api/ai/config and /api/git/config; secrets never leave the server
     if request.method == "PATCH":
         if not isinstance(request.data, dict):
             return bad("Expected an object.")
@@ -1084,4 +1084,14 @@ def file_upload(request):
 
 @api_view(["GET"])
 def health(request):
-    return Response({"ok": True})
+    """Health check endpoint."""
+    result = {"ok": True, "version": "1.0"}
+    
+    # Check yt-dlp availability for web archiving
+    try:
+        import youtube_dl
+        result["yt_dlp"] = "available"
+    except ImportError:
+        result["yt_dlp"] = "not installed - run: pip install youtube-dlc yt_dlp"
+    
+    return Response(result)

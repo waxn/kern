@@ -1,6 +1,6 @@
 <script lang="ts">
 	import { page } from '$app/state';
-	import { Calendar, LayoutDashboard, Kanban, Archive, ChevronDown, ChevronRight, CircleCheck, Database, FolderOpen, Hash, House, Layers, LayoutTemplate, Network, PanelLeft, Plus, Search, Settings, Trash2 } from '@lucide/svelte';
+	import { Calendar, LayoutDashboard, Kanban, Archive, ChevronDown, ChevronRight, CircleCheck, Database, FolderOpen, GitBranch, Hash, House, Layers, LayoutTemplate, Network, PanelLeft, Plus, Search, Settings, Trash2, Globe } from '@lucide/svelte';
 	import { counts } from '#lib/learn/util.svelte.ts';
 	import { importFiles } from '#lib/data/download.ts';
 	import Logo from './Logo.svelte';
@@ -22,9 +22,11 @@
 	let resizing = $state(false);
 
 	const links = [
+		{ href: '/web', label: 'Bookmarks', icon: Globe },
 		{ href: '/graph', label: 'Graph', icon: Network },
 		{ href: '/templates', label: 'Templates', icon: LayoutTemplate },
 		{ href: '/files', label: 'Files', icon: FolderOpen },
+		{ href: '/git', label: 'Git', icon: GitBranch },
 		{ href: '/tags', label: 'Tags', icon: Hash },
 		{ href: '/archive', label: 'Archive', icon: Archive },
 		{ href: '/trash', label: 'Trash', icon: Trash2 },
@@ -208,7 +210,7 @@
 
 	<nav class="foot">
 		{#each links as l (l.href)}
-			<a class="nav" class:active={path === l.href || (l.href === '/tags' && path.startsWith('/tag/'))} href={l.href} onclick={(e) => nav(e, l.href)}>
+			<a class="nav" class:active={path === l.href || (l.href === '/tags' && path.startsWith('/tag/')) || (l.href === '/git' && path.startsWith('/git/'))} href={l.href} onclick={(e) => nav(e, l.href)}>
 				<l.icon size={15} strokeWidth={1.75} /><span>{l.label}</span>
 			</a>
 		{/each}

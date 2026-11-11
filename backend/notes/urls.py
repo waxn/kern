@@ -4,6 +4,9 @@ from . import views as v
 from . import views_db as db
 from . import views_learn as learn
 from . import views_data as data
+from . import views_git as gitv
+from . import views_files as files
+from . import views_web as web
 
 urlpatterns = [
     path("health", v.health),
@@ -31,6 +34,11 @@ urlpatterns = [
     path("files", v.file_upload),
     path("library", data.files),
     path("library/<str:file_id>", data.file_detail),
+    path("library/<str:file_id>/content", files.file_content),
+    path("library/<str:file_id>/versions", files.file_versions),
+    path("library/<str:file_id>/versions/<str:version_id>/restore", files.file_version_restore),
+    path("library/<str:file_id>/annotations", files.file_annotations),
+    path("library/<str:file_id>/annotations/<str:annotation_id>", files.file_annotation_detail),
     path("documents/<str:doc_id>/versions", data.doc_versions),
     path("versions/<str:version_id>", data.version_detail),
     path("versions/<str:version_id>/restore", data.version_restore),
@@ -77,4 +85,20 @@ urlpatterns = [
     path("tasks", learn.task_list),
     path("tasks/summary", learn.task_summary),
     path("tasks/<str:task_id>", learn.task_detail),
+    path("git/config", gitv.git_config),
+    path("git/repos", gitv.repos),
+    path("git/repos/<str:name>", gitv.repo_detail),
+    path("git/repos/<str:name>/tree", gitv.repo_tree),
+    path("git/repos/<str:name>/blob", gitv.repo_blob),
+    path("git/repos/<str:name>/raw", gitv.repo_raw),
+    path("git/repos/<str:name>/commits", gitv.repo_commits),
+    path("git/repos/<str:name>/commits/<str:sha>", gitv.repo_commit),
+    path("git/repos/<str:name>/stats", gitv.repo_stats),
+    # Web archive endpoints
+    path("web/list", web.web_list),
+    path("web/archive", web.web_create),
+    path("web/<str:archive_id>", web.web_detail),
+    path("web/<str:archive_id>/process", web.web_detail_process),
+    path("web/<str:archive_id>/download-video", web.web_download_video),
+    path("web/<str:archive_id>/preview", web.web_preview),
 ]
