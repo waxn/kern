@@ -125,8 +125,9 @@ contributors, totals).
 
 `android/` holds a native Android client (Kotlin, Jetpack Compose) with the same look as the
 web app: pages and the block editor, databases, tasks, flashcard review, Intelligence,
-bookmarks, search, git browsing, plus reminders for due tasks and cards, home-screen
-widgets and a share target. Build it with `cd android && ./gradlew assembleRelease`; see
+bookmarks, search, git browsing, a Stats screen with charts, plus reminders for due tasks
+and cards (repeating card reminders with a cooldown, quiet hours, weekdays and filters under
+Settings → Reminders), home-screen widgets and a share target. Build it with `cd android && ./gradlew assembleRelease`; see
 [android/README.md](android/README.md).
 
 ## What is implemented
@@ -140,6 +141,8 @@ widgets and a share target. Build it with `cd android && ./gradlew assembleRelea
   collapse, multi-select, copy/paste (including Markdown and HTML), duplicate,
   convert, slash menu, Markdown shortcuts, inline formatting, undo/redo,
   autosave with save-state indicator.
+- Focus mode: the expand button in a page's top bar hides the sidebar, tabs
+  and right panel for distraction-free writing; Esc brings them back.
 - `[[` page links, `((` block references, `#` tags, backlinks with context.
 - Tags as first-class objects with their own property definitions; per-page
   properties (text, number, checkbox, date, URL, select, multi-select,
