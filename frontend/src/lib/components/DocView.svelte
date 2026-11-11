@@ -1,7 +1,7 @@
 <script lang="ts">
 	import { afterNavigate } from '$app/navigation';
 	import { page } from '$app/state';
-	import { ChevronRight, CloudOff, Ellipsis, FileText, Image, Layers, PanelRight, Smile, Star } from '@lucide/svelte';
+	import { ChevronRight, CloudOff, Ellipsis, FileText, Image, Layers, Maximize2, Minimize2, PanelRight, Smile, Star } from '@lucide/svelte';
 	import { goto } from '$app/navigation';
 	import { onMount, tick } from 'svelte';
 	import { docMenu, newPage } from '#lib/actions.ts';
@@ -155,7 +155,11 @@
 
 <div class="docview">
 	<div class="main">
-		<header class="topbar">
+		<header class="topbar" class:focus={ui.focusMode}>
+			{#if ui.focusMode}
+				<span class="grow"></span>
+				<button class="icon-btn exit-focus" title="Exit focus mode (Esc)" onclick={() => (ui.focusMode = false)}><Minimize2 size={15} /></button>
+			{:else}
 			<nav class="crumbs">
 				{#each crumbs as c (c.id)}
 					<a class="crumb truncate" href="/doc/{c.id}" onclick={(e) => { e.preventDefault(); open(`/doc/${c.id}`, e); }}>{c.icon} {c.title || 'Untitled'}</a>
@@ -176,6 +180,7 @@
 			{#if meta}
 				<button class="icon-btn intel" class:on={ai.popupOpen} title="Intelligence ({shortcut('intelligence').replace('Mod', modKey).replace(/\+/g, ' ')})"
 					onclick={() => (ai.popupOpen = !ai.popupOpen)}><Sparkle size={15} /></button>
+				<button class="icon-btn" title="Focus mode" onclick={() => (ui.focusMode = true)}><Maximize2 size={15} /></button>
 				<button class="icon-btn" class:on={meta.is_favorite} title={meta.is_favorite ? 'Remove from favorites' : 'Add to favorites'}
 					onclick={() => ws.updateDoc(id, { is_favorite: !meta.is_favorite }).catch(() => {})}>
 					<Star size={15} fill={meta.is_favorite ? 'currentColor' : 'none'} />
@@ -184,6 +189,7 @@
 					<PanelRight size={15} />
 				</button>
 				<button class="icon-btn" title="More" onclick={(e) => moreMenu(e.currentTarget)}><Ellipsis size={15} /></button>
+			{/if}
 			{/if}
 		</header>
 
@@ -260,7 +266,7 @@
 		</div>
 	</div>
 
-	{#if prefs.panelOpen && doc.status === 'ready'}<RightPanel {doc} onhistory={() => (showHistory = true)} />{/if}
+	{#if prefs.panelOpen && !ui.focusMode && doc.status === 'ready'}<RightPanel {doc} onhistory={() => (showHistory = true)} />{/if}
 </div>
 
 <input type="file" multiple hidden bind:this={importInput} accept=".md,.markdown,.txt,.html,.htm,.opml,.csv,.json,.zip,.apkg"
@@ -296,6 +302,9 @@
 <style>
 	.docview { position: relative; display: flex; height: 100%; }
 	.main { flex: 1; min-width: 0; display: flex; flex-direction: column; }
+	.topbar.focus { justify-content: flex-end; }
+	.exit-focus { opacity: 0.25; transition: opacity 0.15s; }
+	.topbar.focus:hover .exit-focus, .exit-focus:focus-visible { opacity: 1; }
 	.topbar { flex: none; display: flex; align-items: center; gap: 4px; height: 38px; padding: 0 10px 0 16px; }
 	.crumbs { flex: 1; min-width: 0; display: flex; align-items: center; gap: 4px; color: var(--text-2); overflow: hidden; }
 	.crumb { flex: 0 1 auto; max-width: 180px; padding: 2px 5px; border-radius: var(--radius-sm); text-decoration: none; }

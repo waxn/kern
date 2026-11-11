@@ -32,6 +32,8 @@ class UI {
 	toasts = $state<Toast[]>([]);
 	confirmState = $state<(ConfirmOptions & { resolve: (ok: boolean) => void }) | null>(null);
 	mobileNav = $state(false);
+	/** Distraction-free writing: hides the sidebar, tabs and page chrome. */
+	focusMode = $state(false);
 	capturingShortcut = $state(false);
 	/** The flashcard editor dialog: an existing note, or initial values for a new one. */
 	cardEditor = $state<{ note?: import('../types.ts').Note; init?: Partial<import('../types.ts').Note>; onsaved?: () => void } | null>(null);

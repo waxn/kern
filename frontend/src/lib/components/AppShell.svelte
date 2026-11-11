@@ -78,8 +78,13 @@
 		return !!s && !s.isCollapsed && !!(s.anchorNode?.parentElement?.closest('[contenteditable]'));
 	}
 
+	function run0(fn: () => void) {
+		fn();
+	}
+
 	function keydown(e: KeyboardEvent) {
 		if (e.defaultPrevented || ui.capturingShortcut) return;
+		if (e.key === 'Escape' && ui.focusMode && !ui.searchOpen && !ui.menu) return run0(() => (ui.focusMode = false));
 		const combo = comboOf(e);
 		const inText = !!(e.target as HTMLElement)?.closest?.('input, textarea, [contenteditable]');
 		const is = (action: string) => shortcut(action) === combo;
@@ -110,13 +115,13 @@
 
 <svelte:window onkeydown={keydown} />
 
-<div class="app" class:side-closed={!prefs.sidebarOpen} class:mobile-nav={ui.mobileNav}>
+<div class="app" class:side-closed={!prefs.sidebarOpen || ui.focusMode} class:focus={ui.focusMode} class:mobile-nav={ui.mobileNav}>
 	<div class="side"><Sidebar /></div>
 	<!-- svelte-ignore a11y_no_static_element_interactions a11y_click_events_have_key_events -->
 	<div class="scrim" onclick={() => (ui.mobileNav = false)}></div>
 	<main>
-		<TabBar />
-		{#if ws.offline}
+		{#if !ui.focusMode}<TabBar />{/if}
+		{#if ws.offline && !ui.focusMode}
 			<div class="offline" role="status"><CloudOff size={14} />You're offline. Pages you've opened before are available, and your edits are kept on this device until you reconnect.</div>
 		{/if}
 		<div class="content">
@@ -142,6 +147,7 @@
 	.app { display: flex; height: 100dvh; }
 	.side { flex: none; height: 100%; transition: margin-left 0.18s var(--ease); }
 	.side-closed .side { display: none; }
+	.focus .side { display: none !important; }
 	main { flex: 1; min-width: 0; display: flex; flex-direction: column; }
 	.content { flex: 1; min-height: 0; position: relative; }
 	.offline { flex: none; display: flex; align-items: center; gap: 8px; padding: 6px 14px; font-size: 12.5px; color: var(--text); background: color-mix(in srgb, var(--c-orange) 18%, var(--bg)); border-bottom: 1px solid var(--border); }
