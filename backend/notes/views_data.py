@@ -385,3 +385,57 @@ def ai_template(request):
         blocks = porting.insert_trees(t, porting.markdown_to_trees(str(data["markdown"]), porting.Ctx()))
         porting.finish_doc(t, blocks)
     return Response(template_json(t), status=201)
+
+
+# ------------------------------------------------------------- Intelligence
+
+from . import agent  # noqa: E402
+from .models import Chat  # noqa: E402
+
+
+def chat_json(c: Chat, full=False) -> dict:
+    out = {"id": str(c.id), "title": c.title or "New chat", "updated_at": c.updated_at.isoformat(),
+           "created_at": c.created_at.isoformat()}
+    if full:
+        out["messages"] = c.transcript
+    return out
+
+
+@api_view(["GET", "POST"])
+def chats(request):
+    if request.method == "POST":
+        c = Chat.objects.create(title=str(request.data.get("title") or "")[:200])
+        return Response(chat_json(c, True), status=201)
+    return Response([chat_json(c) for c in Chat.objects.all()[:200]])
+
+
+def _get_chat(chat_id) -> Chat:
+    c = Chat.objects.filter(id=as_uuid(chat_id)).first()
+    if not c:
+        raise Http404
+    return c
+
+
+@api_view(["GET", "PATCH", "DELETE"])
+def chat_detail(request, chat_id):
+    c = _get_chat(chat_id)
+    if request.method == "DELETE":
+        c.delete()
+        return Response(status=204)
+    if request.method == "PATCH":
+        c.title = str(request.data.get("title") or "")[:200]
+        c.save(update_fields=["title"])
+    return Response(chat_json(c, True))
+
+
+@api_view(["POST"])
+def chat_message(request, chat_id):
+    c = _get_chat(chat_id)
+    text = str(request.data.get("text") or "").strip()
+    if not text:
+        return bad("Write a message first.")
+    try:
+        agent.chat_turn(c, text[:20000], request.data.get("page"))
+    except ai_mod.AIError as e:
+        return _ai_error(e)
+    return Response(chat_json(c, True))

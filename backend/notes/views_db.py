@@ -3,14 +3,14 @@ import json
 import uuid
 
 from django.db import transaction
-from django.db.models import Max
+from django.db.models import Max, Q
 from django.http import Http404
 from django.utils import timezone
 from rest_framework.decorators import api_view
 from rest_framework.response import Response
 
 from . import dbcompute, search
-from .models import Block, Database, DbView, Document, Link, PropertyDef, PropertyValue, Tag
+from .models import Block, Database, DbView, Document, Link, PropertyDef, PropertyValue, Tag, Task
 from .views import (
     BadRequest, as_uuid, bad, copy_document, doc_json, get_doc, instantiate_template,
     next_position, prop_json, subtree_ids,
@@ -150,6 +150,43 @@ def sync_reverse(d: PropertyDef, doc: Document, old: set, new: set) -> None:
 # --------------------------------------------------------------- endpoints
 
 
+def apply_preset(db: Database, preset: str | None) -> None:
+    """Starting properties and views for a new database."""
+    page = db.page
+    if preset == "kanban":
+        # A board: cards grouped by status, each card a page you can write in.
+        status = PropertyDef.objects.create(
+            database=db, name="Status", type="status", position=1,
+            options=[
+                {"id": "todo", "name": "To do", "color": "gray", "group": "todo"},
+                {"id": "doing", "name": "Doing", "color": "blue", "group": "in_progress"},
+                {"id": "done", "name": "Done", "color": "green", "group": "done"},
+            ],
+        )
+        PropertyDef.objects.create(database=db, name="Tags", type="multi_select", position=2)
+        PropertyDef.objects.create(database=db, name="Due", type="date", position=3)
+        DbView.objects.create(database=db, name="Board", type="board", position=1,
+                              config={"group_by": str(status.id)})
+        DbView.objects.create(database=db, name="Table", type="table", position=2)
+        default_title, default_icon = "Kanban board", "📋"
+    elif preset == "calendar":
+        # Events on a calendar (month or week), each event a page for notes.
+        date = PropertyDef.objects.create(database=db, name="Date", type="date", position=1)
+        PropertyDef.objects.create(database=db, name="Tags", type="multi_select", position=2)
+        DbView.objects.create(database=db, name="Calendar", type="calendar", position=1,
+                              config={"date_prop": str(date.id), "calendar_mode": "month"})
+        DbView.objects.create(database=db, name="List", type="table", position=2,
+                              config={"sorts": [{"prop": str(date.id), "dir": "asc"}]})
+        default_title, default_icon = "Calendar", "📅"
+    else:
+        PropertyDef.objects.create(database=db, name="Tags", type="multi_select", position=1)
+        DbView.objects.create(database=db, name="Table", type="table", position=1)
+        default_title, default_icon = "", ""
+    if not page.title and default_title:
+        page.title, page.icon = default_title, page.icon or default_icon
+        page.save(update_fields=["title", "icon"])
+
+
 @api_view(["GET", "POST"])
 def databases(request):
     if request.method == "GET":
@@ -163,27 +200,7 @@ def databases(request):
             position=next_position(parent.id if parent else None), last_opened_at=timezone.now(),
         )
         db = Database.objects.create(page=page)
-        if data.get("preset") == "kanban":
-            # A board: cards grouped by status, each card a page you can write in.
-            status = PropertyDef.objects.create(
-                database=db, name="Status", type="status", position=1,
-                options=[
-                    {"id": "todo", "name": "To do", "color": "gray", "group": "todo"},
-                    {"id": "doing", "name": "Doing", "color": "blue", "group": "in_progress"},
-                    {"id": "done", "name": "Done", "color": "green", "group": "done"},
-                ],
-            )
-            PropertyDef.objects.create(database=db, name="Tags", type="multi_select", position=2)
-            PropertyDef.objects.create(database=db, name="Due", type="date", position=3)
-            DbView.objects.create(database=db, name="Board", type="board", position=1,
-                                  config={"group_by": str(status.id)})
-            DbView.objects.create(database=db, name="Table", type="table", position=2)
-            if not page.title:
-                page.title, page.icon = "Kanban board", page.icon or "📋"
-                page.save(update_fields=["title", "icon"])
-        else:
-            PropertyDef.objects.create(database=db, name="Tags", type="multi_select", position=1)
-            DbView.objects.create(database=db, name="Table", type="table", position=1)
+        apply_preset(db, data.get("preset"))
         search.index_document(page)
     return Response(db_payload(db), status=201)
 
@@ -495,3 +512,41 @@ def graph(request):
             except ValueError:
                 continue
     return Response({"nodes": nodes, "edges": edges})
+
+
+@api_view(["GET"])
+def document_agenda(request, doc_id):
+    """What is coming up inside a page's subtree: dated tasks and database entries."""
+    import datetime as dt
+    from .tasks import task_json
+    from .views import get_doc, subtree_ids
+    root = get_doc(doc_id)
+    ids = subtree_ids(root.id)
+    today = timezone.localdate()
+    try:
+        days = max(1, min(366, int(request.query_params.get("days", 45))))
+    except ValueError:
+        days = 45
+    end = today + dt.timedelta(days=days)
+    tasks = (Task.objects.filter(Q(document_id__in=ids) | Q(project_id__in=ids), done=False, due__isnull=False, due__lte=end)
+             .exclude(document__trashed_at__isnull=False).order_by("due", "-priority")[:100])
+    events = []
+    dbs = Database.objects.filter(page_id__in=ids).select_related("page")
+    for db in dbs:
+        date_props = [p for p in db.properties.all() if p.type == "date"]
+        if not date_props:
+            continue
+        values = PropertyValue.objects.filter(definition__in=date_props, document__trashed_at__isnull=True,
+                                              document__is_template=False).select_related("document", "definition")
+        for v in values:
+            raw = v.value if isinstance(v.value, str) else (v.value or {}).get("start") if isinstance(v.value, dict) else None
+            try:
+                day = dt.date.fromisoformat(str(raw)[:10])
+            except (TypeError, ValueError):
+                continue
+            if today - dt.timedelta(days=1) <= day <= end:
+                events.append({"id": str(v.document_id), "title": v.document.title, "icon": v.document.icon,
+                               "date": str(raw), "database": str(db.id), "database_title": db.page.title,
+                               "property": v.definition.name})
+    events.sort(key=lambda e: e["date"])
+    return Response({"tasks": [task_json(t) for t in tasks], "events": events[:200]})

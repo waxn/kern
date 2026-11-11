@@ -13,7 +13,7 @@ export function tabInfo(path: string): { title: string; icon: string } {
 	const names: Record<string, string> = {
 		'/': 'Home', '/tags': 'Tags', '/trash': 'Trash', '/archive': 'Archive', '/settings': 'Settings',
 		'/templates': 'Templates', '/graph': 'Graph', '/tasks': 'Tasks', '/cards': 'Flashcards', '/review': 'Review',
-		'/files': 'Files', '/developer': 'API', '/search': 'Search'
+		'/files': 'Files', '/developer': 'API', '/search': 'Search', '/intelligence': 'Intelligence'
 	};
 	return { title: names[path] ?? 'Kern', icon: '' };
 }

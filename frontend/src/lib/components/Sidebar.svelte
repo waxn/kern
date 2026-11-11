@@ -1,14 +1,15 @@
 <script lang="ts">
 	import { page } from '$app/state';
-	import { Kanban, Archive, ChevronDown, ChevronRight, CircleCheck, Database, FolderOpen, Hash, House, Layers, LayoutTemplate, Network, PanelLeft, Plus, Search, Settings, Trash2 } from '@lucide/svelte';
+	import { Calendar, LayoutDashboard, Kanban, Archive, ChevronDown, ChevronRight, CircleCheck, Database, FolderOpen, Hash, House, Layers, LayoutTemplate, Network, PanelLeft, Plus, Search, Settings, Trash2 } from '@lucide/svelte';
 	import { counts } from '#lib/learn/util.svelte.ts';
 	import { importFiles } from '#lib/data/download.ts';
 	import Logo from './Logo.svelte';
+	import Sparkle from '#lib/ai/Sparkle.svelte';
 	import { Bookmark, Upload } from '@lucide/svelte';
 	import { goto } from '$app/navigation';
 	import { api } from '#lib/api.ts';
 	import type { Doc, DbPayload } from '#lib/types.ts';
-	import { newPage } from '#lib/actions.ts';
+	import { newGroup, newPage } from '#lib/actions.ts';
 	import { prefs } from '#lib/state/prefs.svelte.ts';
 	import { open } from '#lib/state/tabs.ts';
 	import { ui } from '#lib/state/ui.svelte.ts';
@@ -16,7 +17,7 @@
 	import { modKey } from '#lib/util.ts';
 	import TreeNode, { endTreeDrag, treeDragId } from './TreeNode.svelte';
 
-	let roots = $derived(ws.children(null));
+	let roots = $derived(ws.children(null).filter((d) => d.kind !== 'group'));
 	let path = $derived(page.url.pathname);
 	let resizing = $state(false);
 
@@ -46,8 +47,10 @@
 		}
 		ui.menuBelow(anchor, [
 			{ label: 'Page', icon: Plus, onSelect: () => newPage() },
+			{ label: 'Group', icon: LayoutDashboard, onSelect: () => newGroup() },
 			{ label: 'Database', icon: Database, onSelect: () => newDatabase() },
 			{ label: 'Kanban board', icon: Kanban, onSelect: () => newDatabase('kanban') },
+			{ label: 'Calendar', icon: Calendar, onSelect: () => newDatabase('calendar') },
 			{ label: 'Import…', icon: Upload, onSelect: () => importInput?.click() },
 			...(templates.length ? [{ heading: 'From template' }] : []),
 			...templates.map((t) => ({
@@ -140,6 +143,9 @@
 		<a class="nav" class:active={path === '/cards' || path === '/review'} href="/cards" onclick={(e) => nav(e, '/cards')}>
 			<Layers size={15} strokeWidth={1.75} /><span>Flashcards</span>{#if counts.due}<em class="badge">{counts.due}</em>{/if}
 		</a>
+		<a class="nav intel" class:active={path === '/intelligence'} href="/intelligence" onclick={(e) => nav(e, '/intelligence')}>
+			<Sparkle size={15} /><span>Intelligence</span>
+		</a>
 	</div>
 
 	<div class="scroll">
@@ -173,6 +179,17 @@
 			{@render section('dbs', 'Databases')}
 			{#if !prefs.sections.dbs}
 				{#each ws.databases as doc (doc.id)}<TreeNode {doc} flat />{/each}
+			{/if}
+		{/if}
+
+		<div class="sec-row">
+			{@render section('groups', 'Groups')}
+			<button class="icon-btn add" title="New group" onclick={() => newGroup()}><Plus size={13} /></button>
+		</div>
+		{#if !prefs.sections.groups}
+			{#each ws.groups as doc (doc.id)}<TreeNode {doc} />{/each}
+			{#if ws.loaded && !ws.groups.length}
+				<button class="hint" onclick={() => newGroup()}>Make a dashboard for a class or project…</button>
 			{/if}
 		{/if}
 
@@ -211,6 +228,8 @@
 	.nav:hover { background: var(--hover); color: var(--text); }
 	.nav.active { background: var(--active); color: var(--text); }
 	.nav span { flex: 1; text-align: left; }
+	.intel :global(.sparkle) { transition: transform .35s var(--ease); }
+	.intel:hover :global(.sparkle) { transform: rotate(45deg) scale(1.08); }
 	.badge { font-style: normal; min-width: 18px; padding: 0 5px; border-radius: 9px; font-size: 11px; font-weight: 600; text-align: center; color: var(--accent); background: color-mix(in srgb, var(--accent) 15%, transparent); }
 	.split { display: flex; align-items: center; }
 	.split .nav { flex: 1; }

@@ -1,6 +1,6 @@
 import { goto } from '$app/navigation';
 import {
-	Archive, ArchiveRestore, Copy, ExternalLink, FilePlus, LayoutTemplate, Pencil, Star, StarOff, Trash2
+	Archive, ArchiveRestore, Copy, ExternalLink, FilePlus, LayoutDashboard, LayoutTemplate, Pencil, Star, StarOff, Trash2
 } from '@lucide/svelte';
 import { api } from '#lib/api.ts';
 import { releaseDoc } from '#lib/editor/doc.svelte.ts';
@@ -16,6 +16,16 @@ export async function newPage(parent: string | null = null, newTab = false) {
 		if (parent) prefs.expanded[parent] = true;
 		if (newTab) openTab(`/doc/${doc.id}`);
 		else await goto(`/doc/${doc.id}`);
+		return doc;
+	} catch (e) {
+		ui.error(e);
+	}
+}
+
+export async function newGroup() {
+	try {
+		const doc = await ws.createDoc({ kind: 'group', icon: '📚' });
+		await goto(`/doc/${doc.id}`);
 		return doc;
 	} catch (e) {
 		ui.error(e);
@@ -70,6 +80,10 @@ export function docMenu(doc: Doc, opts: { rename?: () => void } = {}): MenuItem[
 			onSelect: () => ws.updateDoc(doc.id, { is_favorite: !doc.is_favorite }).catch(() => {})
 		},
 		{ label: 'Duplicate', icon: Copy, onSelect: () => duplicatePage(doc.id) },
+		...(doc.database || doc.entry_of ? [] : [{
+			label: doc.kind === 'group' ? 'Turn into page' : 'Turn into group', icon: LayoutDashboard,
+			onSelect: () => ws.updateDoc(doc.id, { kind: doc.kind === 'group' ? 'page' : 'group' }).catch(() => {})
+		}]),
 		...(doc.database ? [] : [{ label: 'Save as template', icon: LayoutTemplate, onSelect: () => saveAsTemplate(doc.id) }]),
 		{ separator: true },
 		doc.is_archived

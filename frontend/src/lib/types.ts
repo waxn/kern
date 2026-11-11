@@ -14,6 +14,7 @@ export interface Doc {
 	entry_of: string | null;
 	database: string | null;
 	is_template: boolean;
+	kind?: 'page' | 'group';
 	template_tag: string | null;
 	template_db: string | null;
 	tags: string[];

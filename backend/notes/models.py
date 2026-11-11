@@ -42,6 +42,8 @@ class Document(models.Model):
     # Templates are ordinary documents (so the full editor works on them),
     # hidden from the tree and search.
     is_template = models.BooleanField(default=False, db_index=True)
+    # "page" or "group" (a dashboard that gathers notes, databases and calendars for one subject).
+    kind = models.CharField(max_length=12, default="page", db_index=True)
     template_tag = models.ForeignKey(
         Tag, null=True, blank=True, on_delete=models.SET_NULL, related_name="templates"
     )
@@ -286,3 +288,20 @@ class DocVersion(models.Model):
 
     class Meta:
         ordering = ["-created_at"]
+
+
+class Chat(models.Model):
+    """A conversation with the AI assistant."""
+
+    id = models.UUIDField(primary_key=True, default=uuid.uuid4, editable=False)
+    title = models.CharField(max_length=200, blank=True, default="")
+    provider = models.CharField(max_length=20, blank=True, default="")
+    # Messages exactly as the provider API expects them (kept so replies stay consistent).
+    history = models.JSONField(default=list)
+    # What the chat screen shows: [{role, text, actions}]
+    transcript = models.JSONField(default=list)
+    created_at = models.DateTimeField(auto_now_add=True)
+    updated_at = models.DateTimeField(auto_now=True)
+
+    class Meta:
+        ordering = ["-updated_at"]

@@ -20,6 +20,7 @@ PROVIDERS = {
 }
 NEEDS_KEY = {"anthropic", "openai", "gemini", "openrouter"}
 MAX_TOKENS = 16000
+EFFORT_MODELS = ("claude-opus-5", "claude-fable-5", "claude-sonnet-5", "claude-haiku-5-5", "claude-opus-4-8", "claude-opus-4-7")
 
 
 class AIError(Exception):
@@ -104,7 +105,7 @@ def _anthropic(cfg: dict, key: str, system: str, prompt: str) -> str:
     # Current models think adaptively by default; effort is set explicitly
     # (Claude Opus 5.5 defaults to medium). Server-side fallbacks re-run a request
     # the safety classifiers decline on a suitable model instead of failing.
-    if cfg["model"].startswith(("claude-opus-5", "claude-fable-5", "claude-sonnet-5-5", "claude-haiku-5-5", "claude-opus-4-8", "claude-opus-4-7", "claude-sonnet-5")):
+    if cfg["model"].startswith(EFFORT_MODELS):
         kwargs["output_config"] = {"effort": "medium"}
     use_fallbacks = cfg["model"] in ("claude-opus-5-5", "claude-opus-5", "claude-fable-5-1", "claude-sonnet-5-5")
     try:

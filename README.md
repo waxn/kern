@@ -134,6 +134,31 @@ docker compose cp backend:/data/backups ./kern-backups
   clear recent, configurable app shortcuts, flashcard limits and retention.
 - API documentation at `/developer` (Settings → Data & backups links to it).
 
+**Groups**
+
+- A group is a dashboard for one subject, such as a class or a project
+  (sidebar → Groups, or New page ▾ → Group; any page can be turned into one
+  from its ⋯ menu). It shows its name large, buttons to create notes,
+  calendars, boards and databases inside it, every database it holds working
+  in place (calendars with month and week views), an Upcoming list of dated
+  tasks and calendar entries from anywhere inside the group with quick task
+  entry, the nested notes, and an overview page below.
+
+**AI (optional)**
+
+- Choose a provider in Settings → AI: Anthropic (Claude, through the official
+  SDK), OpenAI, Gemini, OpenRouter, Ollama or any OpenAI-compatible server.
+  The key stays on the server and is never sent back to the browser.
+- Writing help in the editor (type `/` then a space), flashcards from a page
+  (the ✦ next to New card), templates from a description (next to New
+  template).
+- Intelligence (sidebar) is a chat that can read and change the workspace:
+  search, read and edit pages, create groups, add or move cards on boards and
+  events on calendars, manage tasks and make flashcards. Each change is listed
+  under its reply with a link. Pages it edits get a version-history snapshot
+  first, and what it deletes goes to the trash. With non-Claude providers the
+  model must support tool calling.
+
 ## Development without Docker
 
 ```bash

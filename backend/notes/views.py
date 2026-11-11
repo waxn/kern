@@ -71,6 +71,7 @@ def doc_json(doc: Document, tag_ids=None) -> dict:
         "entry_of": str(doc.entry_of_id) if doc.entry_of_id else None,
         "database": db_id_of(doc),
         "is_template": doc.is_template,
+        "kind": doc.kind,
         "template_tag": str(doc.template_tag_id) if doc.template_tag_id else None,
         "template_db": str(doc.template_db_id) if doc.template_db_id else None,
         "tags": tag_ids
@@ -263,6 +264,7 @@ def document_create(request):
             icon=str(data.get("icon", ""))[:64],
             position=next_position(parent.id if parent else None),
             last_opened_at=timezone.now(),
+            kind="group" if data.get("kind") == "group" else "page",
             **kwargs,
         )
         search.index_document(doc)
@@ -305,6 +307,9 @@ def document_detail(request, doc_id):
             if name in data:
                 setattr(doc, name, bool(data[name]))
                 fields.append(name)
+        if data.get("kind") in ("page", "group"):
+            doc.kind = data["kind"]
+            fields.append("kind")
         if fields:
             if {"title", "icon", "cover"} & set(fields):
                 doc.updated_at = timezone.now()

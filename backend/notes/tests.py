@@ -608,3 +608,109 @@ class AITests(TestCase):
         with mock.patch("notes.ai.complete", return_value="Hello **world**"):
             w = self.c.post("/api/ai/write", {"prompt": "greet", "doc": doc["id"]}, format="json").json()
         self.assertEqual(w["markdown"], "Hello **world**")
+
+
+class AgentTests(TestCase):
+    def setUp(self):
+        self.c = APIClient(HTTP_X_KERN="1")
+
+    def test_tools_edit_pages_boards_and_tasks(self):
+        from notes import agent
+        from notes.models import Block, Document, DocVersion
+        run = agent.Run()
+        call = lambda name, **a: json.loads(r) if (r := agent.execute(run, name, a)).startswith(("{", "[")) else r
+        page = call("create_page", title="Biology", markdown="# Cells\n- Mitochondria\n  - makes ATP\n- [ ] read ch. 2\nATP :: energy")
+        self.assertIn("id", page)
+        doc = Document.objects.get(id=page["id"])
+        self.assertEqual([b.type for b in Block.objects.filter(document=doc, parent=None).order_by("position")],
+                         ["h1", "bullet", "todo", "paragraph"])
+        self.assertEqual(doc.card_notes.count(), 1)
+        read = call("read_page", page_id=page["id"])
+        self.assertIn("Mitochondria", read["content"])
+        mito = Block.objects.get(document=doc, html="Mitochondria")
+        self.assertIn(f"[{mito.id}]", read["content"])
+        call("add_to_page", page_id=page["id"], markdown="- Nucleus", after_block_id=str(mito.id))
+        roots = [b.html for b in Block.objects.filter(document=doc, parent=None).order_by("position")]
+        self.assertEqual(roots[1:3], ["Mitochondria", "Nucleus"])
+        self.assertEqual(DocVersion.objects.filter(document=doc, reason="ai").count(), 1)
+        call("replace_block", block_id=str(mito.id), markdown="- Mitochondrion")
+        self.assertFalse(Block.objects.filter(id=mito.id).exists())
+        # Kanban: create, add a card, move it.
+        board = call("create_database", title="Homework", preset="kanban")
+        entry = call("add_entry", database_id=board["database_id"], title="Essay", values={"Status": "To do", "Tags": ["english"]})
+        self.assertNotIn("warnings", entry)
+        res = call("update_entry", entry_id=entry["entry_id"], values={"Status": "Done"})
+        self.assertNotIn("warnings", res)
+        rows = call("query_database", database_id=board["database_id"])
+        self.assertEqual(rows[0]["values"]["Status"], "Done")
+        bad_status = call("update_entry", entry_id=entry["entry_id"], values={"Status": "Nope"})
+        self.assertIn("warnings", bad_status)
+        # Tasks and errors.
+        t = call("create_task", title="Study", due="2030-01-02", priority=2)
+        call("update_task", task_id=t["task_id"], done=True)
+        self.assertIn("error", call("read_page", page_id=str(uuid.uuid4())))
+        self.assertIn("error", call("nope"))
+        call("trash_page", page_id=page["id"])
+        self.assertIsNotNone(Document.objects.get(id=page["id"]).trashed_at)
+        self.assertTrue(len(run.actions) >= 6)
+
+    def test_chat_turn_with_mocked_openai_provider(self):
+        from unittest import mock
+        self.c.put("/api/ai/config", {"provider": "ollama", "model": "llama"}, format="json")
+        chat = self.c.post("/api/chats", {}, format="json").json()
+        replies = iter([
+            {"choices": [{"message": {"content": "", "tool_calls": [{"id": "c1", "type": "function", "function": {
+                "name": "create_page", "arguments": json.dumps({"title": "Physics", "kind": "group", "icon": "⚛️"})}}]}}]},
+            {"choices": [{"message": {"content": "Created your Physics group."}}]},
+        ])
+        sent = []
+
+        class Res:
+            def __init__(self, data): self.data = data
+            def __enter__(self): return self
+            def __exit__(self, *a): return False
+            def read(self): return json.dumps(self.data).encode()
+
+        def fake(req, timeout=None):
+            sent.append(json.loads(req.data))
+            return Res(next(replies))
+
+        with mock.patch("urllib.request.urlopen", fake):
+            r = self.c.post(f"/api/chats/{chat['id']}/message", {"text": "make a physics group"}, format="json")
+        self.assertEqual(r.status_code, 200, r.content)
+        msgs = r.json()["messages"]
+        self.assertEqual(msgs[-1]["text"], "Created your Physics group.")
+        self.assertEqual(msgs[-1]["actions"][0]["verb"], "Created group")
+        self.assertEqual(sent[1]["messages"][-1]["role"], "tool")
+        listing = self.c.get("/api/chats").json()
+        self.assertEqual(listing[0]["title"], "make a physics group")
+        self.assertEqual(self.c.delete(f"/api/chats/{chat['id']}").status_code, 204)
+
+    def test_chat_needs_setup(self):
+        chat = self.c.post("/api/chats", {}, format="json").json()
+        r = self.c.post(f"/api/chats/{chat['id']}/message", {"text": "hi"}, format="json")
+        self.assertEqual(r.status_code, 409)
+        self.assertTrue(r.json()["setup"])
+
+
+class GroupTests(TestCase):
+    def setUp(self):
+        self.c = APIClient(HTTP_X_KERN="1")
+
+    def test_group_with_calendar_and_agenda(self):
+        import datetime as dt
+        g = self.c.post("/api/documents", {"title": "Chem 101", "kind": "group"}, format="json").json()
+        self.assertEqual(g["kind"], "group")
+        cal = self.c.post("/api/databases", {"title": "Exams", "parent": g["id"], "preset": "calendar"}, format="json").json()
+        self.assertEqual({v["type"] for v in cal["views"]}, {"calendar", "table"})
+        date_prop = next(p for p in cal["properties"] if p["type"] == "date")
+        soon = (dt.date.today() + dt.timedelta(days=3)).isoformat()
+        self.c.post(f"/api/databases/{cal['database']['id']}/entries",
+                    {"title": "Midterm", "values": {date_prop["id"]: soon}}, format="json")
+        self.c.post(f"/api/databases/{cal['database']['id']}/entries", {"title": "Undated"}, format="json")
+        self.c.post("/api/tasks", {"title": "Lab report", "due": soon, "project": g["id"]}, format="json")
+        a = self.c.get(f"/api/documents/{g['id']}/agenda").json()
+        self.assertEqual([x["title"] for x in a["events"]], ["Midterm"])
+        self.assertEqual([t["title"] for t in a["tasks"]], ["Lab report"])
+        p = self.c.patch(f"/api/documents/{g['id']}", {"kind": "page"}, format="json").json()
+        self.assertEqual(p["doc"]["kind"] if "doc" in p else p["kind"], "page")

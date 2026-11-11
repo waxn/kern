@@ -45,6 +45,12 @@ class Workspace {
 		return out;
 	});
 
+	groups = $derived(
+		Object.values(this.docs)
+			.filter((d) => d.kind === 'group' && !d.parent && !d.is_archived && !d.entry_of)
+			.sort((a, b) => a.position - b.position)
+	);
+
 	databases = $derived(
 		Object.values(this.docs)
 			.filter((d) => d.database && !d.is_archived)
@@ -93,7 +99,7 @@ class Workspace {
 		}
 	}
 
-	async createDoc(init: { parent?: string | null; title?: string; icon?: string } = {}): Promise<Doc> {
+	async createDoc(init: { parent?: string | null; title?: string; icon?: string; kind?: 'page' | 'group' } = {}): Promise<Doc> {
 		const doc = await api.post<Doc>('/documents', init);
 		this.docs[doc.id] = doc;
 		return doc;

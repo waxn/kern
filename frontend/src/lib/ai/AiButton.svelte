@@ -14,10 +14,11 @@
 </button>
 
 <style>
-	.aibtn { display: inline-flex; align-items: center; justify-content: center; gap: 6px; height: 28px; min-width: 28px; padding: 0 6px; border-radius: var(--radius); border: 1px solid transparent; transition: background 0.15s var(--ease), transform 0.15s var(--ease), border-color 0.15s; }
-	.aibtn:hover { background: color-mix(in srgb, var(--accent) 12%, transparent); border-color: color-mix(in srgb, var(--accent) 30%, transparent); }
-	.aibtn:hover :global(.sparkle) { transform: rotate(45deg) scale(1.08); }
+	/* Same box as the neighbouring .btn buttons, so it lines up with them. */
+	.aibtn { display: inline-flex; align-items: center; justify-content: center; gap: 6px; height: 28px; min-width: 28px; padding: 0 6px; border-radius: var(--radius); border: 1px solid var(--border-strong); background: var(--surface); transition: background 0.15s var(--ease), border-color 0.15s var(--ease); }
+	.aibtn:hover { background: color-mix(in srgb, var(--accent) 12%, var(--surface)); border-color: color-mix(in srgb, var(--accent) 45%, var(--border-strong)); }
 	.aibtn :global(.sparkle) { transition: transform 0.35s var(--ease); }
-	.aibtn.labelled { padding: 0 10px; border-color: var(--border-strong); }
+	.aibtn:hover :global(.sparkle) { transform: rotate(45deg) scale(1.08); }
+	.aibtn.labelled { padding: 0 10px; }
 	.aibtn span { color: var(--text); }
 </style>

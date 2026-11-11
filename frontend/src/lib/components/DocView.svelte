@@ -23,6 +23,7 @@
 	import { Download, History, Upload } from '@lucide/svelte';
 	import EmojiPicker from './EmojiPicker.svelte';
 	import RightPanel from './RightPanel.svelte';
+	import GroupView from './GroupView.svelte';
 
 	let { id }: { id: string } = $props();
 	const doc = getDoc(id);
@@ -30,6 +31,7 @@
 	let meta = $derived(ws.docs[id] ?? doc.meta ?? undefined);
 	let crumbs = $derived(ws.path(id));
 	let subpages = $derived(ws.children(id));
+	let isGroup = $derived(meta?.kind === 'group' && !meta?.database);
 	let titleEl = $state<HTMLElement>();
 	let picker = $state<{ x: number; y: number } | null>(null);
 	let coverInput = $state<HTMLInputElement>();
@@ -192,8 +194,8 @@
 				{/if}
 				<input type="file" accept="image/*" hidden bind:this={coverInput} onchange={(e) => uploadCover(e.currentTarget.files?.[0])} />
 
-				<div class="sheet" data-width={meta?.database ? "db" : prefs.editorWidth}>
-					<div class="head" class:has-cover={!!meta?.cover} class:has-icon={!!meta?.icon}>
+				<div class="sheet" data-width={meta?.database || isGroup ? "db" : prefs.editorWidth}>
+					<div class="head" class:has-cover={!!meta?.cover} class:has-icon={!!meta?.icon} class:group={isGroup}>
 						{#if meta?.icon}
 							<button class="icon" title="Change icon" onclick={(e) => { const r = e.currentTarget.getBoundingClientRect(); picker = { x: r.left, y: r.bottom + 6 }; }}>{meta.icon}</button>
 						{/if}
@@ -214,12 +216,18 @@
 
 					{#if meta?.database}
 						<div class="dbpage"><DatabaseView dbId={meta.database} /></div>
+					{:else if isGroup}
+						<GroupView {id} />
+						<div class="overview-body">
+							<DocMeta {doc} />
+							<Editor {doc} onexit={focusTitle} />
+						</div>
 					{:else}
 						<DocMeta {doc} />
 						<Editor {doc} onexit={focusTitle} />
 					{/if}
 
-					{#if subpages.length}
+					{#if subpages.length && !isGroup}
 						<div class="subpages">
 							<div class="section-title">Sub-pages</div>
 							{#each subpages as s (s.id)}
@@ -308,6 +316,10 @@
 	.title.blank::before { content: attr(data-placeholder); position: absolute; left: 0; top: 0; color: var(--text-3); pointer-events: none; }
 
 	.dbpage { margin: 8px 0 60px; }
+	.head.group { padding-top: 56px; }
+	.head.group .icon { font-size: 72px; }
+	.head.group .title { font-size: 48px; letter-spacing: -0.03em; line-height: 1.1; margin-bottom: 6px; }
+	.overview-body { max-width: 760px; margin-bottom: 80px; }
 	.overlay { position: fixed; inset: 0; z-index: 960; display: grid; place-items: center; padding: 16px; background: rgba(0, 0, 0, 0.55); }
 	.conflict { width: min(520px, 100%); padding: 18px; }
 	.conflict h2 { margin: 0 0 8px; font-size: 16px; }
@@ -324,6 +336,7 @@
 	@media (max-width: 760px) {
 		.sheet, .sheet[data-width] { padding: 0 16px 0 30px; }
 		.title { font-size: 27px; }
+		.head.group .title { font-size: 34px; }
 		.head { padding-top: 20px; }
 		.adders { opacity: 1; }
 		.crumb:not(.current) { display: none; }
