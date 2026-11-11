@@ -1,0 +1,19 @@
+<?xml version="1.0" encoding="utf-8"?>
+<shortcuts xmlns:android="http://schemas.android.com/apk/res/android">
+    <shortcut android:shortcutId="new_page" android:enabled="true" android:icon="@drawable/ic_sc_page"
+        android:shortcutShortLabel="@string/sc_new_page">
+        <intent android:action="app.kern.NEW_PAGE" android:targetPackage="app.kern" android:targetClass="app.kern.MainActivity" />
+    </shortcut>
+    <shortcut android:shortcutId="new_task" android:enabled="true" android:icon="@drawable/ic_sc_task"
+        android:shortcutShortLabel="@string/sc_new_task">
+        <intent android:action="app.kern.NEW_TASK" android:targetPackage="app.kern" android:targetClass="app.kern.MainActivity" />
+    </shortcut>
+    <shortcut android:shortcutId="review" android:enabled="true" android:icon="@drawable/ic_sc_cards"
+        android:shortcutShortLabel="@string/sc_review">
+        <intent android:action="app.kern.REVIEW" android:targetPackage="app.kern" android:targetClass="app.kern.MainActivity" />
+    </shortcut>
+    <shortcut android:shortcutId="search" android:enabled="true" android:icon="@drawable/ic_sc_search"
+        android:shortcutShortLabel="@string/sc_search">
+        <intent android:action="app.kern.SEARCH" android:targetPackage="app.kern" android:targetClass="app.kern.MainActivity" />
+    </shortcut>
+</shortcuts>

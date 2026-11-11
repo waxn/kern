@@ -1,0 +1,60 @@
+name: Android
+
+on:
+  push:
+    branches: [main]
+    tags: ["android-v*"]
+    paths:
+      - "android/**"
+      - ".github/workflows/android.yml"
+  pull_request:
+    paths:
+      - "android/**"
+      - ".github/workflows/android.yml"
+  workflow_dispatch:
+
+permissions:
+  contents: write # only used to attach the APK to a release on android-v* tags
+
+jobs:
+  build:
+    runs-on: ubuntu-latest
+    defaults:
+      run:
+        working-directory: android
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: actions/setup-java@v4
+        with:
+          distribution: temurin
+          java-version: "17"
+
+      - uses: gradle/actions/setup-gradle@v4
+
+      - name: Unit tests
+        run: ./gradlew --no-daemon testDebugUnitTest
+
+      - name: Build APKs
+        run: ./gradlew --no-daemon assembleDebug assembleRelease
+
+      - name: Name the APKs
+        run: |
+          ver="${GITHUB_REF_NAME#android-v}"
+          [ "$GITHUB_REF_TYPE" = tag ] || ver="${GITHUB_SHA::7}"
+          mkdir -p dist
+          cp app/build/outputs/apk/release/app-release.apk "dist/kern-$ver.apk"
+          cp app/build/outputs/apk/debug/app-debug.apk "dist/kern-$ver-debug.apk"
+          ls -la dist
+
+      - uses: actions/upload-artifact@v4
+        with:
+          name: kern-android
+          path: android/dist/*.apk
+          if-no-files-found: error
+
+      - name: Attach to release
+        if: startsWith(github.ref, 'refs/tags/android-v')
+        uses: softprops/action-gh-release@v2
+        with:
+          files: android/dist/*.apk

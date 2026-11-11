@@ -112,6 +112,14 @@ contributors, totals).
   with yt-dlp (video or audio only, a chosen quality) with live progress.
   YouTube downloads need a JavaScript runtime; the Docker image includes Deno.
 
+## Android app
+
+`android/` holds a native Android client (Kotlin, Jetpack Compose) with the same look as the
+web app: pages and the block editor, databases, tasks, flashcard review, Intelligence,
+bookmarks, search, git browsing, plus reminders for due tasks and cards, home-screen
+widgets and a share target. Build it with `cd android && ./gradlew assembleRelease`; see
+[android/README.md](android/README.md).
+
 ## What is implemented
 
 **Priority 1 — core knowledge management**

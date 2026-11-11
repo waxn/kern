@@ -1,0 +1,15 @@
+<resources>
+    <string name="app_name">Kern</string>
+    <string name="widget_tasks">Kern tasks</string>
+    <string name="widget_tasks_desc">Today and overdue tasks; tick them off from the home screen</string>
+    <string name="widget_cards">Kern review</string>
+    <string name="widget_cards_desc">Flashcards due today</string>
+    <string name="widget_capture">Kern capture</string>
+    <string name="widget_capture_desc">New page, task, bookmark or search in one tap</string>
+    <string name="widget_recent">Kern pages</string>
+    <string name="widget_recent_desc">Your favorite and recent pages</string>
+    <string name="sc_new_page">New page</string>
+    <string name="sc_new_task">New task</string>
+    <string name="sc_review">Review cards</string>
+    <string name="sc_search">Search</string>
+</resources>
