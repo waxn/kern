@@ -7,10 +7,10 @@
 	import { docMenu, newPage } from '#lib/actions.ts';
 	import { api } from '#lib/api.ts';
 	import { blockEl } from '#lib/editor/dom.ts';
-	import { getDoc } from '#lib/editor/doc.svelte.ts';
+	import { getDoc, releaseDoc } from '#lib/editor/doc.svelte.ts';
 	import Editor from '#lib/editor/Editor.svelte';
 	import { prefs } from '#lib/state/prefs.svelte.ts';
-	import { open } from '#lib/state/tabs.ts';
+	import { closeTabsFor, open } from '#lib/state/tabs.ts';
 	import { ui } from '#lib/state/ui.svelte.ts';
 	import { ws } from '#lib/state/workspace.svelte.ts';
 	import { debounce, modKey } from '#lib/util.ts';
@@ -123,7 +123,18 @@
 
 	onMount(() => () => {
 		saveTitle.cancel();
-		doc.flush();
+		// Leaving a page nothing was typed into: don't keep it.
+		doc.flush().then(async () => {
+			if (!ws.docs[id]?.empty) return;
+			try {
+				const r = await api.post<{ discarded: boolean }>(`/documents/${id}/discard`);
+				if (r?.discarded) {
+					delete ws.docs[id];
+					closeTabsFor([id]);
+					await releaseDoc(id);
+				}
+			} catch {}
+		});
 	});
 
 	async function uploadCover(file: File | undefined) {

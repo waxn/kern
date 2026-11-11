@@ -12,12 +12,17 @@
 	import { ai } from '#lib/ai/ai.svelte.ts';
 	import Sparkle from '#lib/ai/Sparkle.svelte';
 	import { fileSize, fullDate, modKey } from '#lib/util.ts';
+	import AccountSettings from '#lib/admin/AccountSettings.svelte';
+	import ServerSettings from '#lib/admin/ServerSettings.svelte';
+	import UsersSettings from '#lib/admin/UsersSettings.svelte';
+	import { session } from '#lib/state/session.svelte.ts';
 
-	type Section = 'appearance' | 'editor' | 'workspace' | 'flashcards' | 'ai' | 'shortcuts' | 'data';
-	const sections: [Section, string][] = [
+	type Section = 'appearance' | 'editor' | 'workspace' | 'flashcards' | 'ai' | 'shortcuts' | 'data' | 'account' | 'users' | 'server';
+	const sections: [Section, string][] = $derived([
 		['appearance', 'Appearance'], ['editor', 'Editor'], ['workspace', 'Workspace'], ['flashcards', 'Flashcards'],
-		['ai', 'AI'], ['shortcuts', 'Keyboard'], ['data', 'Data & backups']
-	];
+		['ai', 'AI'], ['shortcuts', 'Keyboard'], ['data', 'Data & backups'], ['account', 'Account'],
+		...(session.user?.is_admin ? ([['users', 'Users'], ['server', 'Server']] as [Section, string][]) : [])
+	]);
 
 	// ----- AI provider
 	let aiForm = $state({ provider: '', model: '', base_url: '', api_key: '' });
@@ -338,6 +343,12 @@
 			</div>
 			<div class="section-title">In the editor</div>
 			<div class="group keys">{#each editorKeys as [k, label] (k)}<div class="key"><span>{label}</span><kbd>{k}</kbd></div>{/each}</div>
+		{:else if section === 'account'}
+			<AccountSettings />
+		{:else if section === 'users' && session.user?.is_admin}
+			<UsersSettings />
+		{:else if section === 'server' && session.user?.is_admin}
+			<ServerSettings />
 		{:else if section === 'data'}
 			<div class="section-title">Import</div>
 			<div class="group">

@@ -13,6 +13,7 @@ import nh3
 import requests
 from django.conf import settings
 from django.db import close_old_connections
+from kern import tenancy
 from django.db.models import Q
 from django.http import Http404
 from django.utils import timezone
@@ -79,7 +80,7 @@ def page_title(page: str) -> str:
 
 
 def video_dir(archive) -> str:
-    return str(settings.MEDIA_ROOT / "web" / str(archive.id))
+    return str(tenancy.media_root() / "web" / str(archive.id))
 
 
 def video_url(archive):
@@ -366,7 +367,7 @@ def _download(archive_id: int):
             path = ydl.prepare_filename(info)
             if info.get("requested_downloads"):
                 path = info["requested_downloads"][0].get("filepath") or path
-        a.video_path = str(path).replace(str(settings.MEDIA_ROOT) + "/", "", 1)
+        a.video_path = str(path).replace(str(tenancy.media_root()) + "/", "", 1)
         a.video_status = "done"
         a.error_message = None
         a.duration = a.duration or info.get("duration")
@@ -400,7 +401,7 @@ def web_download_video(request, archive_id):
     a.video_progress = {"phase": "starting"}
     a.error_message = None
     a.save()
-    threading.Thread(target=_download, args=(a.id,), daemon=True).start()
+    tenancy.spawn(_download, a.id)
     return Response(detail(a), status=202)
 
 

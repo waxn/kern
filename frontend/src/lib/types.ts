@@ -20,6 +20,8 @@ export interface Doc {
 	tags: string[];
 	templates_applied?: string[];
 	block_count?: number;
+	/** Untitled page with no content; hidden from Recent. */
+	empty?: boolean;
 }
 
 export type BlockType =

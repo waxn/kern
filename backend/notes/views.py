@@ -1,12 +1,17 @@
 import mimetypes
+import threading
 import os
+import re
 import uuid
+from datetime import timedelta
 
 from django.db import IntegrityError, transaction
+from kern import tenancy
 from django.db.models import Count, Max, Q
 from django.http import Http404
 from django.utils import timezone
-from rest_framework.decorators import api_view, parser_classes
+from rest_framework.decorators import api_view, parser_classes, permission_classes
+from rest_framework.permissions import AllowAny
 from rest_framework.parsers import MultiPartParser
 from rest_framework.response import Response
 
@@ -80,13 +85,14 @@ def doc_json(doc: Document, tag_ids=None) -> dict:
     }
 
 
-_db_pages: dict | None = None
+_local = threading.local()  # per-request scratch space (requests run on separate threads)
 
 
 def db_id_of(doc: Document):
     """Database id if this document is a database's page."""
-    if _db_pages is not None:
-        return _db_pages.get(doc.id)
+    pages = getattr(_local, "db_pages", None)
+    if pages is not None:
+        return pages.get(doc.id)
     db = Database.objects.filter(page_id=doc.id).values_list("id", flat=True).first()
     return str(db) if db else None
 
@@ -228,21 +234,43 @@ def next_position(parent_id) -> float:
 
 @api_view(["GET"])
 def tree(request):
-    global _db_pages
     if not getattr(request, "_testing", False) and not os.environ.get("KERN_NO_AUTO_BACKUP"):
         from . import backup
         backup.maybe_auto_backup()
     docs = Document.objects.filter(trashed_at__isnull=True, is_template=False).order_by(
         "position", "created_at"
     )
-    _db_pages = {p: str(d) for d, p in Database.objects.values_list("id", "page_id")}
+    _local.db_pages = {p: str(d) for d, p in Database.objects.values_list("id", "page_id")}
+    # Sweep blank pages abandoned for over an hour (e.g. tab closed mid-"New page").
+    stale = timezone.now() - timedelta(hours=1)
+    for d in docs.filter(title="", kind="page", created_at__lt=stale, entry_of__isnull=True):
+        if (d.last_opened_at or d.created_at) < stale and is_blank_page(d):
+            purge_doc(d)
+    docs = docs.all()
     tags_by_doc: dict = {}
     for doc_id, tag_id in Document.tags.through.objects.values_list("document_id", "tag_id"):
         tags_by_doc.setdefault(doc_id, []).append(str(tag_id))
+    has_content = set(
+        Block.objects.exclude(html="").exclude(html__isnull=True).values_list("document_id", flat=True)
+    ) | set(
+        Block.objects.exclude(type__in=["paragraph", "bullet", "numbered", "todo", "quote"])
+        .values_list("document_id", flat=True)
+    )
+    has_children = set(Document.objects.filter(parent__isnull=False).values_list("parent_id", flat=True))
     try:
-        return Response([doc_json(d, tags_by_doc.get(d.id, [])) for d in docs])
+        out = []
+        for d in docs:
+            j = doc_json(d, tags_by_doc.get(d.id, []))
+            # A page nobody has typed anything into: hidden from Recent / Home.
+            j["empty"] = (
+                d.kind == "page" and not d.title.strip() and not d.icon and not d.cover
+                and not j["tags"] and not j["database"] and not d.entry_of_id
+                and d.id not in has_content and d.id not in has_children
+            )
+            out.append(j)
+        return Response(out)
     finally:
-        _db_pages = None
+        _local.db_pages = None
 
 
 @api_view(["POST"])
@@ -251,13 +279,13 @@ def document_create(request):
     parent = get_doc(data["parent"], include_trashed=False) if data.get("parent") else None
     if data.get("template"):
         tpl = get_doc(data["template"])
-        with transaction.atomic():
+        with tenancy.atomic():
             doc = instantiate_template(tpl, parent)
         return Response(doc_json(doc), status=201)
     kwargs = {}
     if data.get("id"):
         kwargs["id"] = as_uuid(data["id"])
-    with transaction.atomic():
+    with tenancy.atomic():
         doc = Document.objects.create(
             parent=parent,
             title=str(data.get("title", ""))[:500],
@@ -269,6 +297,39 @@ def document_create(request):
         )
         search.index_document(doc)
     return Response(doc_json(doc, []), status=201)
+
+
+def is_blank_page(doc: Document) -> bool:
+    """An untitled page nobody has typed anything into."""
+    if doc.kind != "page" or doc.title.strip() or doc.icon or doc.cover or doc.entry_of_id:
+        return False
+    if doc.tags.exists() or doc.children.exists() or db_id_of(doc):
+        return False
+    for html, typ in doc.blocks.values_list("html", "type"):
+        if typ not in ("paragraph", "bullet", "numbered", "todo", "quote") or re.sub(
+            r"<[^>]*>|&nbsp;", "", html or ""
+        ).strip():
+            return False
+    return True
+
+
+def purge_doc(doc: Document):
+    with tenancy.atomic():
+        ids = subtree_ids(doc.id)
+        for did in ids:
+            search.remove_document(did)
+        scrub_relations(ids)
+        doc.delete()
+
+
+@api_view(["POST"])
+def document_discard(request, doc_id):
+    """Permanently drop a page that was never written in (no-op otherwise)."""
+    doc = get_doc(doc_id)
+    if is_blank_page(doc):
+        purge_doc(doc)
+        return Response({"discarded": True})
+    return Response({"discarded": False})
 
 
 @api_view(["GET", "PATCH", "DELETE"])
@@ -284,7 +345,7 @@ def document_detail(request, doc_id):
         # Permanent deletion; only allowed from the trash.
         if not doc.trashed_at:
             return bad("Move the document to the trash first.", 409)
-        with transaction.atomic():
+        with tenancy.atomic():
             ids = subtree_ids(doc.id)
             for did in ids:
                 search.remove_document(did)
@@ -297,7 +358,7 @@ def document_detail(request, doc_id):
         return Response(status=204)
 
     data = request.data
-    with transaction.atomic():
+    with tenancy.atomic():
         fields = []
         for name, limit in (("title", 500), ("icon", 64), ("cover", 500)):
             if name in data:
@@ -340,7 +401,7 @@ def document_move(request, doc_id):
     parent = get_doc(parent_id, include_trashed=False) if parent_id else None
     if parent and parent.id in set(subtree_ids(doc.id)):
         return bad("A page cannot be moved inside itself.")
-    with transaction.atomic():
+    with tenancy.atomic():
         siblings = list(
             Document.objects.filter(parent=parent, trashed_at__isnull=True, entry_of__isnull=True)
             .exclude(id=doc.id)
@@ -453,7 +514,7 @@ def scrub_relations(doc_ids) -> None:
 @api_view(["POST"])
 def document_duplicate(request, doc_id):
     src = get_doc(doc_id, include_trashed=False)
-    with transaction.atomic():
+    with tenancy.atomic():
         dst = copy_document(src, src.parent, title=(src.title or "Untitled") + " (copy)")
         if src.entry_of_id:
             dst.position = src.position
@@ -475,7 +536,7 @@ def document_restore(request, doc_id):
     doc = get_doc(doc_id)
     if not doc.trashed_at:
         return Response(doc_json(doc))
-    with transaction.atomic():
+    with tenancy.atomic():
         ids = subtree_ids(doc.id)
         Document.objects.filter(id__in=ids, trashed_at=doc.trashed_at).update(trashed_at=None)
         doc.refresh_from_db()
@@ -647,7 +708,7 @@ def blocks_sync(request, doc_id):
         from django.utils.dateparse import parse_datetime
         base = parse_datetime(str(request.data["base"]))
     try:
-        with transaction.atomic():
+        with tenancy.atomic():
             patched = apply_block_sync(doc, upserts, deletes, base)
     except Conflict as c:
         current = Block.objects.filter(id__in=c.ids)
@@ -746,7 +807,7 @@ def tags(request):
     if existing:
         return Response(tag_json(existing, existing.documents.count()))
     try:
-        with transaction.atomic():
+        with tenancy.atomic():
             tag = Tag.objects.create(name=name, color=str(request.data.get("color", ""))[:24])
             search.index_tag(tag)
     except IntegrityError:
@@ -778,7 +839,7 @@ def tag_detail(request, tag_id):
             }
         )
     if request.method == "DELETE":
-        with transaction.atomic():
+        with tenancy.atomic():
             search.remove("tag", [tag.id])
             docs = list(tag.documents.all())
             tag.delete()
@@ -786,7 +847,7 @@ def tag_detail(request, tag_id):
                 search.index_document(d)
         return Response(status=204)
     data = request.data
-    with transaction.atomic():
+    with tenancy.atomic():
         if "name" in data:
             name = str(data["name"]).strip().lstrip("#")[:120]
             if not name:
@@ -820,7 +881,7 @@ def properties(request):
     tag = get_tag(data["tag"]) if data.get("tag") else None
     if data.get("database"):
         from .views_db import create_db_property, get_db
-        with transaction.atomic():
+        with tenancy.atomic():
             d = create_db_property(get_db(data["database"]), data)
         return Response(prop_json(d), status=201)
     top = PropertyDef.objects.filter(tag=tag).aggregate(m=Max("position"))["m"] or 0
@@ -842,7 +903,7 @@ def get_prop(prop_id) -> PropertyDef:
 def property_detail(request, prop_id):
     d = get_prop(prop_id)
     if request.method == "DELETE":
-        with transaction.atomic():
+        with tenancy.atomic():
             docs = list(Document.objects.filter(property_values__definition=d))
             unlink_reverse(d)
             d.delete()
@@ -856,7 +917,7 @@ def property_detail(request, prop_id):
         d.options = data["options"]
     if "position" in data:
         d.position = float(data["position"])
-    with transaction.atomic():
+    with tenancy.atomic():
         if "type" in data and data["type"] in PropertyDef.TYPES and data["type"] != d.type:
             if d.type == "relation":
                 unlink_reverse(d)
@@ -914,7 +975,7 @@ def coerce_value(d: PropertyDef, value):
 def document_property(request, doc_id, prop_id):
     doc = get_doc(doc_id)
     d = get_prop(prop_id)
-    with transaction.atomic():
+    with tenancy.atomic():
         if request.method == "DELETE":
             PropertyValue.objects.filter(document=doc, definition=d).delete()
         else:
@@ -1083,10 +1144,14 @@ def file_upload(request):
 
 
 @api_view(["GET"])
+@permission_classes([AllowAny])
 def health(request):
-    """Health check endpoint."""
+    """Health check endpoint. Signed-out callers (the container health check) only learn "ok"."""
+    user = request.user
+    if not (user and user.is_authenticated):
+        return Response({"ok": True})
     result = {"ok": True, "version": "1.0"}
-    
+
     # Check yt-dlp availability for web archiving
     try:
         import yt_dlp

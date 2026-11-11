@@ -3,6 +3,7 @@ import json
 import uuid
 
 from django.db import transaction
+from kern import tenancy
 from django.db.models import Max, Q
 from django.http import Http404
 from django.utils import timezone
@@ -194,7 +195,7 @@ def databases(request):
         return Response([db_json(db) for db in dbs.order_by("page__title")])
     data = request.data
     parent = get_doc(data["parent"], include_trashed=False) if data.get("parent") else None
-    with transaction.atomic():
+    with tenancy.atomic():
         page = Document.objects.create(
             parent=parent, title=str(data.get("title", ""))[:500], icon=str(data.get("icon", ""))[:64],
             position=next_position(parent.id if parent else None), last_opened_at=timezone.now(),
@@ -214,7 +215,7 @@ def database_detail(request, db_id):
 def db_property_order(request, db_id):
     db = get_db(db_id)
     order = [str(x) for x in request.data.get("order") or []]
-    with transaction.atomic():
+    with tenancy.atomic():
         for i, pid in enumerate(order):
             db.properties.filter(id=as_uuid(pid)).update(position=i + 1)
     return Response({"ok": True})
@@ -224,7 +225,7 @@ def db_property_order(request, db_id):
 def db_entries(request, db_id):
     db = get_db(db_id)
     data = request.data
-    with transaction.atomic():
+    with tenancy.atomic():
         if data.get("template"):
             doc = instantiate_template(get_doc(data["template"]), None, entry_of=db.id)
             if data.get("title"):
@@ -373,7 +374,7 @@ def templates(request):
         qs = Document.objects.filter(is_template=True, trashed_at__isnull=True).order_by("title")
         return Response([template_json(t) for t in qs])
     data = request.data
-    with transaction.atomic():
+    with tenancy.atomic():
         if data.get("from"):
             # Save an existing page as a template.
             src = get_doc(data["from"], include_trashed=False)
@@ -410,11 +411,11 @@ def template_detail(request, tpl_id):
     if not t.is_template:
         return bad("Not a template.")
     if request.method == "DELETE":
-        with transaction.atomic():
+        with tenancy.atomic():
             search.remove_document(t.id)
             t.delete()
         return Response(status=204)
-    with transaction.atomic():
+    with tenancy.atomic():
         apply_template_binding(t, request.data)
     return Response(template_json(t))
 
@@ -422,7 +423,7 @@ def template_detail(request, tpl_id):
 @api_view(["POST"])
 def template_duplicate(request, tpl_id):
     t = get_doc(tpl_id)
-    with transaction.atomic():
+    with tenancy.atomic():
         copy = copy_document(t, None, title=(t.title or "Untitled") + " (copy)", as_template=True)
     return Response(template_json(copy), status=201)
 

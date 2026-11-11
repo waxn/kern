@@ -27,7 +27,7 @@ class Workspace {
 
 	recents = $derived(
 		Object.values(this.docs)
-			.filter((d) => d.last_opened_at && !d.is_archived)
+			.filter((d) => d.last_opened_at && !d.is_archived && !d.empty)
 			.sort((a, b) => (b.last_opened_at! > a.last_opened_at! ? 1 : -1))
 			.slice(0, 12)
 	);
@@ -109,7 +109,7 @@ class Workspace {
 	async updateDoc(id: string, patch: Partial<Doc>) {
 		const doc = this.docs[id];
 		const before = doc ? { ...doc } : null;
-		if (doc) Object.assign(doc, patch);
+		if (doc) Object.assign(doc, patch, patch.title?.trim() || patch.icon ? { empty: false } : {});
 		try {
 			const saved = await api.patch<Doc>(`/documents/${id}`, patch);
 			if (this.docs[id]) {

@@ -18,6 +18,6 @@ if ! touch "${KERN_DATA_DIR:-/data}/.write-test" 2>/dev/null; then
 fi
 rm -f "${KERN_DATA_DIR:-/data}/.write-test"
 
-python manage.py migrate --noinput
+python manage.py kern_boot
 exec gunicorn kern.wsgi:application --bind 0.0.0.0:8000 --workers 2 --threads 4 --timeout 600 \
 	--no-control-socket --access-logfile - --error-logfile -

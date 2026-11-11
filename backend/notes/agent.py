@@ -8,6 +8,7 @@ import json
 import uuid
 
 from django.db import transaction
+from kern import tenancy
 from django.db.models import Max
 from django.utils import timezone
 
@@ -543,7 +544,7 @@ def execute(run: Run, name: str, args: dict) -> str:
     if name not in {t["name"] for t in TOOLS} or fn is None:
         return json.dumps({"error": f"Unknown tool {name}."})
     try:
-        with transaction.atomic():
+        with tenancy.atomic():
             result = fn(**(args or {}))
     except ToolError as e:
         return json.dumps({"error": str(e)})

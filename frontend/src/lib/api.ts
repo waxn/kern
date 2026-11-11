@@ -8,6 +8,9 @@ export class ApiError extends Error {
 	}
 }
 
+/** Set by the session module: called when the server says the sign-in has ended. */
+export const hooks: { onSignedOut: (() => void) | null } = { onSignedOut: null };
+
 async function request<T>(method: string, path: string, body?: unknown, init: RequestInit = {}): Promise<T> {
 	const headers: Record<string, string> = { 'X-Kern': '1' };
 	let payload: BodyInit | undefined;
@@ -22,6 +25,7 @@ async function request<T>(method: string, path: string, body?: unknown, init: Re
 	} catch {
 		throw new ApiError(0, 'Cannot reach the server.');
 	}
+	if (res.status === 401 && !/^\/(auth|setup|site)/.test(path)) hooks.onSignedOut?.();
 	if (!res.ok) {
 		let detail = res.statusText;
 		let data: any = null;

@@ -17,7 +17,7 @@
 	let busy = $state(false);
 	let nameInput = $state<HTMLInputElement>();
 	let showAuth = $state(false);
-	let auth = $state<{ mode: 'off' | 'push' | 'all'; has_password: boolean }>({ mode: 'off', has_password: false });
+	let auth = $state<{ username: string; has_password: boolean; enabled: boolean }>({ username: '', has_password: false, enabled: true });
 	let password = $state('');
 
 	const NAME_RE = /^[A-Za-z0-9][A-Za-z0-9._-]{0,63}$/;
@@ -80,11 +80,11 @@
 		}
 	}
 
-	async function saveAuth(mode: typeof auth.mode) {
+	async function saveAuth(clear = false) {
 		try {
-			auth = await api.put<typeof auth>('/git/config', { mode, password: password || undefined });
+			auth = await api.put<typeof auth>('/git/config', { password: clear ? '' : password });
 			password = '';
-			ui.toast(mode === 'off' ? 'Git access is open (localhost only)' : 'Git password saved');
+			ui.toast(clear ? 'Separate git password removed' : 'Git password saved');
 		} catch (err) {
 			ui.error(err);
 		}
@@ -98,7 +98,7 @@
 			{#if repos.length}<span class="faint">{repos.length} repositor{repos.length === 1 ? 'y' : 'ies'} · {fileSize(totalSize)}</span>{/if}
 			<span class="grow"></span>
 			<button class="btn ghost" class:on={showAuth} onclick={() => (showAuth = !showAuth)} title="Password for git clients">
-				<KeyRound size={14} />{auth.mode === 'off' ? 'Access' : auth.mode === 'push' ? 'Push protected' : 'Protected'}
+				<KeyRound size={14} />Sign-in
 			</button>
 			<button class="btn primary" onclick={startCreate}><Plus size={14} />New repository</button>
 		</div>
@@ -107,17 +107,14 @@
 		{#if showAuth}
 			<div class="panel">
 				<div class="ptext">
-					<b>Git client access</b>
-					<span class="muted">Kern listens on localhost only, so by default anyone on this machine can clone and push. Set a password to require it for pushes, or for everything. Git asks for a username — any name works.</span>
+					<b>Signing in from a git client</b>
+					<span class="muted">Git asks for a username and password. Use your Kern username <code>{auth.username}</code> with your account password, or set a separate git password below so your account password never sits in a git credential helper.</span>
 				</div>
 				<div class="prow">
-					<div class="seg">
-						{#each [['off', 'Open'], ['push', 'Password to push'], ['all', 'Password for all']] as [m, label] (m)}
-							<button class:on={auth.mode === m} onclick={() => saveAuth(m as typeof auth.mode)} disabled={m !== 'off' && !auth.has_password && !password}>{label}</button>
-						{/each}
-					</div>
-					<input class="input" type="password" autocomplete="new-password" placeholder={auth.has_password ? 'Change password…' : 'Set a password…'} bind:value={password} />
-					<button class="btn" disabled={password.length < 6} onclick={() => saveAuth(auth.mode === 'off' ? 'push' : auth.mode)}>Save</button>
+					<input class="input" type="password" autocomplete="new-password" placeholder={auth.has_password ? 'Change git password…' : 'Set a git password…'} bind:value={password} />
+					<button class="btn" disabled={password.length < 10} onclick={() => saveAuth()}>Save</button>
+					{#if auth.has_password}<button class="btn ghost" onclick={() => saveAuth(true)}>Remove</button>{/if}
+					<span class="faint">At least 10 characters.</span>
 				</div>
 			</div>
 		{/if}

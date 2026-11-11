@@ -9,6 +9,7 @@ from pathlib import Path
 from django.conf import settings
 from django.core.files import File
 from django.db import transaction
+from kern import tenancy
 from django.http import FileResponse, Http404, HttpResponse, HttpResponseNotModified, StreamingHttpResponse
 from django.utils import timezone
 from django.utils._os import safe_join
@@ -120,7 +121,7 @@ def file_content(request, file_id):
         chunks = [data]
     if not os.path.exists(a.file.path):
         raise Http404
-    with transaction.atomic():
+    with tenancy.atomic():
         _snapshot(a, "edit")
         _write(a, chunks)
         _prune(a)
@@ -139,7 +140,7 @@ def file_version_restore(request, file_id, version_id):
     v = a.versions.filter(id=as_uuid(version_id)).first()
     if not v or not v.file or not os.path.exists(v.file.path):
         raise Http404
-    with transaction.atomic():
+    with tenancy.atomic():
         _snapshot(a, "restore")  # so the restore itself can be undone
         with open(v.file.path, "rb") as fh:
             _write(a, iter(lambda: fh.read(1 << 20), b""))
@@ -254,7 +255,7 @@ def serve_media(request, path):
     and stream instead of downloading whole. (In Docker, Caddy serves /media and does the same.)"""
     path = posixpath.normpath(path).lstrip("/")
     try:
-        full = Path(safe_join(settings.MEDIA_ROOT, path))
+        full = Path(safe_join(tenancy.media_root(), path))
     except Exception:
         raise Http404
     if not full.is_file():

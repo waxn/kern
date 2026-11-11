@@ -14,7 +14,7 @@
 	import { modKey, relTime } from '#lib/util.ts';
 
 	let edited = $derived(
-		Object.values(ws.docs).filter((d) => !d.is_archived).sort((a, b) => (b.updated_at > a.updated_at ? 1 : -1)).slice(0, 14)
+		Object.values(ws.docs).filter((d) => !d.is_archived && !d.empty).sort((a, b) => (b.updated_at > a.updated_at ? 1 : -1)).slice(0, 14)
 	);
 	let total = $derived(Object.keys(ws.docs).length);
 	let tasks = $state<Task[]>([]);

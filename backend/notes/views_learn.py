@@ -3,6 +3,7 @@ import datetime as dt
 import uuid
 
 from django.db import transaction
+from kern import tenancy
 from django.db.models import Max, Q
 from django.http import Http404
 from django.utils import timezone
@@ -152,7 +153,7 @@ def notes(request):
     err = _validate(n)
     if err:
         return bad(err)
-    with transaction.atomic():
+    with tenancy.atomic():
         n.save()
         learning.ensure_cards(n)
     return Response(learning.note_json(n), status=201)
@@ -166,7 +167,7 @@ def note_detail(request, note_id):
         data["cards"] = [learning.card_json(c) for c in n.cards.order_by("ordinal")]
         return Response(data)
     if request.method == "DELETE":
-        with transaction.atomic():
+        with tenancy.atomic():
             search.remove("card", [n.id])
             n.delete()
         return Response(status=204)
@@ -177,7 +178,7 @@ def note_detail(request, note_id):
     err = _validate(n)
     if err:
         return bad(err)
-    with transaction.atomic():
+    with tenancy.atomic():
         n.save()
         learning.ensure_cards(n)
     return Response(learning.note_json(n))
@@ -219,7 +220,7 @@ def cards_bulk(request):
     ids = [as_uuid(i) for i in request.data.get("ids") or []]
     action = request.data.get("action")
     qs = Card.objects.filter(id__in=ids)
-    with transaction.atomic():
+    with tenancy.atomic():
         if action == "suspend":
             qs.update(suspended=True)
         elif action == "unsuspend":
@@ -266,7 +267,7 @@ def card_review(request, card_id):
         return bad("Rating must be 1–4.")
     if rating not in (1, 2, 3, 4):
         return bad("Rating must be 1–4.")
-    with transaction.atomic():
+    with tenancy.atomic():
         card = learning.apply_review(card, rating, int(request.data.get("duration_ms") or 0))
     return Response(learning.card_json(card))
 
@@ -278,7 +279,7 @@ def card_undo(request):
         return bad("Nothing to undo.")
     if timezone.now() - log.reviewed_at > dt.timedelta(hours=12):
         return bad("The last review is too old to undo.")
-    with transaction.atomic():
+    with tenancy.atomic():
         card = log.card
         learning.restore(card, log.before)
         log.delete()
@@ -329,7 +330,7 @@ def task_list(request):
             tag_ids = _apply_task(t, data)
         except (ValueError, TypeError) as e:
             return bad(str(e))
-        with transaction.atomic():
+        with tenancy.atomic():
             if data.get("block"):
                 b = Block.objects.filter(id=as_uuid(data["block"])).select_related("document").first()
                 if not b:
@@ -415,7 +416,7 @@ def task_detail(request, task_id):
     if request.method == "GET":
         return Response(tasks.task_json(t))
     if request.method == "DELETE":
-        with transaction.atomic():
+        with tenancy.atomic():
             if t.block_id:
                 b = t.block
                 b.props = {k: v for k, v in (b.props or {}).items() if k != "task"}
@@ -424,7 +425,7 @@ def task_detail(request, task_id):
             t.delete()
         return Response(status=204)
     data = request.data
-    with transaction.atomic():
+    with tenancy.atomic():
         try:
             tag_ids = _apply_task(t, data)
         except (ValueError, TypeError) as e:

@@ -1,5 +1,6 @@
 """Import and export: Markdown, HTML, OPML, CSV, JSON and Anki packages."""
 import csv
+from kern import tenancy
 import hashlib
 import html as html_lib
 import io
@@ -1159,7 +1160,7 @@ def export_tree(root: Document | None, fmt: str = "md", include_children=True) -
         for name, data in files.items():
             z.writestr(name, data)
         for url, name in ex.media.items():
-            path = os.path.join(settings.MEDIA_ROOT, url[len("/media/"):])
+            path = os.path.join(tenancy.media_root(), url[len("/media/"):])
             if os.path.isfile(path):
                 z.write(path, f"_attachments/{name}")
     base = safe_name(root.title) if root else "Kern workspace"
@@ -1291,7 +1292,7 @@ def export_anki(notes) -> tuple[bytes, str, str]:
             url = m.group(1)
             if url.startswith("/media/"):
                 name = os.path.basename(url)
-                media[name] = os.path.join(settings.MEDIA_ROOT, url[len("/media/"):])
+                media[name] = os.path.join(tenancy.media_root(), url[len("/media/"):])
                 return f'src="{name}"'
             return m.group(0)
         h = re.sub(r'<a [^>]*data-ref="[^"]*"[^>]*>(.*?)</a>', r"\1", h)

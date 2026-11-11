@@ -1,6 +1,14 @@
 :80 {
 	encode zstd gzip
 
+	header {
+		X-Content-Type-Options nosniff
+		X-Frame-Options SAMEORIGIN
+		Referrer-Policy same-origin
+		Permissions-Policy "camera=(), microphone=(), geolocation=(), payment=()"
+		-Server
+	}
+
 	handle /api/* {
 		reverse_proxy backend:8000
 	}
@@ -17,13 +25,16 @@
 		}
 	}
 
-	# Uploaded files are served straight from the shared data volume. file_server answers
-	# HTTP range requests, so audio, video and big PDFs stream and seek. Text files can be
-	# edited in place under the same URL, so browsers revalidate (cheap 304s via ETag).
+	# Uploaded files belong to the signed-in user, so the backend checks the session and serves
+	# them from that user's own folder (with HTTP range support for audio, video and big PDFs).
 	handle /media/* {
-		root * /data
-		header Cache-Control "private, no-cache"
-		file_server
+		reverse_proxy backend:8000 {
+			flush_interval -1
+			transport http {
+				read_timeout 10m
+				write_timeout 10m
+			}
+		}
 	}
 
 	handle {

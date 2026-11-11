@@ -1,5 +1,6 @@
-# Kern — personal knowledge management.
-#   docker compose up -d --build     then open http://localhost:8420
+# Kern — personal knowledge base.
+#   docker compose up -d --build     then open http://<this machine>:8420 and finish setup.
+#   The setup code is in the log:    docker compose logs backend
 name: kern
 
 services:
@@ -8,6 +9,9 @@ services:
     restart: unless-stopped
     environment:
       KERN_DATA_DIR: /data
+      # Set KERN_HTTPS=1 when Kern is served over HTTPS by a proxy in front of it.
+      KERN_HTTPS: ${KERN_HTTPS:-0}
+      KERN_TRUSTED_HOSTS: ${KERN_TRUSTED_HOSTS:-}
     volumes:
       - kern_data:/data
     extra_hosts:
@@ -27,11 +31,9 @@ services:
     depends_on:
       backend:
         condition: service_healthy
-    volumes:
-      - kern_data:/data:ro
     ports:
-      # Kern has no login. It listens on localhost only unless you change KERN_BIND.
-      - "${KERN_BIND:-127.0.0.1}:${KERN_PORT:-8420}:80"
+      # The first visit shows the setup wizard. Change the port or restrict the address in .env.
+      - "${KERN_BIND:-0.0.0.0}:${KERN_PORT:-8420}:80"
 
 volumes:
   # SQLite database and uploaded files. Survives rebuilds and `docker compose down`.

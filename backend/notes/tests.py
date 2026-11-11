@@ -1,6 +1,7 @@
 import json
 import uuid
 
+from django.contrib.auth.models import User
 from django.test import TestCase, TransactionTestCase
 from rest_framework.test import APIClient
 
@@ -9,9 +10,27 @@ def uid():
     return str(uuid.uuid4())
 
 
+TEST_PASSWORD = "tester-password-1"
+
+
+def basic(user="tester", pw=TEST_PASSWORD):
+    import base64
+    return "Basic " + base64.b64encode(f"{user}:{pw}".encode()).decode()
+
+
+def authed():
+    """An API client signed in as a test user (tests share one database; see kern.tenancy)."""
+    from django.contrib.auth.models import User
+    user = User.objects.filter(username="tester").first() or User.objects.create_user(
+        "tester", password=TEST_PASSWORD, is_staff=True)
+    c = APIClient(HTTP_X_KERN="1")
+    c.force_login(user)
+    return c
+
+
 class ApiTests(TestCase):
     def setUp(self):
-        self.c = APIClient(HTTP_X_KERN="1")
+        self.c = authed()
 
     def make_doc(self, **kw):
         r = self.c.post("/api/documents", kw, format="json")
@@ -137,7 +156,7 @@ class ApiTests(TestCase):
 
 class DatabaseTests(TestCase):
     def setUp(self):
-        self.c = APIClient(HTTP_X_KERN="1")
+        self.c = authed()
 
     def db(self, title):
         r = self.c.post("/api/databases", {"title": title}, format="json")
@@ -297,7 +316,7 @@ class FsrsTests(TestCase):
 
 class LearningTests(TestCase):
     def setUp(self):
-        self.c = APIClient(HTTP_X_KERN="1")
+        self.c = authed()
         self.doc = self.c.post("/api/documents", {"title": "Bio"}, format="json").json()
 
     def sync(self, *blocks, deletes=()):
@@ -361,7 +380,7 @@ class LearningTests(TestCase):
 
 class TaskTests(TestCase):
     def setUp(self):
-        self.c = APIClient(HTTP_X_KERN="1")
+        self.c = authed()
 
     def test_views_and_recurrence(self):
         t1 = self.c.post("/api/tasks", {"title": "Inbox thing"}, format="json").json()
@@ -415,7 +434,7 @@ class TaskTests(TestCase):
 
 class DataTests(TestCase):
     def setUp(self):
-        self.c = APIClient(HTTP_X_KERN="1")
+        self.c = authed()
         import tempfile
         from django.conf import settings
         self.media = tempfile.mkdtemp()
@@ -539,7 +558,7 @@ class BackupTests(TransactionTestCase):
     """Outside a test transaction: SQLite cannot copy a database mid-transaction."""
 
     def setUp(self):
-        self.c = APIClient(HTTP_X_KERN="1")
+        self.c = authed()
         import tempfile
         from django.conf import settings
         self.media = tempfile.mkdtemp()
@@ -577,7 +596,7 @@ class BackupTests(TransactionTestCase):
 
 class AITests(TestCase):
     def setUp(self):
-        self.c = APIClient(HTTP_X_KERN="1")
+        self.c = authed()
 
     def test_config_hides_key_and_requires_setup(self):
         r = self.c.post("/api/ai/write", {"prompt": "hi"}, format="json")
@@ -612,7 +631,7 @@ class AITests(TestCase):
 
 class AgentTests(TestCase):
     def setUp(self):
-        self.c = APIClient(HTTP_X_KERN="1")
+        self.c = authed()
 
     def test_tools_edit_pages_boards_and_tasks(self):
         from notes import agent
@@ -695,7 +714,7 @@ class AgentTests(TestCase):
 
 class GroupTests(TestCase):
     def setUp(self):
-        self.c = APIClient(HTTP_X_KERN="1")
+        self.c = authed()
 
     def test_group_with_calendar_and_agenda(self):
         import datetime as dt
@@ -718,7 +737,7 @@ class GroupTests(TestCase):
 
 class AgentClaudeTests(TestCase):
     def setUp(self):
-        self.c = APIClient(HTTP_X_KERN="1")
+        self.c = authed()
 
     def test_web_search_sources_and_page_context(self):
         from unittest import mock
@@ -784,7 +803,7 @@ class WebArchiveTests(TestCase):
     def setUp(self):
         from unittest import mock
 
-        self.c = APIClient(HTTP_X_KERN="1")
+        self.c = authed()
         p = mock.patch("notes.views_web.check_url", return_value=None)
         p.start()
         self.addCleanup(p.stop)
@@ -845,7 +864,7 @@ class FileEditingTests(TestCase):
         self.media = tempfile.mkdtemp()
         self._override = override_settings(MEDIA_ROOT=self.media)
         self._override.enable()
-        self.c = APIClient(HTTP_X_KERN="1")
+        self.c = authed()
 
     def tearDown(self):
         import shutil
@@ -859,6 +878,7 @@ class FileEditingTests(TestCase):
         return r.json()
 
     def media_bytes(self, url, **headers):
+        self.client.force_login(User.objects.get(username="tester"))
         r = self.client.get(url, **headers)
         body = b"".join(r.streaming_content) if r.streaming else r.content
         return r, body
@@ -946,6 +966,8 @@ class FileEditingTests(TestCase):
         r, _ = self.media_bytes(f["url"], HTTP_RANGE="bytes=20000-")
         self.assertEqual(r.status_code, 416)
         self.assertEqual(self.client.get("/media/../secret_key").status_code, 404)
+        self.client.logout()
+        self.assertEqual(self.client.get(f["url"]).status_code, 401)  # files need a signed-in user
 
 
 
@@ -964,7 +986,7 @@ class _GitRootMixin:
         self.git_root = _tempfile.mkdtemp(prefix="kern-git-test-")
         self._override = override_settings(KERN_GIT_ROOT=self.git_root)
         self._override.enable()
-        self.c = APIClient(HTTP_X_KERN="1")
+        self.c = authed()
 
     def tearDown(self):
         self._override.disable()
@@ -1000,8 +1022,9 @@ class GitApiTests(_GitRootMixin, TestCase):
     def test_guard_and_protocol_scoping(self):
         self.assertEqual(APIClient().post("/api/git/repos", {"name": "x"}, format="json").status_code, 403)
         self.c.post("/api/git/repos", {"name": "x"}, format="json")
-        plain = APIClient()
-        # Smart HTTP lives outside /api and needs no X-Kern header...
+        plain = APIClient(HTTP_AUTHORIZATION=basic())
+        # Smart HTTP lives outside /api and needs no X-Kern header, only git credentials...
+        self.assertEqual(APIClient().get("/git/x.git/info/refs?service=git-upload-pack").status_code, 401)
         r = plain.get("/git/x.git/info/refs?service=git-upload-pack")
         self.assertEqual(r.status_code, 200)
         self.assertEqual(r["Content-Type"], "application/x-git-upload-pack-advertisement")
@@ -1012,18 +1035,18 @@ class GitApiTests(_GitRootMixin, TestCase):
         self.assertEqual(plain.get("/git/x.git/config").status_code, 404)
         self.assertEqual(plain.get("/git/nope.git/info/refs?service=git-upload-pack").status_code, 404)
 
-    def test_password_setting_is_private(self):
-        r = self.c.put("/api/git/config", {"mode": "push"}, format="json")
-        self.assertEqual(r.status_code, 400)
-        r = self.c.put("/api/git/config", {"mode": "all", "password": "secret-pw"}, format="json")
-        self.assertEqual(r.json(), {"mode": "all", "has_password": True})
+    def test_git_password_is_private_and_optional(self):
+        self.assertEqual(self.c.put("/api/git/config", {"password": "short"}, format="json").status_code, 400)
+        r = self.c.put("/api/git/config", {"password": "separate-git-pw"}, format="json")
+        self.assertEqual(r.json()["has_password"], True)
         self.assertNotIn("git_auth", self.c.get("/api/settings").json())
         self.c.post("/api/git/repos", {"name": "x"}, format="json")
         url = "/git/x.git/info/refs?service=git-upload-pack"
         self.assertEqual(APIClient().get(url).status_code, 401)
-        import base64
-        ok = base64.b64encode(b"me:secret-pw").decode()
-        self.assertEqual(APIClient().get(url, HTTP_AUTHORIZATION="Basic " + ok).status_code, 200)
+        self.assertEqual(APIClient().get(url, HTTP_AUTHORIZATION=basic(pw="wrong-password")).status_code, 401)
+        self.assertEqual(APIClient().get(url, HTTP_AUTHORIZATION=basic(pw="separate-git-pw")).status_code, 200)
+        self.assertEqual(APIClient().get(url, HTTP_AUTHORIZATION=basic()).status_code, 200)  # account password too
+        self.assertEqual(APIClient().get(url, HTTP_AUTHORIZATION=basic(user="nobody")).status_code, 401)
 
 
 @override_settings(STATIC_URL="/static/")  # the live server's static handler needs one
@@ -1051,7 +1074,7 @@ class GitProtocolTests(_GitRootMixin, LiveServerTestCase):
         self.run_git("add", "-A", cwd=work)
         self.run_git("commit", "-qm", "First", cwd=work)
         self.run_git("tag", "v1", cwd=work)
-        url = f"{self.live_server_url}/git/site.git"
+        url = f"{self.live_server_url.replace('://', f'://tester:{TEST_PASSWORD}@')}/git/site.git"
         self.run_git("push", "-q", url, "main", "--tags", cwd=work)
 
         clone = os.path.join(self.git_root, "clone")
@@ -1098,7 +1121,7 @@ class FullBackupTests(TransactionTestCase):
         from notes import backup
         self._bdir = mock.patch.object(backup, "BACKUP_DIR", self.tmp / "backups")
         self._bdir.start()
-        self.c = APIClient(HTTP_X_KERN="1")
+        self.c = authed()
 
     def tearDown(self):
         import shutil
@@ -1266,7 +1289,7 @@ class SnapshotTests(TestCase):
         from notes.models_web import WebArchive
         from notes.snapshot import MARKER
         a = WebArchive.objects.create(url="https://shop.test/", kind="web", html_content=MARKER + "\n<html><body>Hi</body></html>")
-        c = APIClient()
+        c = authed()
         r = c.get(f"/api/web/{a.id}/snapshot")
         self.assertEqual(r.status_code, 200)
         self.assertTrue(r["Content-Security-Policy"].startswith("sandbox"))

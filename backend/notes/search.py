@@ -5,7 +5,7 @@ lets us update and delete index rows by primary key.
 """
 import re
 
-from django.db import connection
+from kern import tenancy
 
 from .models import Block, Document, PropertyValue, SearchEntry, Tag
 from .text import to_text
@@ -18,7 +18,7 @@ def _put(kind: str, ref_id, document_id, title: str, body: str) -> None:
     entry, _ = SearchEntry.objects.update_or_create(
         kind=kind, ref_id=str(ref_id), defaults={"document_id": document_id}
     )
-    with connection.cursor() as cur:
+    with tenancy.conn().cursor() as cur:
         cur.execute("DELETE FROM search_fts WHERE rowid = %s", [entry.id])
         cur.execute(
             "INSERT INTO search_fts(rowid, title, body) VALUES (%s, %s, %s)",
@@ -34,7 +34,7 @@ def remove(kind: str, ref_ids) -> None:
         rowids = list(entries.values_list("id", flat=True))
         if not rowids:
             continue
-        with connection.cursor() as cur:
+        with tenancy.conn().cursor() as cur:
             cur.execute(
                 "DELETE FROM search_fts WHERE rowid IN (%s)" % ",".join(["%s"] * len(rowids)),
                 rowids,
@@ -46,7 +46,7 @@ def remove_document(document_id) -> None:
     """Drop every index row that belongs to a document (itself and its blocks)."""
     entries = SearchEntry.objects.filter(document_id=document_id)
     rowids = list(entries.values_list("id", flat=True))
-    with connection.cursor() as cur:
+    with tenancy.conn().cursor() as cur:
         for i in range(0, len(rowids), 500):
             chunk = rowids[i : i + 500]
             cur.execute(
@@ -122,7 +122,7 @@ def search(query: str, kind: str | None = None, limit: int = 30, offset: int = 0
         LEFT JOIN notes_document d ON d.id = e.document_id
         WHERE search_fts MATCH %s AND (e.document_id IS NULL OR (d.trashed_at IS NULL AND d.is_template = 0))
     """
-    with connection.cursor() as cur:
+    with tenancy.conn().cursor() as cur:
         cur.execute(f"SELECT e.kind, COUNT(*) {base} GROUP BY e.kind", [match])
         counts = dict(cur.fetchall())
         params = [HL_START, HL_END, HL_START, HL_END, match]
@@ -147,7 +147,7 @@ def search(query: str, kind: str | None = None, limit: int = 30, offset: int = 0
 
 
 def reindex_all() -> int:
-    with connection.cursor() as cur:
+    with tenancy.conn().cursor() as cur:
         cur.execute("DELETE FROM search_fts")
     SearchEntry.objects.all().delete()
     n = 0

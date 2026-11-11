@@ -18,16 +18,44 @@ import zipfile
 
 from django.conf import settings
 from django.core.management import call_command
-from django.db import connection
+from kern import tenancy
 from django.utils import timezone
 
-BACKUP_DIR = settings.DATA_DIR / "backups"
 NAME_RE = re.compile(r"^kern-\d{8}-\d{6}(?:-\d+)?(?:-[a-z]+)?\.zip$")
-_lock = threading.Lock()
+_locks: dict = {}
+
+
+def _bdir():
+    return globals().get("BACKUP_DIR") or tenancy.backup_dir()  # BACKUP_DIR: tests point it elsewhere
+
+
+def __getattr__(name):  # backup.BACKUP_DIR: the active user's backup folder
+    if name == "BACKUP_DIR":
+        return _bdir()
+    raise AttributeError(name)
+
+
+class _UserLock:
+    """One backup/restore at a time per user."""
+
+    def _l(self):
+        return _locks.setdefault(tenancy.current_uid(), threading.Lock())
+
+    def __enter__(self):
+        self._l().acquire()
+
+    def __exit__(self, *a):
+        self._l().release()
+
+    def locked(self):
+        return self._l().locked()
+
+
+_lock = _UserLock()
 
 
 def _db_path():
-    return str(settings.DATABASES["default"]["NAME"])
+    return tenancy.db_path()
 
 
 DOWNLOADS = "web"  # media/web/<bookmark>/: videos downloaded for bookmarks
@@ -68,8 +96,8 @@ def _size(path) -> int:
 
 def _latest_migration() -> str:
     from django.db.migrations.recorder import MigrationRecorder
-    row = MigrationRecorder.Migration.objects.filter(app="notes").order_by("-id").first()
-    return row.name if row else ""
+    names = [n for (a, n) in MigrationRecorder(tenancy.conn()).applied_migrations() if a == "notes"]
+    return max(names) if names else ""
 
 
 def create(kind: str = "manual", downloads: bool | None = None) -> dict:
@@ -78,22 +106,22 @@ def create(kind: str = "manual", downloads: bool | None = None) -> dict:
     if downloads is None:
         downloads = include_downloads_default()
     with _lock:
-        BACKUP_DIR.mkdir(exist_ok=True)
+        _bdir().mkdir(parents=True, exist_ok=True)
         stamp = timezone.now().strftime("%Y%m%d-%H%M%S")
         suffix = "" if kind == "manual" else "-" + kind
         name = f"kern-{stamp}{suffix}.zip"
         n = 1
-        while (BACKUP_DIR / name).exists():  # several backups within one second
+        while (_bdir() / name).exists():  # several backups within one second
             n += 1
             name = f"kern-{stamp}-{n}{suffix}.zip"
-        path = BACKUP_DIR / name
-        tmpdir = tempfile.mkdtemp(dir=settings.DATA_DIR)
+        path = _bdir() / name
+        tmpdir = tempfile.mkdtemp(dir=tenancy.data_dir())
         try:
             snap = os.path.join(tmpdir, "kern.sqlite3")
-            connection.ensure_connection()
+            tenancy.conn().ensure_connection()
             dst = sqlite3.connect(snap)
             with dst:
-                connection.connection.backup(dst)  # consistent even while the app is writing
+                tenancy.conn().connection.backup(dst)  # consistent even while the app is writing
             dst.close()
             from .models import Attachment, Card, Document
             from .models_web import WebArchive
@@ -110,7 +138,7 @@ def create(kind: str = "manual", downloads: bool | None = None) -> dict:
             partial = str(path) + ".part"
             with zipfile.ZipFile(partial, "w", zipfile.ZIP_DEFLATED) as z:
                 z.write(snap, "kern.sqlite3")
-                for full, rel in _walk(settings.MEDIA_ROOT):
+                for full, rel in _walk(tenancy.media_root()):
                     if not downloads and rel.startswith(DOWNLOADS + "/"):
                         continue
                     # Videos are already compressed: store them as they are (much faster).
@@ -159,17 +187,17 @@ def info(path) -> dict:
 
 
 def list_backups() -> list[dict]:
-    if not BACKUP_DIR.exists():
+    if not _bdir().exists():
         return []
-    items = [info(BACKUP_DIR / n) for n in os.listdir(BACKUP_DIR) if NAME_RE.match(n)]
+    items = [info(_bdir() / n) for n in os.listdir(_bdir()) if NAME_RE.match(n)]
     # Newest first, by file time (names alone misorder several backups made in one second).
-    return sorted(items, key=lambda i: (os.stat(BACKUP_DIR / i["name"]).st_mtime_ns, i["name"]), reverse=True)
+    return sorted(items, key=lambda i: (os.stat(_bdir() / i["name"]).st_mtime_ns, i["name"]), reverse=True)
 
 
 def path_for(name: str):
     if not NAME_RE.match(name or ""):
         raise FileNotFoundError(name)
-    p = BACKUP_DIR / name
+    p = _bdir() / name
     if not p.exists():
         raise FileNotFoundError(name)
     return p
@@ -179,7 +207,7 @@ def prune(keep_auto: int = 7, keep_safety: int = 3) -> None:
     items = list_backups()
     for kind, keep in (("auto", keep_auto), ("prerestore", keep_safety)):
         for i in [x for x in items if x["kind"] == kind][keep:]:
-            os.remove(BACKUP_DIR / i["name"])
+            os.remove(_bdir() / i["name"])
 
 
 def validate(zip_path) -> dict:
@@ -204,7 +232,7 @@ def restore(zip_path) -> dict:
     safety = create("prerestore", downloads=contents["downloads"])
     git = _git_root()
     with _lock:
-        tmpdir = tempfile.mkdtemp(dir=settings.DATA_DIR)
+        tmpdir = tempfile.mkdtemp(dir=tenancy.data_dir())
         git_tmp = tempfile.mkdtemp(dir=git.parent, prefix=".git-restore-") if contents["git"] else None
         try:
             def extract(z, prefix, dest):
@@ -232,12 +260,12 @@ def restore(zip_path) -> dict:
                 check.close()
                 raise ValueError("The database in this backup is damaged.")
             # Copy pages into the live database in place: other connections stay valid.
-            connection.ensure_connection()
-            live = connection.connection
+            tenancy.conn().ensure_connection()
+            live = tenancy.conn().connection
             check.backup(live)
             check.close()
-            connection.close()
-            media = str(settings.MEDIA_ROOT)
+            tenancy.conn().close()
+            media = str(tenancy.media_root())
             current_downloads = os.path.join(media, DOWNLOADS)
             if not contents["downloads"] and os.path.isdir(current_downloads):
                 # The backup has no videos: keep the ones on disk rather than lose them.
@@ -251,7 +279,7 @@ def restore(zip_path) -> dict:
             shutil.rmtree(tmpdir, ignore_errors=True)
             if git_tmp:
                 shutil.rmtree(git_tmp, ignore_errors=True)
-    call_command("migrate", interactive=False, verbosity=0)  # backups from older versions
+    call_command("migrate", "notes", database=tenancy.current_alias(), interactive=False, verbosity=0)  # backups from older versions
     _forget_missing_videos()
     return {"restored": manifest, "contents": contents, "safety_backup": safety["name"]}
 
@@ -270,7 +298,7 @@ def _forget_missing_videos() -> None:
     """Bookmarks whose downloaded video is not on disk go back to "not downloaded"."""
     from .models_web import WebArchive
     for a in WebArchive.objects.exclude(video_path=""):
-        if not os.path.isfile(os.path.join(settings.MEDIA_ROOT, a.video_path)):
+        if not os.path.isfile(os.path.join(tenancy.media_root(), a.video_path)):
             a.video_path = ""
             a.video_status = ""
             a.save(update_fields=["video_path", "video_status"])
@@ -292,9 +320,9 @@ def maybe_auto_backup() -> None:
         except Exception:  # never break the request that triggered it
             pass
         finally:
-            connection.close()
+            tenancy.close_connections()
 
-    threading.Thread(target=run, daemon=True).start()
+    tenancy.spawn(run)
 
 
 def storage() -> dict:
@@ -304,10 +332,10 @@ def storage() -> dict:
     from .models import Attachment, Block, Card, Database, Document, DocVersion, Task
     return {
         "database_bytes": db_size,
-        "media_bytes": size(settings.MEDIA_ROOT),
-        "downloads_bytes": size(os.path.join(settings.MEDIA_ROOT, DOWNLOADS)),
+        "media_bytes": size(tenancy.media_root()),
+        "downloads_bytes": size(os.path.join(tenancy.media_root(), DOWNLOADS)),
         "git_bytes": size(_git_root()),
-        "backups_bytes": size(BACKUP_DIR) if BACKUP_DIR.exists() else 0,
+        "backups_bytes": size(_bdir()) if _bdir().exists() else 0,
         "counts": {
             "pages": Document.objects.filter(entry_of__isnull=True, trashed_at__isnull=True).count(),
             "entries": Document.objects.filter(entry_of__isnull=False, trashed_at__isnull=True).count(),
@@ -316,5 +344,5 @@ def storage() -> dict:
             "versions": DocVersion.objects.count(),
             "trashed": Document.objects.filter(trashed_at__isnull=False).count(),
         },
-        "data_dir": str(settings.DATA_DIR),
+        "data_dir": str(tenancy.data_dir()),
     }

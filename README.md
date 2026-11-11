@@ -1,6 +1,6 @@
 # Kern
 
-A self-hosted, single-user knowledge base: an outliner-style block editor with
+A self-hosted, multi-user knowledge base: an outliner-style block editor with
 linked pages, tags with properties, Notion-style relational databases, templates,
 transclusion and a knowledge graph. Django + DRF + SQLite (FTS5) on the backend,
 Svelte 5 / SvelteKit on the frontend, all in Docker.
@@ -11,20 +11,52 @@ Svelte 5 / SvelteKit on the frontend, all in Docker.
 docker compose up -d --build
 ```
 
-Then open <http://localhost:8420>.
+Then open `http://<your server>:8420` (the port is `KERN_PORT`; pick an unusual
+one in `.env`). The first visit shows the **setup wizard**:
 
-- Data (the SQLite database and uploaded files) lives in the `kern_data` Docker
-  volume and survives rebuilds, `docker compose down` and updates. Only
-  `docker compose down -v` deletes it.
-- Kern has no login. By default it only listens on `127.0.0.1`. Copy
-  `.env.example` to `.env` to change the port, or to listen on your network
-  (only do that on a network you trust).
+1. **Setup code**: printed in the server log, so only someone with access to the
+   server can claim it: `docker compose logs backend`.
+2. **Administrator**: your username and password.
+3. **Access**: whether people can sign up (invite only / approve each / open),
+   and whether visitors who are not signed in see a **public landing page** at `/`
+   or go straight to the sign-in form.
+4. **Server name** and whether git hosting is on.
+
+Everything chosen there can be changed later under **Settings → Server**; add,
+approve, disable and remove accounts under **Settings → Users**.
+
+- Data lives in the `kern_data` Docker volume and survives rebuilds,
+  `docker compose down` and updates. Only `docker compose down -v` deletes it.
+- Kern listens on `0.0.0.0` by default so you can reach it on a server. Set
+  `KERN_BIND=127.0.0.1` in `.env` to keep it on the machine, for example behind a
+  reverse proxy. Kern itself speaks plain HTTP: put it behind HTTPS (Caddy, nginx,
+  Traefik, a tunnel) and set `KERN_HTTPS=1` so the session cookie is `Secure`.
 - Update: `git pull && docker compose up -d --build`. Database migrations run
   automatically when the backend starts.
+- **Upgrading from a version without accounts:** the first administrator you create
+  takes over the existing notes, files and repositories, so nothing is lost.
+
+### Accounts and privacy
+
+Every user gets a completely separate workspace: `/data/users/<id>/` holds their own
+SQLite database, uploaded files, git repositories and backups, and the app only ever
+opens the folder of the signed-in user. There is no shared notes table to filter,
+so a bug cannot leak one person's pages to another. Administrators manage accounts but
+cannot read anyone's pages through the app.
+
+- Passwords are hashed (PBKDF2), at least 10 characters, and checked against common
+  passwords. Repeated failures lock a username (and an address) for 15 minutes.
+- Sessions use an HTTP-only, `SameSite=Lax` cookie. Writes need an `X-Kern` header
+  and are refused when the browser says they come from another site.
+- Uploaded files (`/media/…`) are served by the backend after checking the session,
+  from the signed-in user's own folder, never straight from disk.
+- Changing a password signs out every other device. Signing out clears the offline copies this
+  browser kept.
+- Backend: `KERN_SETUP_CODE` sets the setup code yourself instead of a random one.
 
 ### Backups
 
-Settings → Data & backups creates a backup, restores one, and keeps an
+Settings → Data & backups creates a backup of **your** workspace, restores one, and keeps an
 automatic daily backup (the last 7) inside the data volume. A backup is one
 `.zip` with everything: pages, databases, cards, tasks, uploaded files and
 their versions, bookmarks and their saved pages, git repositories, and
@@ -35,7 +67,7 @@ safety copy first; restoring a backup without videos keeps the videos you have. 
 backups off the machine:
 
 ```bash
-docker compose cp backend:/data/backups ./kern-backups
+docker compose cp backend:/data/users ./kern-users   # each user's backups/ folder is inside
 ```
 
 ### Git server
@@ -44,9 +76,9 @@ Kern can host git repositories. Open **Git** in the sidebar, create a
 repository, then push to it from any git client:
 
 ```bash
-git remote add kern http://localhost:8420/git/my-project.git
+git remote add kern http://<your server>:8420/git/my-project.git
 git push -u kern main
-git clone http://localhost:8420/git/my-project.git
+git clone http://<your server>:8420/git/my-project.git
 ```
 
 The Git page lists your repositories (size, last push, clone URL); each
@@ -55,13 +87,14 @@ README, the commit log, single-commit diffs, branches and tags, and a Stats tab
 (contribution heatmap, commits per month, when commits happen, languages, top
 contributors, totals).
 
-- Repositories are bare repos in the data volume (`/data/git/<name>.git`).
-  They are included in Kern's backups (Settings → Data & backups). To copy
-  them off the machine directly: `docker compose cp backend:/data/git ./kern-git`.
-- Clone, fetch and push use git's smart HTTP protocol (`git http-backend`).
-  Like the rest of Kern there is no login, so anyone who can reach the port can
-  push. **Git → Access** sets a password for pushes or for all git access (git
-  asks for a username; any name works).
+- Repositories are bare repos in your folder of the data volume
+  (`/data/users/<id>/git/<name>.git`). They are included in your backups
+  (Settings → Data & backups).
+- Clone, fetch and push use git's smart HTTP protocol (`git http-backend`) and always
+  need a login: your Kern username with your account password, or a separate
+  git password you set under **Git → Sign-in** (so your account password never ends up
+  in a git credential helper). Administrators can turn git hosting off for the whole
+  server in Settings → Server.
 - Repository names: letters, digits, `.`, `-`, `_`, up to 64 characters. Server-side
   hooks are disabled and pushed objects are checked (`receive.fsckObjects`).
 
@@ -70,7 +103,7 @@ contributors, totals).
 **Bookmarks** in the sidebar saves web pages, images and videos from a URL.
 
 - Web pages are saved as a full snapshot: the page with its stylesheets, images
-  and web fonts stored locally (`/data/media/web-pages/<id>/`), so it looks like
+  and web fonts stored locally (`media/web-pages/<id>/` in your folder), so it looks like
   the real page and still opens when the site changes or goes away. Scripts,
   frames and embeds are removed, and the snapshot is shown sandboxed with a
   policy that blocks scripts and every request to the internet. Use the refresh
@@ -234,7 +267,7 @@ contributors, totals).
 
 ```bash
 cd backend && python3 -m venv .venv && .venv/bin/pip install -r requirements.txt
-.venv/bin/python manage.py migrate && .venv/bin/python manage.py runserver 127.0.0.1:8421
+.venv/bin/python manage.py kern_boot && .venv/bin/python manage.py runserver 127.0.0.1:8421
 ```
 
 ```bash
@@ -244,7 +277,8 @@ cd frontend && npm install && npm run dev
 The Vite dev server proxies `/api`, `/media` and git traffic (`/git/<name>.git/…`) to
 `127.0.0.1:8421`. Large pushes are sent chunked, which `runserver` cannot read; run the
 backend with gunicorn (as in Docker) to test those.
-Backend tests: `cd backend && .venv/bin/python manage.py test notes` (30 tests).
+Backend tests: `cd backend && .venv/bin/python manage.py test` (accounts, per-user isolation, and the notes app).
+The setup code for a development server is printed by `kern_boot` (or set `KERN_SETUP_CODE`).
 The service worker only runs in a production build: `npm run build && npm run preview`
 (also proxies the API).
 Frontend checks: `cd frontend && npm run check`.

@@ -15,6 +15,7 @@ urlpatterns = [
     path("documents", v.document_create),
     path("documents/<str:doc_id>", v.document_detail),
     path("documents/<str:doc_id>/agenda", db.document_agenda),
+    path("documents/<str:doc_id>/discard", v.document_discard),
     path("documents/<str:doc_id>/move", v.document_move),
     path("documents/<str:doc_id>/duplicate", v.document_duplicate),
     path("documents/<str:doc_id>/trash", v.document_trash),

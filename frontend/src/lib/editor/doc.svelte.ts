@@ -753,6 +753,7 @@ export class EditorDoc {
 				if (ws.offline) ws.offline = false;
 				const w = ws.docs[this.id];
 				if (w && res?.updated_at) w.updated_at = res.updated_at;
+				if (w?.empty && upserts.some((b) => b.html.replace(/<[^>]*>|&nbsp;/g, '').trim() || !['paragraph', 'bullet', 'numbered', 'todo', 'quote'].includes(b.type))) w.empty = false;
 				if (res?.block_cards) {
 					const before = this.cardCount;
 					this.blockCards = res.block_cards;

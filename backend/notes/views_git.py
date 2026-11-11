@@ -7,10 +7,14 @@ import subprocess
 import threading
 
 from django.contrib.auth.hashers import check_password, make_password
+from django.contrib.auth.models import User
 from django.http import HttpResponse, StreamingHttpResponse
 from django.views.decorators.csrf import csrf_exempt
 from rest_framework.decorators import api_view
 from rest_framework.response import Response
+
+from accounts import site, throttle
+from kern import tenancy
 
 from . import gitrepo as g
 from .models import Setting
@@ -174,24 +178,24 @@ def repo_stats(request, name):
 
 @api_view(["GET", "PUT"])
 def git_config(request):
+    """Git clients sign in with your Kern username and either your account password or a separate
+    git password, which you can set here (handy so your account password never sits in a git
+    credential helper)."""
     s = Setting.objects.filter(key=AUTH_KEY).first()
-    cur = (s.value if s and isinstance(s.value, dict) else None) or {"mode": "off"}
+    cur = (s.value if s and isinstance(s.value, dict) else None) or {}
     if request.method == "PUT":
         data = request.data if isinstance(request.data, dict) else {}
-        mode = data.get("mode", cur.get("mode", "off"))
-        if mode not in ("off", "push", "all"):
-            return bad("Mode must be off, push or all.")
-        new = {"mode": mode, "hash": cur.get("hash")}
-        if data.get("password"):
-            pw = str(data["password"])
-            if len(pw) < 6:
-                return bad("Use at least 6 characters.")
-            new["hash"] = make_password(pw)
-        if mode != "off" and not new.get("hash"):
-            return bad("Set a password first.")
-        Setting.objects.update_or_create(key=AUTH_KEY, defaults={"value": new})
-        cur = new
-    return Response({"mode": cur.get("mode", "off"), "has_password": bool(cur.get("hash"))})
+        if "password" in data:
+            pw = str(data["password"] or "")
+            if pw and len(pw) < 10:
+                return bad("Use at least 10 characters.")
+            cur = {"hash": make_password(pw) if pw else None}
+            Setting.objects.update_or_create(key=AUTH_KEY, defaults={"value": cur})
+    return Response({
+        "username": request.user.username,
+        "has_password": bool(cur.get("hash")),
+        "enabled": site.get_all()["allow_git"],
+    })
 
 
 # ------------------------------------------------------- smart HTTP protocol
@@ -200,20 +204,37 @@ SERVICES = {"git-upload-pack", "git-receive-pack"}
 PROTO_RE = re.compile(r"^(?P<name>[^/]+)\.git/(?P<rest>info/refs|git-upload-pack|git-receive-pack|HEAD)$")
 
 
-def _auth_ok(request, write: bool) -> bool:
-    s = Setting.objects.filter(key=AUTH_KEY).first()
-    cfg = s.value if s and isinstance(s.value, dict) else {}
-    mode = cfg.get("mode", "off")
-    if mode == "off" or (mode == "push" and not write) or not cfg.get("hash"):
-        return True
+def _basic_user(request):
+    """The active user named by HTTP Basic credentials, or None. Their account password or their
+    separate git password both work. Failures are rate limited."""
     h = request.META.get("HTTP_AUTHORIZATION", "")
     if not h.lower().startswith("basic "):
-        return False
+        return None
     try:
-        _user, _, pw = base64.b64decode(h[6:]).decode("utf-8").partition(":")
+        name, _, pw = base64.b64decode(h[6:]).decode("utf-8").partition(":")
     except (ValueError, UnicodeDecodeError):
-        return False
-    return check_password(pw, cfg["hash"])
+        return None
+    name = name.strip()[:150]
+    ukey, ikey = f"git:u:{name.lower()}", f"git:ip:{throttle.client_ip(request)}"
+    if throttle.locked(ukey) or throttle.locked(ikey):
+        return None
+    user = User.objects.filter(username__iexact=name).first() if name else None
+    ok = False
+    if user is not None and user.is_active:
+        ok = user.check_password(pw)
+        if not ok:
+            with tenancy.use(user.id):
+                s = Setting.objects.filter(key=AUTH_KEY).first()
+                h2 = s.value.get("hash") if s and isinstance(s.value, dict) else None
+            ok = bool(h2) and check_password(pw, h2)
+    else:
+        check_password(pw, "pbkdf2_sha256$1200000$x$" + "A" * 43 + "=")  # keep timing alike
+    if not ok:
+        throttle.fail(ukey, 10)
+        throttle.fail(ikey, 80)
+        return None
+    throttle.clear(ukey)
+    return user
 
 
 def _plain(msg, status, **headers):
@@ -238,9 +259,19 @@ def _body_reader(request):
     return None
 
 
-@csrf_exempt
 def git_http(request, name, rest):
+    if not site.get_all()["allow_git"]:
+        return _plain("Git hosting is turned off on this server.", 403)
+    user = _basic_user(request)
+    if user is None:
+        return _plain("Authentication required.", 401, **{"WWW-Authenticate": 'Basic realm="Kern git", charset="UTF-8"'})
+    with tenancy.use(user.id):
+        return _git_http(request, name, rest, user)
+
+
+def _git_http(request, name, rest, user):
     """Hand the request to `git http-backend` (CGI) and stream its response back."""
+    uid = user.id
     try:
         path = g.repo_path(name)
     except g.GitError:
@@ -261,9 +292,6 @@ def git_http(request, name, rest):
     elif request.method not in ("GET", "HEAD") or rest in SERVICES:
         return _plain("Method not allowed.", 405)
 
-    if not _auth_ok(request, write):
-        return _plain("Authentication required.", 401, **{"WWW-Authenticate": 'Basic realm="Kern git", charset="UTF-8"'})
-
     cgi_env = g.env({
         "GIT_PROJECT_ROOT": str(g.root().resolve()),
         "GIT_HTTP_EXPORT_ALL": "1",
@@ -272,7 +300,7 @@ def git_http(request, name, rest):
         "QUERY_STRING": request.META.get("QUERY_STRING", ""),
         "CONTENT_TYPE": request.META.get("CONTENT_TYPE", ""),
         "REMOTE_ADDR": request.META.get("REMOTE_ADDR", ""),
-        "REMOTE_USER": "kern",
+        "REMOTE_USER": user.username,
         "GIT_HTTP_MAX_REQUEST_BUFFER": str(100 * 1024 * 1024),
     })
     if request.META.get("CONTENT_LENGTH"):
@@ -339,9 +367,10 @@ def git_http(request, name, rest):
             rc = proc.wait()
             if write and rc == 0 and request.method == "POST":
                 try:
-                    g.fix_head(path)
-                    g.write_meta(path, last_push=g.now_iso())
-                    (path / g.STATS_FILE).unlink(missing_ok=True)
+                    with tenancy.use(uid):
+                        g.fix_head(path)
+                        g.write_meta(path, last_push=g.now_iso())
+                        (path / g.STATS_FILE).unlink(missing_ok=True)
                 except (OSError, g.GitError):
                     pass
 

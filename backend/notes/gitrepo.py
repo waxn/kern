@@ -6,6 +6,7 @@ user-supplied value be parsed as an option (refs are resolved to a SHA first,
 paths always come after ``--``).
 """
 import json
+from kern import tenancy
 import os
 import re
 import shutil
@@ -44,7 +45,7 @@ class GitError(Exception):
 
 
 def root() -> Path:
-    p = Path(getattr(settings, "KERN_GIT_ROOT", None) or settings.DATA_DIR / "git")
+    p = tenancy.git_root()
     p.mkdir(parents=True, exist_ok=True)
     return p
 

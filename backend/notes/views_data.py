@@ -5,6 +5,7 @@ import tempfile
 
 from django.conf import settings
 from django.db import transaction
+from kern import tenancy
 from django.db.models import Q
 from django.http import FileResponse, Http404, HttpResponse
 from django.utils import timezone
@@ -120,7 +121,7 @@ def version_restore(request, version_id):
         v = DocVersion.objects.select_related("document").get(id=as_uuid(version_id))
     except DocVersion.DoesNotExist:
         raise Http404
-    with transaction.atomic():
+    with tenancy.atomic():
         versions.restore(v.document, v)
     return Response({"ok": True, "blocks": [block_json(b) for b in v.document.blocks.all()]})
 
@@ -207,7 +208,7 @@ def import_view(request):
         name = paths[i] if i < len(paths) and paths[i] else f.name
         entries.append((name, f.read()))
     try:
-        with transaction.atomic():
+        with tenancy.atomic():
             summary = porting.import_files(entries, parent)
     except (ValueError, KeyError) as e:
         return bad(str(e))
@@ -254,7 +255,7 @@ def backup_upload_restore(request):
     f = request.FILES.get("file")
     if not f:
         return bad("Choose a backup file.")
-    tmp = tempfile.NamedTemporaryFile(suffix=".zip", delete=False, dir=settings.DATA_DIR)
+    tmp = tempfile.NamedTemporaryFile(suffix=".zip", delete=False, dir=tenancy.data_dir())
     try:
         for chunk in f.chunks():
             tmp.write(chunk)
@@ -381,7 +382,7 @@ def ai_template(request):
     if not isinstance(data, dict) or not str(data.get("markdown", "")).strip():
         return bad("The assistant did not return a usable template. Try rephrasing.")
     from .views_db import template_json
-    with transaction.atomic():
+    with tenancy.atomic():
         t = Document.objects.create(is_template=True, title=str(data.get("title") or "New template")[:500],
                                     icon=str(data.get("icon") or "")[:8])
         blocks = porting.insert_trees(t, porting.markdown_to_trees(str(data["markdown"]), porting.Ctx()))

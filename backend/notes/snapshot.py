@@ -7,6 +7,7 @@ is meant to be served by ``web_snapshot`` with a sandboxing Content-Security-Pol
 it can run or load from the internet even if something slipped past the rewriting.
 """
 import base64
+from kern import tenancy
 import concurrent.futures
 import hashlib
 import html as htmllib
@@ -146,7 +147,7 @@ def best_from_srcset(srcset: str, base: str) -> str | None:
 
 class Snapshot:
     def __init__(self, archive_id, page_url: str):
-        self.dir = os.path.join(str(settings.MEDIA_ROOT), FOLDER, str(archive_id))
+        self.dir = os.path.join(str(tenancy.media_root()), FOLDER, str(archive_id))
         self.url_prefix = f"{settings.MEDIA_URL}{FOLDER}/{archive_id}/"
         self.base = page_url
         self.budget = Budget()
@@ -476,7 +477,7 @@ def capture(archive_id, url: str) -> tuple[str, str, str]:
 
 
 def remove(archive_id) -> None:
-    shutil.rmtree(os.path.join(str(settings.MEDIA_ROOT), FOLDER, str(archive_id)), ignore_errors=True)
+    shutil.rmtree(os.path.join(str(tenancy.media_root()), FOLDER, str(archive_id)), ignore_errors=True)
 
 
 def is_snapshot(html: str) -> bool:
@@ -497,7 +498,7 @@ def self_contained(archive_id, html: str) -> str:
     the browser makes no requests at all, while the assets stay as files on disk.
     """
     prefix = f"{settings.MEDIA_URL}{FOLDER}/{archive_id}/"
-    folder = os.path.join(str(settings.MEDIA_ROOT), FOLDER, str(archive_id))
+    folder = os.path.join(str(tenancy.media_root()), FOLDER, str(archive_id))
     cache: dict[str, str] = {}
 
     def inline(m):

@@ -1,6 +1,7 @@
 <script lang="ts">
 	import { page } from '$app/state';
-	import { Calendar, LayoutDashboard, Kanban, Archive, ChevronDown, ChevronRight, CircleCheck, Database, FolderOpen, GitBranch, Hash, House, Layers, LayoutTemplate, Network, PanelLeft, Plus, Search, Settings, Trash2, Globe } from '@lucide/svelte';
+	import { Calendar, LayoutDashboard, Kanban, Archive, ChevronDown, ChevronRight, CircleCheck, Database, FolderOpen, GitBranch, Hash, House, Layers, LayoutTemplate, Network, PanelLeft, Plus, Search, Settings, Trash2, Globe, LogOut } from '@lucide/svelte';
+	import { logout, session } from '#lib/state/session.svelte.ts';
 	import { counts } from '#lib/learn/util.svelte.ts';
 	import { importFiles } from '#lib/data/download.ts';
 	import Logo from './Logo.svelte';
@@ -214,6 +215,13 @@
 				<l.icon size={15} strokeWidth={1.75} /><span>{l.label}</span>
 			</a>
 		{/each}
+		{#if session.user}
+			<div class="who">
+				<span class="av">{session.user.username.slice(0, 1).toUpperCase()}</span>
+				<a class="nm truncate" href="/settings?s=account" onclick={(e) => nav(e, '/settings?s=account')} title="Account settings">{session.user.username}</a>
+				<button class="icon-btn" title="Sign out" aria-label="Sign out" onclick={logout}><LogOut size={14} /></button>
+			</div>
+		{/if}
 	</nav>
 
 	<!-- svelte-ignore a11y_no_static_element_interactions -->
@@ -248,6 +256,10 @@
 	.add { width: 20px; height: 20px; margin-top: 10px; margin-right: 4px; }
 	.hint { padding: 6px 10px; color: var(--text-3); text-align: left; }
 	.hint:hover { color: var(--text-2); }
+	.who { display: flex; align-items: center; gap: 8px; margin-top: 4px; padding: 5px 2px 0 8px; border-top: 1px solid var(--border); }
+	.av { flex: none; width: 20px; height: 20px; display: grid; place-items: center; border-radius: 50%; font-size: 11px; font-weight: 650; color: var(--accent); background: color-mix(in srgb, var(--accent) 15%, var(--surface-2)); }
+	.nm { flex: 1; color: var(--text-2); text-decoration: none; }
+	.nm:hover { color: var(--text); }
 	.resizer { position: absolute; top: 0; right: -3px; width: 6px; height: 100%; cursor: col-resize; z-index: 5; }
 	.resizer:hover, .resizing .resizer { background: color-mix(in srgb, var(--accent) 40%, transparent); }
 </style>
