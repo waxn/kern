@@ -12,7 +12,7 @@ from kern import tenancy
 from django.db.models import Max
 from django.utils import timezone
 
-from . import ai, learning, porting, search, tasks as tasks_mod, versions
+from . import ai, learning, porting, search, tasks as tasks_mod, versions, websearch
 from .models import Block, CardNote, Chat, Database, Document, PropertyDef, PropertyValue, Tag, Task
 from .text import one_line, to_text
 
@@ -47,11 +47,8 @@ Web: you can search the web and read web pages. Use them when the user asks for 
 for current facts, or for something their notes do not cover. Say briefly what you found and where,
 and only put web material into their notes when they ask for that."""
 
-WEB_OFF = """
-
-Web: you cannot search the web with this provider (web search needs Claude). If the user asks for
-something that needs it, say so plainly, then help from their notes and your own knowledge, and
-say which is which."""
+# Providers other than Claude have no built-in search, so Kern runs these two tools for them.
+WEB_KERN = WEB_ON.replace("search the web and read web pages", "search the web (web_search) and read web pages (web_fetch)")
 
 # Claude models with the current web tools (dynamic filtering); older Claude models get basic search.
 WEB_MODELS = ("claude-opus-5", "claude-fable-5", "claude-sonnet-5", "claude-opus-4-8", "claude-opus-4-7",
@@ -117,6 +114,13 @@ TOOLS = [
 ]
 
 
+WEB_TOOLS = [
+    tool("web_search", "Search the web. Returns titles, URLs and snippets. Follow up with web_fetch to read a result.",
+         {"query": S}, ["query"]),
+    tool("web_fetch", "Fetch a web page by URL and return its text.", {"url": S}, ["url"]),
+]
+
+
 class ToolError(Exception):
     pass
 
@@ -175,6 +179,23 @@ class Run:
             out.append({"kind": k, "id": ref, "page_id": doc_id, "title": title.replace("\x01", "").replace("\x02", ""),
                         "snippet": snippet.replace("\x01", "").replace("\x02", "")})
         return out or "No matches."
+
+    def web_search(self, query):
+        try:
+            results = websearch.search(query)
+        except websearch.SearchError as e:
+            raise ToolError(str(e))
+        for r in results:
+            self.add_source(r["url"], r["title"])
+        return results or {"results": [], "note": "No results. Try different words."}
+
+    def web_fetch(self, url):
+        try:
+            page = websearch.read(url)
+        except websearch.SearchError as e:
+            raise ToolError(str(e))
+        self.add_source(page["url"], page["title"])
+        return page
 
     def list_pages(self, parent_id=None):
         parent = _doc(parent_id) if parent_id else None
@@ -541,7 +562,7 @@ def _ctx_with(d):
 
 def execute(run: Run, name: str, args: dict) -> str:
     fn = getattr(run, name, None)
-    if name not in {t["name"] for t in TOOLS} or fn is None:
+    if name not in {t["name"] for t in (*TOOLS, *WEB_TOOLS)} or fn is None:
         return json.dumps({"error": f"Unknown tool {name}."})
     try:
         with tenancy.atomic():
@@ -603,7 +624,7 @@ def _anthropic_loop(chat: Chat, cfg: dict, user_msg: str, run: Run) -> str:
     messages = [*chat.history, {"role": "user", "content": user_msg}]
     use_fallbacks = cfg["model"] in ("claude-opus-5-5", "claude-opus-5", "claude-fable-5-1", "claude-sonnet-5-5")
     web = web_tools(cfg)
-    system = SYSTEM + (WEB_ON if web else WEB_OFF)
+    system = SYSTEM + (WEB_ON if web else WEB_KERN)
     reply, container = "", None
     for _ in range(MAX_STEPS):
         kwargs = dict(model=cfg["model"], max_tokens=ai.MAX_TOKENS, system=system, tools=[*TOOLS, *web], messages=messages)
@@ -679,11 +700,11 @@ def _openai_loop(chat: Chat, cfg: dict, user_msg: str, run: Run) -> str:
     import urllib.error
 
     key = ai._get("ai_secret").get("api_key", "")
-    tools = [{"type": "function", "function": {"name": t["name"], "description": t["description"], "parameters": t["input_schema"]}} for t in TOOLS]
+    tools = [{"type": "function", "function": {"name": t["name"], "description": t["description"], "parameters": t["input_schema"]}} for t in (*TOOLS, *WEB_TOOLS)]
     messages = [*chat.history, {"role": "user", "content": user_msg}]
     reply = ""
     for _ in range(MAX_STEPS):
-        body = json.dumps({"model": cfg["model"], "messages": [{"role": "system", "content": SYSTEM + WEB_OFF}, *messages],
+        body = json.dumps({"model": cfg["model"], "messages": [{"role": "system", "content": SYSTEM + WEB_KERN}, *messages],
                            "tools": tools, "max_tokens": ai.MAX_TOKENS}).encode()
         headers = {"Content-Type": "application/json", **({"Authorization": f"Bearer {key}"} if key else {})}
         req = urllib.request.Request(cfg["base_url"] + "/chat/completions", data=body, headers=headers, method="POST")

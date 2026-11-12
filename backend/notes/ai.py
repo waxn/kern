@@ -55,7 +55,7 @@ def public_config() -> dict:
     ready = bool(p) and bool(cfg["model"]) and (bool(key) or p not in NEEDS_KEY) and (p == "anthropic" or bool(cfg["base_url"]))
     return {
         **cfg, "configured": ready, "has_key": bool(key), "key_hint": key[-4:] if len(key) > 8 else "",
-        "web_search": p == "anthropic",
+        "web_search": ready,
         "providers": {k: {**v, "needs_key": k in NEEDS_KEY} for k, v in PROVIDERS.items()},
     }
 

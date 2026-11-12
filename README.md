@@ -279,9 +279,10 @@ Settings → Reminders), home-screen widgets and a share target. Build it with `
   at a time, with a score and the missed questions offered as flashcards), or
   have it look things up. Each page keeps its own conversation, which also
   appears on the Intelligence page.
-- With Claude it can search the web and read web pages, and lists the
-  sources under its answer. Other providers have no web search; the popup
-  says so.
+- It can search the web and read web pages, and lists the sources under its
+  answer. Claude uses its built-in search; other providers (OpenRouter, OpenAI,
+  Ollama, ...) get `web_search` and `web_fetch` tools that Kern runs itself
+  (DuckDuckGo, no key needed), so the model must support tool calling.
 
 ## Development without Docker
 

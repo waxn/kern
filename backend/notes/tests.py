@@ -705,6 +705,48 @@ class AgentTests(TestCase):
         self.assertEqual(listing[0]["title"], "make a physics group")
         self.assertEqual(self.c.delete(f"/api/chats/{chat['id']}").status_code, 204)
 
+    def test_web_tools_for_openai_compatible_providers(self):
+        from unittest import mock
+        self.c.put("/api/ai/config", {"provider": "ollama", "model": "llama"}, format="json")
+        chat = self.c.post("/api/chats", {}, format="json").json()
+        replies = iter([
+            {"choices": [{"message": {"content": "", "tool_calls": [{"id": "c1", "type": "function", "function": {
+                "name": "web_search", "arguments": json.dumps({"query": "chlorophyll"})}}]}}]},
+            {"choices": [{"message": {"content": "It absorbs red light."}}]},
+        ])
+        sent = []
+
+        class Res:
+            def __init__(self, data): self.data = data
+            def __enter__(self): return self
+            def __exit__(self, *a): return False
+            def read(self): return json.dumps(self.data).encode()
+
+        def fake(req, timeout=None):
+            sent.append(json.loads(req.data))
+            return Res(next(replies))
+
+        found = [{"title": "Chlorophyll", "url": "https://example.org/c", "snippet": "A pigment."}]
+        with mock.patch("urllib.request.urlopen", fake), mock.patch("notes.websearch.search", return_value=found):
+            r = self.c.post(f"/api/chats/{chat['id']}/message", {"text": "what is chlorophyll?"}, format="json")
+        self.assertEqual(r.status_code, 200, r.content)
+        names = [t["function"]["name"] for t in sent[0]["tools"]]
+        self.assertIn("web_search", names)
+        self.assertIn("web_fetch", names)
+        self.assertIn("example.org/c", sent[1]["messages"][-1]["content"])
+        self.assertEqual(r.json()["messages"][-1]["sources"], [{"url": "https://example.org/c", "title": "Chlorophyll"}])
+
+    def test_web_search_parsing_and_text(self):
+        from notes import websearch
+        page = ('<a class="result__a" href="//duckduckgo.com/l/?uddg=https%3A%2F%2Fexample.org%2Fa&amp;rut=x">Ex <b>A</b></a>'
+                '<a class="result__snippet" href="x">About &amp; more</a>'
+                '<a class="result__a" href="https://example.org/b">B</a>')
+        res = websearch.parse_results(page)
+        self.assertEqual(res[0], {"title": "Ex A", "url": "https://example.org/a", "snippet": "About & more"})
+        self.assertEqual(res[1]["url"], "https://example.org/b")
+        text = websearch.html_to_text("<head><title>T</title></head><nav>menu</nav><p>Hello</p><script>x()</script><p>World</p>")
+        self.assertEqual(text, "Hello\n\nWorld")
+
     def test_chat_needs_setup(self):
         chat = self.c.post("/api/chats", {}, format="json").json()
         r = self.c.post(f"/api/chats/{chat['id']}/message", {"text": "hi"}, format="json")
