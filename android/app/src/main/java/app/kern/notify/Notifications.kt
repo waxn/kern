@@ -20,6 +20,7 @@ object Notifications {
     const val CH_TASKS = "tasks"
     const val CH_CARDS = "cards"
     const val CH_GENERAL = "general"
+    const val CH_WEB = "web"
     private const val GROUP_TASKS = "app.kern.TASKS"
     const val ID_CARDS = 2
     const val ID_TASK_SUMMARY = 3
@@ -35,6 +36,9 @@ object Notifications {
                 },
                 NotificationChannel(CH_CARDS, "Flashcard reviews", NotificationManager.IMPORTANCE_DEFAULT).apply {
                     description = "A daily reminder when flashcards are due"
+                },
+                NotificationChannel(CH_WEB, "Watched pages", NotificationManager.IMPORTANCE_DEFAULT).apply {
+                    description = "New posts, price changes and edits on bookmarks you watch"
                 },
                 NotificationChannel(CH_GENERAL, "Updates", NotificationManager.IMPORTANCE_LOW).apply {
                     description = "Bookmarks finished saving and similar updates"
@@ -140,6 +144,21 @@ object Notifications {
             .setContentIntent(openIntent(ctx, route, 60))
             .build()
         try { NotificationManagerCompat.from(ctx).notify(ID_GENERAL + route.hashCode(), n) } catch (_: SecurityException) {}
+    }
+
+    fun webId(bookmark: Long) = 10_000 + (bookmark % 1_000_000).toInt()
+
+    fun showWebChange(ctx: Context, n: SyncWorker.Companion.WebNotice) {
+        if (!allowed(ctx)) return
+        val note = NotificationCompat.Builder(ctx, CH_WEB)
+            .setSmallIcon(R.drawable.ic_stat_kern)
+            .setColor(ACCENT)
+            .setContentTitle(n.title)
+            .setContentText(n.text)
+            .setAutoCancel(true)
+            .setContentIntent(openIntent(ctx, "bookmark/${n.id}", webId(n.id)))
+            .build()
+        try { NotificationManagerCompat.from(ctx).notify(webId(n.id), note) } catch (_: SecurityException) {}
     }
 
     fun cancel(ctx: Context, id: Int) = NotificationManagerCompat.from(ctx).cancel(id)

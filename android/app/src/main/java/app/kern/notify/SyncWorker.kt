@@ -13,6 +13,7 @@ import androidx.work.WorkerParameters
 import androidx.work.workDataOf
 import app.kern.app
 import app.kern.data.ApiError
+import app.kern.data.WebItem
 import app.kern.widget.Widgets
 import java.time.LocalDate
 import java.time.LocalTime
@@ -21,7 +22,7 @@ import java.util.concurrent.TimeUnit
 /**
  * Runs about every 15 minutes: refreshes what the widgets show and reminds about tasks due today
  * (once a day after the chosen hour) and flashcards that are due (again after a cooldown, until
- * the quiet hour).
+ * the quiet hour). Also notifies when a watched bookmark has a new change.
  */
 class SyncWorker(ctx: Context, params: WorkerParameters) : CoroutineWorker(ctx, params) {
     override suspend fun doWork(): Result {
@@ -31,6 +32,7 @@ class SyncWorker(ctx: Context, params: WorkerParameters) : CoroutineWorker(ctx, 
         try {
             refresh(applicationContext)
             if (notify) remind(applicationContext)
+            if (notify) runCatching { watchChanges(applicationContext) }
         } catch (e: ApiError) {
             return if (e.status == 0) Result.retry() else Result.success()
         }
@@ -83,6 +85,41 @@ class SyncWorker(ctx: Context, params: WorkerParameters) : CoroutineWorker(ctx, 
          */
         fun cardsReminderDue(now: Long, lastNudge: Long, everyMin: Int, sentToday: Boolean): Boolean =
             if (everyMin <= 0) !sentToday else now - lastNudge >= everyMin * 60_000L
+
+        /** A notification for a bookmark the watcher found a change on. */
+        data class WebNotice(val id: Long, val title: String, val text: String)
+
+        /**
+         * Which of the [changed] bookmarks (`/web/list?show=changed`) have more unseen changes
+         * than at the last check ([before], bookmark id → unseen count), as notifications.
+         */
+        fun webNotices(before: Map<Long, Int>, changed: List<WebItem>): List<WebNotice> =
+            changed.filter { it.unseen > (before[it.id] ?: 0) }.map { w ->
+                val name = w.title.ifBlank { w.url.substringAfter("://").substringBefore('/').removePrefix("www.") }
+                val m = w.monitor
+                when (m?.watching) {
+                    "posts" -> WebNotice(w.id, "New post on $name", if (w.unseen > 1) "${w.unseen} updates since you last looked" else "Tap to see what's new")
+                    "price" -> WebNotice(w.id, "Price changed on $name", if (m.priceText.isNotBlank()) "Now ${m.priceText}" else "Tap to see the new price")
+                    else -> WebNotice(w.id, "$name changed", if (w.unseen > 1) "${w.unseen} changes since you last looked" else "Tap to see what changed")
+                }
+            }
+
+        /** Polls the watched bookmarks and notifies about each one with a new change. */
+        suspend fun watchChanges(ctx: Context) {
+            val a = ctx.app
+            val s = a.settings
+            val before = s.webUnseen
+            if (a.kern.webChanges().changed == 0) {
+                if (!before.isNullOrEmpty()) before.keys.forEach { Notifications.cancel(ctx, Notifications.webId(it)) }
+                s.webUnseen = emptyMap()
+                return
+            }
+            val changed = a.kern.web(show = "changed")
+            if (before != null) webNotices(before, changed).take(5).forEach { Notifications.showWebChange(ctx, it) }
+            // Ones looked at since (no longer unseen) drop their notification too.
+            before?.keys?.filter { id -> changed.none { it.id == id } }?.forEach { Notifications.cancel(ctx, Notifications.webId(it)) }
+            s.webUnseen = changed.associate { it.id to it.unseen }
+        }
 
         fun remind(ctx: Context) {
             val s = ctx.app.settings

@@ -95,12 +95,23 @@ class Settings(context: Context) {
         get() = p.getLong("cache_at", 0)
         set(v) = p.edit().putLong("cache_at", v).apply()
 
+    /**
+     * Unseen-change counts per watched bookmark at the last check ("id:n" lines), so only new
+     * changes notify. Null until the first check, which only records what is already there.
+     */
+    var webUnseen: Map<Long, Int>?
+        get() = p.getString("web_unseen", null)?.split("\n")?.mapNotNull { line ->
+            val (id, n) = line.split(":").takeIf { it.size == 2 } ?: return@mapNotNull null
+            (id.toLongOrNull() ?: return@mapNotNull null) to (n.toIntOrNull() ?: 0)
+        }?.toMap()
+        set(v) = p.edit().putString("web_unseen", v?.entries?.joinToString("\n") { "${it.key}:${it.value}" }).apply()
+
     var recentSearches: List<String>
         get() = p.getString("recent_searches", "")!!.split("\n").filter { it.isNotBlank() }
         set(v) = p.edit().putString("recent_searches", v.take(8).joinToString("\n")).apply()
 
     fun clearAccount() {
         p.edit().remove("user").remove("cache_tasks").remove("cache_due").remove("cache_new")
-            .remove("cache_docs").remove("cache_at").remove("recent_searches").apply()
+            .remove("cache_docs").remove("cache_at").remove("recent_searches").remove("web_unseen").apply()
     }
 }

@@ -135,7 +135,14 @@ class Kern(val api: Api) {
     suspend fun aiConfig(): JsonObject = api.get("/ai/config")
 
     // ---- bookmarks
-    suspend fun web(q: String? = null, kind: String? = null): List<WebItem> = api.get("/web/list" + qs("q" to q, "kind" to kind))
+    suspend fun web(q: String? = null, kind: String? = null, tag: String? = null, show: String? = null): List<WebItem> =
+        api.get("/web/list" + qs("q" to q, "kind" to kind, "tag" to tag, "show" to show))
+    suspend fun webChanges(): WebChanges = api.get("/web/changes")
+    suspend fun checkWeb(id: Long): WebItem = api.post("/web/$id/check")
+    suspend fun webVersions(id: Long): List<WebVersion> = api.get("/web/$id/versions")
+    suspend fun saveWebVersion(id: Long): WebVersion = api.post("/web/$id/versions")
+    /** A saved version as HTML (served sandboxed, like the snapshot), for a WebView. */
+    fun webVersionPage(id: Long, version: Long) = api.base + "/api/web/$id/versions/$version/page"
     suspend fun webItem(id: Long): WebItem = api.get("/web/$id")
     suspend fun addWeb(url: String, title: String = "", notes: String = ""): WebItem = api.post("/web/archive", jsonOf("url" to url, "title" to title, "notes" to notes))
     suspend fun updateWeb(id: Long, vararg fields: Pair<String, Any?>): WebItem = api.patch("/web/$id", jsonOf(*fields))

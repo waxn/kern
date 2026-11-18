@@ -2,8 +2,14 @@ package app.kern.data
 
 import kotlinx.serialization.SerialName
 import kotlinx.serialization.Serializable
+import kotlinx.serialization.json.JsonArray
 import kotlinx.serialization.json.JsonElement
 import kotlinx.serialization.json.JsonObject
+import kotlinx.serialization.json.JsonPrimitive
+import kotlinx.serialization.json.booleanOrNull
+import kotlinx.serialization.json.contentOrNull
+import kotlinx.serialization.json.doubleOrNull
+import kotlinx.serialization.json.intOrNull
 
 @Serializable
 data class User(
@@ -331,10 +337,133 @@ data class WebItem(
     val notes: String = "",
     val todos: List<WebTodo> = emptyList(),
     @SerialName("has_snapshot") val hasSnapshot: Boolean = false,
-)
+    val tags: List<String> = emptyList(),
+    /** Only set for watched bookmarks or ones with unseen changes (on list items). */
+    val monitor: WebMonitor? = null,
+    /** How many saved versions the history holds (detail only). */
+    val versions: Int = 0,
+) {
+    val unseen get() = monitor?.unseen ?: 0
+    val canWatch get() = kind == "web" || kind == "mixed"
+}
 
 @Serializable
 data class WebTodo(val text: String, val done: Boolean = false)
+
+/**
+ * The bookmark's watch state. List items carry a short form (`price` a display string, `error`
+ * a flag); the detail carries the full one (`price` an object, `error` the message), so those
+ * two stay raw JSON and are read through [priceText] and [errorText].
+ */
+@Serializable
+data class WebMonitor(
+    val enabled: Boolean = false,
+    val mode: String = "auto",
+    @SerialName("resolved_mode") val resolvedMode: String = "",
+    val interval: Int = 1440,
+    val archive: Boolean = true,
+    @SerialName("error") val errorRaw: JsonElement? = null,
+    @SerialName("last_checked_at") val lastCheckedAt: String? = null,
+    @SerialName("next_check_at") val nextCheckAt: String? = null,
+    @SerialName("last_changed_at") val lastChangedAt: String? = null,
+    val unseen: Int = 0,
+    @SerialName("last_change") val lastChangeRaw: JsonElement? = null,
+    @SerialName("price") val priceRaw: JsonElement? = null,
+    val latest: List<WebPost> = emptyList(),
+    @SerialName("feed_url") val feedUrl: String = "",
+) {
+    val priceText: String get() = WebChange.priceDisplay(priceRaw)
+    /** The error message (detail), or "" — a summary only says whether there is one. */
+    val errorText: String get() = (errorRaw as? JsonPrimitive)?.takeIf { it.isString }?.content.orEmpty()
+    val hasError: Boolean get() = errorText.isNotBlank() || (errorRaw as? JsonPrimitive)?.booleanOrNull == true
+    val lastChange: WebChange? get() = WebChange.parse(lastChangeRaw)
+    /** What is actually being watched: the mode the server picked for "auto", else the chosen one. */
+    val watching: String get() = resolvedMode.ifBlank { mode }
+}
+
+@Serializable
+data class WebPost(val title: String = "", val url: String = "", val date: String = "")
+
+@Serializable
+data class WebChanges(val changed: Int = 0, val watched: Int = 0)
+
+@Serializable
+data class WebVersion(
+    val id: Long,
+    @SerialName("created_at") val createdAt: String? = null,
+    val trigger: String = "",
+    val url: String = "",
+    val title: String = "",
+    @SerialName("change") val changeRaw: JsonElement? = null,
+    val price: String = "",
+    val size: Long = 0,
+    @SerialName("has_page") val hasPage: Boolean = false,
+    val prev: Long? = null,
+) {
+    val change: WebChange? get() = WebChange.parse(changeRaw)
+    val triggerLabel: String get() = when (trigger) {
+        "saved" -> "Bookmarked"; "manual" -> "Snapshot"; "change" -> "Change found"; "refetch" -> "Re-fetched"
+        else -> trigger.replaceFirstChar { it.uppercase() }
+    }
+}
+
+/** A change the watcher found (`monitor.last_change`, or a version's `change`). */
+sealed class WebChange {
+    abstract val at: String?
+
+    data class Posts(val count: Int, val added: List<WebPost>, override val at: String? = null) : WebChange()
+    data class Price(val old: String, val new: String, val dropped: Boolean, override val at: String? = null) : WebChange()
+    data class Content(val added: Int, val removed: Int, val snippets: List<String>, override val at: String? = null) : WebChange()
+
+    /** One line, e.g. "2 new posts", "Price $20 → $17.50" or "Text changed (+3 / −1 lines)". */
+    val text: String get() = when (this) {
+        is Posts -> "$count new post${if (count == 1) "" else "s"}"
+        is Price -> "Price $old → $new"
+        is Content -> {
+            val parts = listOfNotNull(if (added > 0) "+$added" else null, if (removed > 0) "−$removed" else null)
+            "Text changed (${parts.joinToString(" / ")} ${if (added + removed == 1) "line" else "lines"})"
+        }
+    }
+
+    companion object {
+        private fun JsonObject.str(k: String) = (this[k] as? JsonPrimitive)?.contentOrNull.orEmpty()
+        private fun JsonObject.int(k: String) = (this[k] as? JsonPrimitive)?.intOrNull ?: 0
+        private fun JsonObject.amount(k: String) = ((this[k] as? JsonObject)?.get("amount") as? JsonPrimitive)?.doubleOrNull
+
+        /** A price is `{"display": …}` in the detail and already a string on list items. */
+        fun priceDisplay(e: JsonElement?): String = when (e) {
+            is JsonPrimitive -> if (e.isString) e.content else ""
+            is JsonObject -> e.str("display")
+            else -> ""
+        }
+
+        fun parse(e: JsonElement?): WebChange? {
+            val o = e as? JsonObject ?: return null
+            val at = o.str("at").ifBlank { null }
+            return when (o.str("type")) {
+                "posts" -> Posts(
+                    o.int("count"),
+                    (o["added"] as? JsonArray).orEmpty().mapNotNull { runCatching { KernJson.decodeFromJsonElement(WebPost.serializer(), it) }.getOrNull() },
+                    at,
+                )
+                "price" -> {
+                    val old = o.amount("old"); val new = o.amount("new")
+                    Price(priceDisplay(o["old"]), priceDisplay(o["new"]), old != null && new != null && new < old, at)
+                }
+                "content" -> Content(
+                    o.int("added"), o.int("removed"),
+                    (o["snippets"] as? JsonArray).orEmpty().mapNotNull { (it as? JsonPrimitive)?.contentOrNull },
+                    at,
+                )
+                else -> null
+            }
+        }
+    }
+}
+
+/** Options the server accepts for `monitor_mode` and `monitor_interval` (minutes). */
+val WATCH_MODES = listOf("auto" to "Automatic", "posts" to "New posts", "price" to "Price", "content" to "Any change")
+val WATCH_INTERVALS = listOf(60 to "Hourly", 180 to "3 hours", 360 to "6 hours", 720 to "Twice a day", 1440 to "Daily", 4320 to "3 days", 10080 to "Weekly")
 
 @Serializable
 data class LibraryFile(
