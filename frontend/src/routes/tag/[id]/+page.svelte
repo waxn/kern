@@ -11,7 +11,9 @@
 	import type { BacklinkGroup, Doc, PropDef, PropType, Tag } from '#lib/types.ts';
 	import { relTime, TAG_COLORS } from '#lib/util.ts';
 
-	interface Detail { tag: Tag; properties: PropDef[]; documents: Doc[]; blocks: BacklinkGroup[] }
+	interface BookmarkRef { id: string; url: string; title: string; thumbnail: string; created_at: string; monitor: { unseen: number; enabled: boolean } | null }
+	interface Detail { tag: Tag; properties: PropDef[]; documents: Doc[]; bookmarks?: BookmarkRef[]; blocks: BacklinkGroup[] }
+	const host = (u: string) => { try { return new URL(u).hostname.replace(/^www\./, ''); } catch { return u; } };
 
 	let id = $derived(page.params.id!);
 	let detail = $state<Detail | null>(null);
@@ -148,6 +150,20 @@
 				<div class="empty">No pages have this tag. Add it from a page's “Add tag” button.</div>
 			{/if}
 
+			{#if detail.bookmarks?.length}
+				<div class="section-title">Bookmarks · {detail.bookmarks.length} <a class="all" href="/web?tag={tag.id}">Open in Bookmarks</a></div>
+				<div class="bms">
+					{#each detail.bookmarks as b (b.id)}
+						<a class="bm" href="/web?open={b.id}">
+							<span class="th">{#if b.thumbnail}<img src={b.thumbnail} alt="" loading="lazy" referrerpolicy="no-referrer" />{/if}</span>
+							<span class="bt truncate">{b.title || host(b.url)}</span>
+							<span class="faint truncate">{host(b.url)}</span>
+							{#if b.monitor?.unseen}<em class="new">{b.monitor.unseen} new</em>{/if}
+						</a>
+					{/each}
+				</div>
+			{/if}
+
 			<div class="section-title">Mentions in blocks · {detail.blocks.reduce((n, g) => n + g.items.length, 0)}</div>
 			<BacklinkList groups={detail.blocks} empty="No blocks mention this tag. Type #{tag.name} while writing." />
 		{:else if missing}
@@ -169,4 +185,13 @@
 	.props { display: flex; flex-direction: column; gap: 6px; margin-bottom: 6px; }
 	.prop { display: flex; align-items: center; gap: 6px; }
 	.grow { flex: 1; }
+	.all { float: right; text-transform: none; letter-spacing: 0; font-weight: 500; color: var(--text-2); }
+	.bms { display: flex; flex-direction: column; gap: 2px; }
+	.bm { display: flex; align-items: center; gap: 10px; padding: 5px 6px; border-radius: var(--radius-sm); color: inherit; text-decoration: none; font-size: 14px; }
+	.bm:hover { background: var(--hover); }
+	.th { flex: none; width: 40px; height: 24px; border-radius: 4px; overflow: hidden; background: var(--surface-2); }
+	.th img { width: 100%; height: 100%; object-fit: cover; }
+	.bt { flex: 0 1 auto; }
+	.bm .faint { flex: 1; font-size: 12.5px; }
+	.new { font-style: normal; font-size: 11px; font-weight: 600; padding: 0 6px; border-radius: 8px; color: var(--accent); background: color-mix(in srgb, var(--accent) 15%, transparent); }
 </style>

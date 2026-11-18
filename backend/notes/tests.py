@@ -1360,3 +1360,174 @@ class SnapshotTests(TestCase):
         self.assertIn("img-src data:;", r["Content-Security-Policy"])  # nothing fetched, not even from Kern
         b = WebArchive.objects.create(url="https://old.test/", kind="web", html_content="<p>old</p>")
         self.assertEqual(c.get(f"/api/web/{b.id}/snapshot").status_code, 404)
+
+
+class MonitorTests(TestCase):
+    """Watched bookmarks: new posts, price changes, text changes, history and tags."""
+
+    FEED = b"""<?xml version="1.0" encoding="UTF-8"?>
+<rss version="2.0"><channel><title>Blog</title>
+<item><title>Second post</title><link>https://blog.test/2</link><guid>p2</guid></item>
+<item><title>First &amp; best</title><link>https://blog.test/1</link><guid>p1</guid></item>
+</channel></rss>"""
+    ATOM = b"""<feed xmlns="http://www.w3.org/2005/Atom"><title>A</title>
+<entry><id>tag:a,1</id><title type="html">&lt;b&gt;Hello&lt;/b&gt;</title><link rel="alternate" href="https://a.test/hello"/></entry></feed>"""
+
+    def setUp(self):
+        from unittest import mock
+
+        self.c = authed()
+        self.pages = {}
+        p = mock.patch("notes.views_web.check_url", return_value=None)
+        p.start()
+        self.addCleanup(p.stop)
+        f = mock.patch("notes.views_web.fetch_page", side_effect=lambda u: (u, "text/html", self.pages[u]))
+        f.start()
+        self.addCleanup(f.stop)
+        self.feeds = {}
+        s = mock.patch("notes.snapshot.fetch", side_effect=self.fake_fetch)
+        s.start()
+        self.addCleanup(s.stop)
+
+    def fake_fetch(self, url, accept, limit, budget=None):
+        if url in self.feeds:
+            return url, "application/rss+xml", self.feeds[url], ""
+        raise ValueError("404")
+
+    def blog(self, posts):
+        links = "".join(f'<article><h2><a href="/{n}">{t} is a post title</a></h2></article>' for n, t in posts)
+        return ('<html><head><title>Blog</title><link rel="alternate" type="application/rss+xml" href="/feed.xml">'
+                f'</head><body><nav><a href="/about">About this whole blog</a></nav>{links}</body></html>')
+
+    def test_parsers(self):
+        from notes import monitor
+
+        items = monitor.parse_feed(self.FEED)
+        self.assertEqual([i["key"] for i in items], ["p2", "p1"])
+        self.assertEqual(items[1]["title"], "First & best")
+        self.assertEqual(monitor.parse_feed(self.ATOM)[0], {"key": "tag:a,1", "title": "Hello", "url": "https://a.test/hello", "date": ""})
+        self.assertEqual(monitor.find_feed(self.blog([]), "https://blog.test/"), "https://blog.test/feed.xml")
+        posts = monitor.page_posts(self.blog([("a", "Alpha"), ("b", "Beta"), ("c", "Gamma")]), "https://blog.test/")
+        self.assertEqual([p["url"] for p in posts], ["https://blog.test/a", "https://blog.test/b", "https://blog.test/c"])
+
+        for raw, want in (("19.99", 19.99), ("1,299.00", 1299), ("1.299,50", 1299.5), ("12,50", 12.5), ("1 299", 1299), ("2.499", 2499)):
+            self.assertEqual(monitor.parse_amount(raw), want, raw)
+        ld = '<script type="application/ld+json">{"@type":"Product","offers":{"@type":"Offer","price":"49.90","priceCurrency":"EUR"}}</script>'
+        self.assertEqual(monitor.find_price(ld), {"amount": 49.9, "currency": "EUR", "display": "€49.90", "source": "structured"})
+        meta = '<meta property="product:price:amount" content="299"><meta property="product:price:currency" content="SEK">'
+        self.assertEqual(monitor.find_price(meta)["display"], "299 SEK")
+        self.assertEqual(monitor.find_price("<p>Now only 1 495 kr!</p>")["amount"], 1495)
+        self.assertIsNone(monitor.find_price("<p>No prices here</p>"))
+
+        d = monitor.diff("a\nb\nc", "a\nB\nc\nd")
+        self.assertEqual((d["added"], d["removed"]), (2, 1))
+        self.assertEqual(monitor.diff("same", "same")["ops"], [])
+
+    def test_new_posts_from_feed(self):
+        from notes import monitor
+        from notes.models_web import WebArchive
+
+        url = "https://blog.test/"
+        self.pages[url] = self.blog([("1", "One")])
+        self.feeds["https://blog.test/feed.xml"] = self.FEED
+        a = self.c.post("/api/web/archive", {"url": url}, format="json").json()
+        self.assertEqual(a["versions"], 1)  # the page as first saved
+
+        r = self.c.patch(f"/api/web/{a['id']}", {"monitor_enabled": True}, format="json").json()
+        m = r["monitor"]
+        self.assertEqual(m["resolved_mode"], "posts")
+        self.assertEqual(m["feed_url"], "https://blog.test/feed.xml")
+        self.assertEqual(m["unseen"], 0)  # the first check only sets the baseline
+        self.assertIsNotNone(m["next_check_at"])
+
+        self.feeds["https://blog.test/feed.xml"] = self.FEED.replace(b"<item>", b"<item><title>Third</title><link>https://blog.test/3</link><guid>p3</guid></item><item>", 1)
+        self.pages[url] = self.blog([("1", "One"), ("3", "Three")])
+        r = self.c.post(f"/api/web/{a['id']}/check").json()
+        self.assertEqual(r["monitor"]["unseen"], 1)
+        self.assertEqual(r["monitor"]["last_change"]["type"], "posts")
+        self.assertEqual(r["monitor"]["last_change"]["added"][0]["title"], "Third")
+        self.assertEqual(r["versions"], 2)
+        self.assertEqual(self.c.get("/api/web/changes").json()["changed"], 1)
+        self.assertEqual(len(self.c.get("/api/web/list?show=changed").json()), 1)
+
+        # Unchanged: no new version, no new change.
+        r = self.c.post(f"/api/web/{a['id']}/check").json()
+        self.assertEqual((r["monitor"]["unseen"], r["versions"]), (1, 2))
+
+        self.c.patch(f"/api/web/{a['id']}", {"seen": True}, format="json")
+        self.assertEqual(self.c.get("/api/web/changes").json()["changed"], 0)
+
+        vs = self.c.get(f"/api/web/{a['id']}/versions").json()
+        self.assertEqual([v["trigger"] for v in vs], ["change", "saved"])
+        self.assertEqual(vs[0]["prev"], vs[1]["id"])
+        d = self.c.get(f"/api/web/{a['id']}/versions/{vs[0]['id']}/diff").json()
+        self.assertEqual(d["from"], vs[1]["id"])
+        self.assertTrue(any("Three" in ln for op in d["ops"] if op["op"] == "add" for ln in op["lines"]))
+        page = self.c.get(f"/api/web/{a['id']}/versions/{vs[1]['id']}/page")
+        self.assertIn(b"One is a post title", page.content)
+        self.assertNotIn(b"Three", page.content)
+        self.assertIn("sandbox", page["Content-Security-Policy"])
+
+        # The scheduler: due checks are claimed once, then wait for their interval.
+        WebArchive.objects.filter(id=a["id"]).update(next_check_at=None)
+        self.assertEqual(monitor.run_due(), 1)
+        self.assertEqual(monitor.run_due(), 0)
+        b = WebArchive.objects.get(id=a["id"])
+        self.assertFalse(monitor.claim(WebArchive(id=b.id, monitor_enabled=True, next_check_at=None)))
+
+        self.assertEqual(self.c.delete(f"/api/web/{a['id']}").status_code, 204)
+
+    def test_price_and_content_changes(self):
+        url = "https://shop.test/item"
+        page = '<html><body><script type="application/ld+json">{"offers":{"price":"%s","priceCurrency":"USD"}}</script><p>Nice thing</p></body></html>'
+        self.pages[url] = page % "20.00"
+        a = self.c.post("/api/web/archive", {"url": url, "watch": True}, format="json").json()
+        self.assertEqual(a["monitor"]["resolved_mode"], "price")
+        self.assertEqual(a["monitor"]["price"]["display"], "$20")
+        self.pages[url] = page % "17.50"
+        r = self.c.post(f"/api/web/{a['id']}/check").json()
+        ch = r["monitor"]["last_change"]
+        self.assertEqual((ch["type"], ch["old"]["amount"], ch["new"]["amount"]), ("price", 20, 17.5))
+        self.assertEqual([p["amount"] for p in r["monitor"]["price_history"]], [20, 17.5])
+        self.assertEqual(self.c.get("/api/web/list").json()[0]["monitor"]["price"], "$17.50")
+
+        # Watching the text instead starts from a new baseline.
+        r = self.c.patch(f"/api/web/{a['id']}", {"monitor_mode": "content"}, format="json").json()
+        self.assertEqual(r["monitor"]["resolved_mode"], "content")
+        unseen = r["monitor"]["unseen"]
+        self.pages[url] = (page % "17.50").replace("Nice thing", "Nice thing\n<p>Now in blue</p>")
+        r = self.c.post(f"/api/web/{a['id']}/check").json()
+        self.assertEqual(r["monitor"]["unseen"], unseen + 1)
+        self.assertEqual(r["monitor"]["last_change"]["snippets"], ["Now in blue"])
+
+        r = self.c.patch(f"/api/web/{a['id']}", {"monitor_enabled": False}, format="json").json()
+        self.assertIsNone(r["monitor"]["next_check_at"])
+
+    def test_manual_versions_and_tags(self):
+        url = "https://news.test/"
+        self.pages[url] = "<html><body><p>v1</p></body></html>"
+        a = self.c.post("/api/web/archive", {"url": url}, format="json").json()
+        self.pages[url] = "<html><body><p>v2</p></body></html>"
+        v = self.c.post(f"/api/web/{a['id']}/versions").json()
+        self.assertEqual(v["trigger"], "manual")
+        vs = self.c.get(f"/api/web/{a['id']}/versions").json()
+        self.assertEqual(len(vs), 2)
+        self.assertEqual(self.c.get(f"/api/web/{a['id']}/versions/{v['id']}").json()["text"], "v2")
+        # Re-fetching an unchanged page adds nothing.
+        self.c.post(f"/api/web/{a['id']}/process")
+        self.assertEqual(len(self.c.get(f"/api/web/{a['id']}/versions").json()), 2)
+        self.assertEqual(self.c.delete(f"/api/web/{a['id']}/versions/{v['id']}").status_code, 204)
+        self.assertEqual(len(self.c.get(f"/api/web/{a['id']}/versions").json()), 1)
+
+        t1 = self.c.post("/api/tags", {"name": "reading"}, format="json").json()
+        t2 = self.c.post("/api/tags", {"name": "tools"}, format="json").json()
+        r = self.c.patch(f"/api/web/{a['id']}", {"tags": [t1["id"], t2["id"], "junk"]}, format="json").json()
+        self.assertEqual(sorted(r["tags"]), sorted([t1["id"], t2["id"]]))
+        self.assertEqual(len(self.c.get(f"/api/web/list?tag={t1['id']}").json()), 1)
+        self.assertEqual(len(self.c.get(f"/api/web/list?tag={uid()}").json()), 0)
+        self.assertEqual([b["id"] for b in self.c.get(f"/api/tags/{t1['id']}").json()["bookmarks"]], [a["id"]])
+        self.pages["https://news.test/b"] = "<p>b</p>"
+        b = self.c.post("/api/web/archive", {"url": "https://news.test/b", "tags": [t2["id"]]}, format="json")
+        self.assertEqual(b.json()["tags"], [t2["id"]])
+        self.c.delete(f"/api/tags/{t2['id']}")
+        self.assertEqual(self.c.get(f"/api/web/{a['id']}").json()["tags"], [t1["id"]])

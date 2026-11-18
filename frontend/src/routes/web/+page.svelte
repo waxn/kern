@@ -1,9 +1,16 @@
 <script lang="ts">
-	import { ArrowLeft, Bookmark, Check, Download, ExternalLink, FileText, Film, Image as ImageIcon, Play, Plus, RefreshCw, Search, Trash2, X } from '@lucide/svelte';
+	import { ArrowLeft, Bookmark, Check, Download, ExternalLink, Eye, FileText, Film, History as HistoryIcon, Image as ImageIcon, Play, Plus, RefreshCw, Search, Trash2, X } from '@lucide/svelte';
 	import { onDestroy, onMount } from 'svelte';
+	import { goto } from '$app/navigation';
+	import { page } from '$app/state';
 	import { api, qs } from '#lib/api.ts';
+	import { counts } from '#lib/learn/util.svelte.ts';
 	import { ui } from '#lib/state/ui.svelte.ts';
-	import { relTime } from '#lib/util.ts';
+	import { ws } from '#lib/state/workspace.svelte.ts';
+	import { fullDate, relTime } from '#lib/util.ts';
+	import History from '#lib/web/History.svelte';
+	import WatchPanel from '#lib/web/WatchPanel.svelte';
+	import type { Monitor, MonitorSummary, Version } from '#lib/web/types.ts';
 
 	type Kind = 'web' | 'video' | 'image' | 'mixed';
 	interface Todo { text: string; done: boolean }
@@ -17,9 +24,12 @@
 		video_status: '' | 'downloading' | 'done' | 'error'; video_url: string; created_at: string; updated_at?: string;
 		video_progress: Progress | null;
 		todo_count: number;
+		tags: string[];
+		monitor: MonitorSummary | null;
 	}
-	interface Detail extends Item {
+	interface Detail extends Omit<Item, 'monitor'> {
 		has_html: boolean; has_snapshot: boolean; notes: string; todos: Todo[]; video_format: 'best' | 'audio'; video_quality: '' | '1080p' | '720p' | '480p';
+		monitor: Monitor; versions: number;
 	}
 
 	let list = $state<Item[]>([]);
@@ -27,8 +37,13 @@
 	let q = $state('');
 	let kind = $state('');
 	let view = $state<'grid' | 'list'>('grid');
+	let show = $state<'' | 'watched' | 'changed'>('');
+	let tag = $state(page.url.searchParams.get('tag') ?? '');
 	let newUrl = $state('');
 	let adding = $state(false);
+	let tagText = $state('');
+	// A saved version shown in place of the current page.
+	let viewing = $state<Version | null>(null);
 
 	let detail = $state<Detail | null>(null);
 	let html = $state('');
@@ -76,16 +91,19 @@
 
 	async function load() {
 		try {
-			list = await api.get<Item[]>('/web/list' + qs({ q, kind }));
+			list = await api.get<Item[]>('/web/list' + qs({ q, kind, show, tag }));
 		} catch (e) {
 			ui.error(e);
 		}
 		loaded = true;
 	}
-	onMount(load);
+	onMount(() => {
+		const id = page.url.searchParams.get('open');
+		if (id) open(id);
+	});
 	onDestroy(() => clearInterval(poll));
 	$effect(() => {
-		void q; void kind;
+		void q; void kind; void show; void tag;
 		const t = setTimeout(load, 150);
 		return () => clearTimeout(t);
 	});
@@ -118,6 +136,11 @@
 			setDetail(await api.get<Detail>('/web/' + id));
 			html = '';
 			playing = false;
+			viewing = null;
+			if (detail?.monitor.unseen) {
+				// Opening it counts as seeing the change; the panel still shows what it was.
+				api.patch('/web/' + id, { seen: true }).then(() => counts.refresh()).catch(() => {});
+			}
 			if (detail?.has_html && !detail.has_snapshot && detail.kind !== 'video') {
 				const p = await api.get<{ type: string; content?: string }>(`/web/${id}/preview`);
 				if (p.type === 'html') html = p.content ?? '';
@@ -130,7 +153,37 @@
 	function back() {
 		clearInterval(poll);
 		detail = null;
+		viewing = null;
+		if (page.url.searchParams.has('open')) goto('/web', { replaceState: true });
 		load();
+	}
+
+	async function reloadDetail() {
+		if (!detail) return;
+		try {
+			const d = await api.get<Detail>('/web/' + detail.id);
+			detail = { ...detail, ...d };
+		} catch (e) {
+			ui.error(e);
+		}
+	}
+
+	// Tag edits run one after another, each on the result of the last, so quick entries all stick.
+	let tagQueue: Promise<unknown> = Promise.resolve();
+	const queueTags = (next: (tags: string[]) => Promise<string[]> | string[]) =>
+		(tagQueue = tagQueue.then(async () => {
+			if (!detail) return;
+			const tags = await next(detail.tags);
+			if (tags.join() !== detail.tags.join()) await patch({ tags });
+		}).catch((e) => ui.error(e)));
+	function addTag(name: string) {
+		const n = name.trim().replace(/^#/, '');
+		tagText = '';
+		if (!n) return;
+		queueTags(async (tags) => {
+			const t = ws.tags.find((x) => x.name.toLowerCase() === n.toLowerCase()) ?? (await ws.createTag(n));
+			return tags.includes(t.id) ? tags : [...tags, t.id];
+		});
 	}
 
 	async function add() {
@@ -179,6 +232,7 @@
 		try {
 			const d = await api.post<Detail>(`/web/${detail.id}/process`);
 			setDetail({ ...detail, ...d });
+			viewing = null;
 		} catch (e) {
 			ui.error(e);
 		}
@@ -235,6 +289,7 @@
 			<div class="titlebar">
 				<button class="btn ghost" onclick={back}><ArrowLeft size={14} />Back</button>
 				<h1 class="truncate">{detail.title || host(detail.url)}</h1>
+				{#if detail.monitor.enabled}<span class="watching" title="Watching for {detail.monitor.resolved_mode === 'price' ? 'price changes' : detail.monitor.resolved_mode === 'posts' ? 'new posts' : 'changes'}"><Eye size={13} />Watching</span>{/if}
 				<span class="grow"></span>
 				<button class="icon-btn" title="Re-fetch page" onclick={reprocess}><RefreshCw size={14} /></button>
 				<a class="icon-btn" title="Open original" href={detail.url} target="_blank" rel="noopener noreferrer"><ExternalLink size={14} /></a>
@@ -243,7 +298,16 @@
 
 			<div class="content">
 				<div class="main">
-					{#if detail.video_url}
+					{#if viewing}
+						<div class="vbanner">
+							<HistoryIcon size={14} />
+							<span>Saved version from <b>{fullDate(viewing.created_at)}</b> <span class="faint">({relTime(viewing.created_at)})</span></span>
+							<span class="grow"></span>
+							<button class="btn ghost" onclick={() => (viewing = null)}>Back to current</button>
+						</div>
+						<iframe class="frame snap" title="Saved version" src="/api/web/{detail.id}/versions/{viewing.id}/page"
+							sandbox="allow-popups allow-popups-to-escape-sandbox" referrerpolicy="no-referrer"></iframe>
+					{:else if detail.video_url}
 						<!-- svelte-ignore a11y_media_has_caption -->
 						<video class="media" src={detail.video_url} poster={detail.thumbnail || undefined} controls preload="metadata"></video>
 					{:else if detail.kind === 'video'}
@@ -276,6 +340,10 @@
 							{#if detail.thumbnail}<img src={detail.thumbnail} alt="" />{:else}<Icon size={96} strokeWidth={1.25} />{/if}
 						</div>
 					{/if}
+					{#if detail.kind === 'web' || detail.kind === 'mixed' || detail.versions}
+						<History id={detail.id} count={detail.versions} {viewing} canSave={detail.kind === 'web' || detail.kind === 'mixed'}
+							onview={(v) => (viewing = v)} onsaved={reloadDetail} />
+					{/if}
 				</div>
 
 				<div class="side">
@@ -285,6 +353,26 @@
 					<label>Title<input bind:value={title} onblur={saveMeta} onkeydown={(e) => e.key === 'Enter' && (e.target as HTMLElement).blur()} /></label>
 					<label>Author<input bind:value={author} onblur={saveMeta} /></label>
 					<label>Description<textarea rows="3" bind:value={description} onblur={saveMeta}></textarea></label>
+
+					<div class="tagbox">
+						<span class="lbl">Tags</span>
+						<div class="tags">
+							{#each detail.tags as id (id)}
+								{#if ws.tagMap[id]}
+									<span class="chip" data-c={ws.tagMap[id].color || undefined}>#{ws.tagMap[id].name}
+										<button title="Remove tag" onclick={() => queueTags((tags) => tags.filter((t) => t !== id))}><X size={10} /></button></span>
+								{/if}
+							{/each}
+							<input class="tagin" list="bookmark-tags" bind:value={tagText} placeholder="Add tag…" aria-label="Add tag"
+								onkeydown={(e) => { if (e.key === 'Enter') { e.preventDefault(); addTag(tagText); } }} onchange={(e) => addTag(e.currentTarget.value)} />
+							<datalist id="bookmark-tags">{#each ws.tags.filter((t) => !detail?.tags.includes(t.id)) as t (t.id)}<option value={t.name}></option>{/each}</datalist>
+						</div>
+					</div>
+
+					{#if detail.kind === 'web' || detail.kind === 'mixed'}
+						<WatchPanel id={detail.id} monitor={detail.monitor}
+							onupdate={(d) => { if (detail) { detail = { ...detail, monitor: d.monitor, versions: d.versions }; counts.refresh(); } }} />
+					{/if}
 
 					{#if detail.kind === 'video'}
 						<div class="box">
@@ -350,6 +438,17 @@
 					{#each kinds as k}<button class:on={kind === k.id} onclick={() => (kind = k.id)}>{k.label}</button>{/each}
 				</div>
 				<div class="seg">
+					<button class:on={show === ''} onclick={() => (show = '')}>Everything</button>
+					<button class:on={show === 'watched'} onclick={() => (show = 'watched')}><Eye size={12} />Watching</button>
+					<button class:on={show === 'changed'} onclick={() => (show = 'changed')}>Updated{#if counts.web}<em class="count">{counts.web}</em>{/if}</button>
+				</div>
+				{#if ws.tags.length}
+					<select class="tagsel" bind:value={tag} aria-label="Filter by tag">
+						<option value="">All tags</option>
+						{#each ws.tags as t (t.id)}<option value={t.id}>#{t.name}</option>{/each}
+					</select>
+				{/if}
+				<div class="seg">
 					<button class:on={view === 'grid'} onclick={() => (view = 'grid')}>Grid</button>
 					<button class:on={view === 'list'} onclick={() => (view = 'list')}>List</button>
 				</div>
@@ -364,12 +463,22 @@
 								{#if a.thumbnail}<img src={a.thumbnail} alt="" loading="lazy" referrerpolicy="no-referrer" />{:else}<AIcon size={40} strokeWidth={1.5} />{/if}
 								{#if a.duration}<span class="badge">{dur(a.duration)}</span>{/if}
 								{#if a.video_status === 'done'}<span class="badge left"><Download size={11} /></span>{/if}
+								{#if a.monitor?.unseen}<span class="badge new">{a.monitor.unseen} new</span>
+								{:else if a.monitor?.enabled}<span class="badge watch" title="Watching for changes"><Eye size={11} /></span>{/if}
 							</span>
 							<span class="info">
 								<span class="t">{a.title || host(a.url)}</span>
 								<span class="faint small">{host(a.url)}{a.author ? ' · ' + a.author : ''}</span>
 								{#if view === 'list' && a.description}<span class="faint small d">{a.description}</span>{/if}
 								{#if a.error_message}<span class="small err">Couldn't fetch</span>{/if}
+								{#if a.tags.length || a.monitor?.price}
+									<span class="meta">
+										{#if a.monitor?.price}<span class="price">{a.monitor.price}</span>{/if}
+										{#each a.tags.slice(0, 4) as id (id)}
+											{#if ws.tagMap[id]}<span class="chip" data-c={ws.tagMap[id].color || undefined}>#{ws.tagMap[id].name}</span>{/if}
+										{/each}
+									</span>
+								{/if}
 							</span>
 						</button>
 					{/each}
@@ -377,8 +486,16 @@
 			{:else if loaded}
 				<div class="empty">
 					<Bookmark size={40} class="faint" />
-					<b>{q || kind ? 'Nothing matches' : 'No bookmarks yet'}</b>
-					<p class="faint">Paste a link above to save a page, video or image. YouTube and similar videos can be downloaded.</p>
+					{#if show === 'changed' && !q && !kind && !tag}
+						<b>Nothing new</b>
+						<p class="faint">Watched pages with new posts, price changes or edits show up here.</p>
+					{:else if show === 'watched' && !q && !kind && !tag}
+						<b>No watched pages</b>
+						<p class="faint">Open a bookmark and turn on “Watch for changes” to have Kern check it on a schedule.</p>
+					{:else}
+						<b>{q || kind || tag || show ? 'Nothing matches' : 'No bookmarks yet'}</b>
+						<p class="faint">Paste a link above to save a page, video or image. YouTube and similar videos can be downloaded.</p>
+					{/if}
 				</div>
 			{/if}
 		{/if}
@@ -413,6 +530,22 @@
 	.thumb img { width: 100%; height: 100%; object-fit: cover; }
 	.badge { position: absolute; right: 6px; bottom: 6px; background: rgba(0, 0, 0, 0.7); color: #fff; font-size: 11px; padding: 1px 5px; border-radius: 4px; display: flex; align-items: center; gap: 3px; }
 	.badge.left { right: auto; left: 6px; }
+	.badge.new { top: 6px; bottom: auto; background: var(--accent); color: #17130c; font-weight: 600; }
+	.badge.watch { top: 6px; bottom: auto; }
+	.meta { display: flex; flex-wrap: wrap; align-items: center; gap: 4px; margin-top: 4px; }
+	.price { font-size: 12.5px; font-weight: 600; font-variant-numeric: tabular-nums; }
+	.seg button { display: inline-flex; align-items: center; gap: 4px; }
+	.count { font-style: normal; font-size: 10.5px; font-weight: 600; padding: 0 5px; border-radius: 8px; color: var(--accent); background: color-mix(in srgb, var(--accent) 15%, transparent); }
+	.tagsel { height: 28px; }
+	.watching { display: inline-flex; align-items: center; gap: 4px; font-size: 12px; padding: 2px 8px; border-radius: 10px; color: var(--accent); background: color-mix(in srgb, var(--accent) 14%, transparent); }
+	.vbanner { display: flex; align-items: center; gap: 8px; flex-wrap: wrap; padding: 6px 6px 6px 10px; margin-bottom: 8px; border-radius: 8px; font-size: 13px; background: color-mix(in srgb, var(--accent) 12%, transparent); }
+	.grow { flex: 1; }
+	.tagbox { display: flex; flex-direction: column; gap: 4px; }
+	.tagbox .lbl { font-size: 12.5px; color: var(--text-2); }
+	.tags { display: flex; flex-wrap: wrap; align-items: center; gap: 4px; }
+	.tags .chip button { display: grid; color: inherit; opacity: 0.6; }
+	.tags .chip button:hover { opacity: 1; }
+	.tagin { width: 120px; border: 1px solid var(--border-strong); border-radius: var(--radius); padding: 3px 7px; font: inherit; font-size: 13px; background: var(--surface); color: var(--text); outline: none; }
 	.info { display: flex; flex-direction: column; gap: 2px; padding: 0 10px 10px; min-width: 0; }
 	.list .info { padding: 0; }
 	.t { font-weight: 600; font-size: 14px; display: -webkit-box; -webkit-line-clamp: 2; line-clamp: 2; -webkit-box-orient: vertical; overflow: hidden; }

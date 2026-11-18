@@ -824,6 +824,11 @@ def get_tag(tag_id) -> Tag:
         raise Http404
 
 
+def bookmarks_of(tag: Tag) -> list:
+    from .views_web import summary
+    return [summary(a) for a in tag.bookmarks.prefetch_related("tags").order_by("-created_at")]
+
+
 @api_view(["GET", "PATCH", "DELETE"])
 def tag_detail(request, tag_id):
     tag = get_tag(tag_id)
@@ -835,6 +840,7 @@ def tag_detail(request, tag_id):
                 "tag": tag_json(tag, len(docs)),
                 "properties": [prop_json(d) for d in tag.properties.all()],
                 "documents": [doc_json(d) for d in docs],
+                "bookmarks": bookmarks_of(tag),
                 "blocks": backlinks_payload(links),
             }
         )

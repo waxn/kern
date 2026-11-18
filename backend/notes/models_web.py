@@ -62,6 +62,23 @@ class WebArchive(models.Model):
     is_processed = models.BooleanField(default=False)        # has content been saved
     error_message = models.TextField(null=True, blank=True)
     
+    tags = models.ManyToManyField("notes.Tag", blank=True, related_name="bookmarks")
+
+    # Watching the page for changes (see notes/monitor.py)
+    monitor_enabled = models.BooleanField(default=False)
+    # auto: decided on the first check; posts: new entries in its feed or post list;
+    # price: the product's price; content: any change to the page's text.
+    monitor_mode = models.CharField(max_length=16, default="auto")
+    monitor_interval = models.PositiveIntegerField(default=1440)  # minutes
+    monitor_archive = models.BooleanField(default=True)  # save a snapshot to history on each change
+    # Baseline from the last check: {"mode", "feed_url", "seen": [...], "hash", "text", "price": {...}}
+    monitor_state = models.JSONField(default=dict, blank=True)
+    monitor_error = models.TextField(blank=True, default="")
+    last_checked_at = models.DateTimeField(null=True, blank=True)
+    next_check_at = models.DateTimeField(null=True, blank=True, db_index=True)
+    last_changed_at = models.DateTimeField(null=True, blank=True)
+    unseen_changes = models.PositiveIntegerField(default=0)
+
     created_at = models.DateTimeField(auto_now_add=True)
     updated_at = models.DateTimeField(auto_now=True)
     last_viewed_at = models.DateTimeField(null=True, blank=True)
@@ -69,3 +86,28 @@ class WebArchive(models.Model):
     class Meta:
         ordering = ["-created_at"]
         indexes = [models.Index(fields=["url"]), models.Index(fields=["kind"])]
+
+
+class WebSnapshot(models.Model):
+    """One saved version of a bookmarked page, like an entry in the Wayback Machine.
+
+    Its page assets live in ``MEDIA_ROOT/web-pages/v<id>/``, hard-linked from the capture they
+    came from, so versions that share images and fonts share the disk space too.
+    """
+
+    archive = models.ForeignKey(WebArchive, on_delete=models.CASCADE, related_name="snapshots")
+    created_at = models.DateTimeField(auto_now_add=True, db_index=True)
+    # saved: when bookmarked; manual: "Save snapshot now"; change: a check found a change; refetch
+    trigger = models.CharField(max_length=16, default="manual")
+    url = models.URLField(max_length=2048, blank=True, default="")  # the page's address after redirects
+    title = models.CharField(max_length=500, blank=True, default="")
+    html = models.TextField(blank=True, default="")  # the page as saved (a snapshot, or sanitised HTML)
+    text = models.TextField(blank=True, default="")  # its readable text, for comparing versions
+    text_hash = models.CharField(max_length=64, blank=True, default="")
+    # What the check that saved it saw: {"type": "posts"|"price"|"content", ...}
+    change = models.JSONField(default=dict, blank=True)
+    price = models.CharField(max_length=64, blank=True, default="")
+    size = models.PositiveIntegerField(default=0)  # bytes of html + assets
+
+    class Meta:
+        ordering = ["-created_at", "-id"]

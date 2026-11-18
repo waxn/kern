@@ -44,6 +44,8 @@ export const PRIORITY_COLOR = ['', 'blue', 'orange', 'red'];
 class Counts {
 	due = $state(0);
 	today = $state(0);
+	/** Watched bookmarks with changes not looked at yet. */
+	web = $state(0);
 	private timer: ReturnType<typeof setTimeout> | undefined;
 
 	async load() {
@@ -56,6 +58,11 @@ class Counts {
 			this.today = t.today + t.overdue;
 		} catch {
 			/* offline */
+		}
+		try {
+			this.web = (await api.get<{ changed: number }>('/web/changes')).changed;
+		} catch {
+			/* offline, or an older server */
 		}
 	}
 

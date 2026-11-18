@@ -120,6 +120,18 @@ contributors, totals).
 - Videos (YouTube, Vimeo, …) play in place from the site, or can be downloaded
   with yt-dlp (video or audio only, a chosen quality) with live progress.
   YouTube downloads need a JavaScript runtime; the Docker image includes Deno.
+- **Tags**: bookmarks use the same tags as pages and tasks. Filter the list by tag;
+  a tag's page lists its bookmarks too.
+- **Watch for changes**: turn it on for a page and Kern fetches it on a schedule
+  (hourly to weekly) and flags what changed: *new posts* (from the site's RSS/Atom
+  feed, or new article links), *price* (from the product's structured data, else the
+  page text) or *any change* to the text. *Automatic* picks one on the first check.
+  Changed bookmarks get a "new" badge, and the sidebar counts them.
+- **History**: every change (and "Save snapshot now") keeps a full snapshot of the
+  page, like the Wayback Machine. View any version, or compare its text with the one
+  before. Versions share unchanged images and fonts (hard links), and the newest 100
+  are kept, plus the original. Checks run in the server process; set `KERN_NO_MONITOR=1`
+  to turn them off.
 
 ## Android app
 

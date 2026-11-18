@@ -212,7 +212,7 @@
 	<nav class="foot">
 		{#each links as l (l.href)}
 			<a class="nav" class:active={path === l.href || (l.href === '/tags' && path.startsWith('/tag/')) || (l.href === '/git' && path.startsWith('/git/'))} href={l.href} onclick={(e) => nav(e, l.href)}>
-				<l.icon size={15} strokeWidth={1.75} /><span>{l.label}</span>
+				<l.icon size={15} strokeWidth={1.75} /><span>{l.label}</span>{#if l.href === '/web' && counts.web}<em class="badge" title="Watched bookmarks with changes">{counts.web}</em>{/if}
 			</a>
 		{/each}
 		{#if session.user}

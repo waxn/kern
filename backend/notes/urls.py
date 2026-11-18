@@ -98,9 +98,15 @@ urlpatterns = [
     # Web archive endpoints
     path("web/list", web.web_list),
     path("web/archive", web.web_create),
+    path("web/changes", web.web_changes),
     path("web/<str:archive_id>", web.web_detail),
     path("web/<str:archive_id>/process", web.web_detail_process),
     path("web/<str:archive_id>/download-video", web.web_download_video),
     path("web/<str:archive_id>/preview", web.web_preview),
     path("web/<str:archive_id>/snapshot", web.web_snapshot),
+    path("web/<str:archive_id>/check", web.web_check),
+    path("web/<str:archive_id>/versions", web.web_versions),
+    path("web/<str:archive_id>/versions/<str:version_id>", web.web_version),
+    path("web/<str:archive_id>/versions/<str:version_id>/diff", web.web_version_diff),
+    path("web/<str:archive_id>/versions/<str:version_id>/page", web.web_version_page),
 ]
