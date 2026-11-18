@@ -108,6 +108,7 @@
 			});
 		if (inText) return; // the rest would clash with typing
 		if (is('tasks')) return run(() => goto('/tasks'));
+		if (is('mail')) return run(() => goto('/mail/inbox'));
 		if (is('review')) return run(() => goto('/review'));
 		if (is('home')) return run(() => goto('/'));
 	}

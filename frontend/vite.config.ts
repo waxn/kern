@@ -1,3 +1,4 @@
+/// <reference types="vitest/config" />
 import adapter from '@sveltejs/adapter-static';
 import { sveltekit } from '@sveltejs/kit/vite';
 import { defineConfig } from 'vite';
@@ -14,5 +15,7 @@ export default defineConfig({
 		})
 	],
 	server: { proxy },
-	preview: { proxy }
+	preview: { proxy },
+	// Unit tests (npm test): mail's pure helpers, in a browser-like DOM.
+	test: { environment: 'jsdom', include: ['src/**/*.test.{js,ts}'] }
 });

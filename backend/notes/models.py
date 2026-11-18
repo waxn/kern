@@ -298,6 +298,9 @@ class Task(models.Model):
         "Block", null=True, blank=True, on_delete=models.SET_NULL, related_name="task"
     )
     tags = models.ManyToManyField(Tag, blank=True, related_name="tasks")
+    # Where the task came from outside the notes, e.g. an email (mail/taskbridge.py):
+    # {"kind": "mail" | "mail_followup", "key": <Message-ID>, "subject", "from", "followup"}
+    source = models.JSONField(null=True, blank=True)
     position = models.FloatField(default=0)
     created_at = models.DateTimeField(auto_now_add=True)
     updated_at = models.DateTimeField(auto_now=True)

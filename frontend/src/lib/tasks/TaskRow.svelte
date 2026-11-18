@@ -1,5 +1,5 @@
 <script lang="ts">
-	import { Check, FileText, Flag, Repeat } from '@lucide/svelte';
+	import { Check, FileText, Flag, Repeat , Mail as MailIcon } from '@lucide/svelte';
 	import { fmtDue, localDate, PRIORITY_COLOR } from '../learn/util.svelte.ts';
 	import { open } from '../state/tabs.ts';
 	import { ws } from '../state/workspace.svelte.ts';
@@ -30,12 +30,14 @@
 					<FileText size={11} />{ws.docs[where].title || 'Untitled'}
 				</a>
 			{/if}
+			{#if task.source?.key}<span class="mailsrc" title="From an email"><MailIcon size={11} /></span>{/if}
 			{#if task.description}<span class="faint truncate desc">{task.description.split('\n')[0]}</span>{/if}
 		</div>
 	</div>
 </div>
 
 <style>
+	.mailsrc { display: inline-flex; color: var(--text-3); }
 	.task { display: flex; gap: 10px; padding: 7px 10px; border-bottom: 1px solid var(--border); cursor: pointer; }
 	.task:hover { background: var(--hover); }
 	.task.active { background: var(--active); }

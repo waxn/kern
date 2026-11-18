@@ -1,0 +1,128 @@
+/* Mail inside Kern.
+   The mail components were written against Manifest's token names; here they are mapped
+   onto Kern's theme (app.css), so mail follows Kern's light/dark theme, accent and font.
+   Everything is scoped to .mail-app; nothing here changes the rest of Kern. */
+
+.mail-app {
+	--bg-elev: var(--surface);
+	--bg-sunken: var(--surface-2);
+	--bg-hover: var(--hover);
+	--bg-active: var(--active);
+	--bg-selected: color-mix(in srgb, var(--accent) 9%, transparent);
+	--line: var(--border);
+	--line-strong: var(--border-strong);
+	--accent-ink: var(--accent);
+	--accent-soft: color-mix(in srgb, var(--accent) 15%, transparent);
+	--accent-text: #17130c;
+	--cta-bg: var(--accent);
+	--cta-text: #17130c;
+	--cta-shadow: none;
+	--cta-border: 1px solid transparent;
+	--star: var(--c-yellow);
+	--danger-soft: color-mix(in srgb, var(--danger) 14%, transparent);
+	--warn: var(--c-orange);
+	--warn-soft: color-mix(in srgb, var(--c-orange) 14%, transparent);
+	--ok: var(--c-green);
+	--ok-soft: color-mix(in srgb, var(--c-green) 14%, transparent);
+	--tint-1: color-mix(in srgb, var(--c-orange) var(--tint), transparent);
+	--tint-2: color-mix(in srgb, var(--c-green) var(--tint), transparent);
+	--tint-3: color-mix(in srgb, var(--c-blue) var(--tint), transparent);
+	--tint-4: color-mix(in srgb, var(--c-red) var(--tint), transparent);
+	--tint-5: color-mix(in srgb, var(--c-purple) var(--tint), transparent);
+	--tint-6: color-mix(in srgb, var(--c-yellow) var(--tint), transparent);
+	--shadow-sm: none;
+	--shadow-lg: var(--shadow);
+	--card-border: 1px solid var(--border);
+	--radius-lg: 8px;
+	--display: var(--font-sans);
+	--display-style: normal;
+	--display-weight: 650;
+	--display-tracking: -0.01em;
+	--ui: var(--font-sans);
+	--mono: var(--font-mono);
+	--row-pad: 9px;
+	--sidebar-w: 212px;
+	--list-w: clamp(320px, 36%, 460px);
+	height: 100%;
+	min-height: 0;
+	font-size: 13.5px;
+}
+:root[data-density='compact'] .mail-app { --row-pad: 6px; }
+
+.mail-app a { color: var(--accent); }
+
+.mail-app .display {
+	font-family: var(--font-sans);
+	font-weight: 650;
+	letter-spacing: -0.01em;
+}
+/* Small labels: section headers, counts. */
+.mail-app .ledger {
+	font-size: 11px;
+	font-weight: 600;
+	letter-spacing: 0.04em;
+	text-transform: uppercase;
+	color: var(--text-3);
+}
+.mail-app .num { font-variant-numeric: tabular-nums; }
+
+.mail-app .sr-only {
+	position: absolute; width: 1px; height: 1px; padding: 0; margin: -1px;
+	overflow: hidden; clip: rect(0 0 0 0); white-space: nowrap; border: 0;
+}
+
+/* Buttons and fields: Kern's look, with the variants mail uses. */
+.mail-app .btn { font-size: 13px; cursor: pointer; }
+.mail-app .btn.primary { color: #17130c; }
+.mail-app .btn.danger { background: var(--surface); border-color: var(--border-strong); color: var(--danger); font-weight: 500; }
+.mail-app .btn.danger:hover { background: var(--danger-soft); }
+.mail-app .btn.small { height: 26px; padding: 0 9px; font-size: 12.5px; }
+.mail-app .icon-btn { width: 30px; height: 30px; cursor: pointer; }
+.mail-app .icon-btn.small { width: 26px; height: 26px; }
+.mail-app .icon-btn:disabled { opacity: 0.4; cursor: default; }
+.mail-app .input { height: 32px; width: 100%; padding: 0 10px; background: var(--bg); color: var(--text); }
+.mail-app textarea.input { height: auto; padding: 8px 10px; line-height: 1.5; }
+.mail-app .chip {
+	border-radius: 10px; font-size: 11.5px; height: 19px;
+	color: var(--chip, var(--text-2));
+	background: color-mix(in srgb, var(--chip, var(--text-2)) var(--tint), transparent);
+}
+.mail-app .kbd {
+	display: inline-block; min-width: 18px; padding: 0 5px; border-radius: 4px;
+	border: 1px solid var(--border-strong); font: 11px/17px var(--font-sans); text-align: center;
+	color: var(--text-3); background: var(--bg);
+}
+.mail-app .scroll { overflow: auto; overscroll-behavior: contain; }
+
+@keyframes mail-spin { to { transform: rotate(360deg); } }
+@keyframes rise { from { opacity: 0; transform: translateY(6px); } to { opacity: 1; transform: none; } }
+@keyframes fade-in { from { opacity: 0; } to { opacity: 1; } }
+@keyframes stamp { 0% { opacity: 0; transform: scale(1.2); } 100% { opacity: 1; transform: none; } }
+.mail-app .spinner {
+	width: 16px; height: 16px; border-radius: 50%;
+	border: 2px solid var(--border-strong); border-top-color: var(--accent);
+	animation: mail-spin 0.8s linear infinite;
+}
+
+@keyframes shimmer { from { background-position: 100% 0; } to { background-position: -100% 0; } }
+.mail-app .skel {
+	display: block; border-radius: 4px;
+	background: linear-gradient(90deg, var(--surface-2) 0%, var(--hover) 50%, var(--surface-2) 100%);
+	background-size: 200% 100%;
+	animation: shimmer 1.3s linear infinite;
+}
+
+@media (prefers-reduced-motion: reduce) {
+	.mail-app *, .mail-app *::before, .mail-app *::after { animation-duration: 0.001ms !important; transition-duration: 0.001ms !important; }
+}
+
+/* Printing a conversation: just the messages, on white. */
+@media print {
+	.mail-app { --bg: #fff; --surface: #fff; --text: #111; --text-2: #333; --text-3: #555; --border: #ccc; }
+	.mail-app .mail-sidebar, .mail-app .topbar, .mail-app .list-pane, .mail-app .bar, .mail-app .banner,
+	.mail-app .composers, .mail-app .fab, .mail-app .reply-bar, .mail-app .scrim, .mail-app .menu-wrap,
+	.mail-app .icon-btn, .mail-app .images-bar, .mail-app .dots, .mail-app .nudge, .mail-app .snoozed { display: none !important; }
+	.mail-app .scroll { overflow: visible !important; }
+	.mail-app .thread { max-width: none !important; padding: 0 !important; }
+	.mail-app .card { box-shadow: none !important; break-inside: avoid; border-color: #ccc !important; }
+}

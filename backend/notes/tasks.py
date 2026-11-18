@@ -22,6 +22,7 @@ def task_json(t: Task) -> dict:
         "project": str(t.project_id) if t.project_id else None,
         "block": str(t.block_id) if t.block_id else None,
         "tags": [str(x) for x in t.tags.values_list("id", flat=True)],
+        "source": t.source,
         "position": t.position, "created_at": t.created_at, "updated_at": t.updated_at,
     }
 

@@ -277,6 +277,8 @@ export interface Task {
 	project: string | null;
 	block: string | null;
 	tags: string[];
+	/** Made from an email or a follow-up nudge (mail/taskbridge.py). */
+	source?: { kind: 'mail' | 'mail_followup'; key: string; subject?: string; from?: string; followup?: number } | null;
 	position: number;
 	created_at: string;
 	updated_at: string;

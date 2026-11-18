@@ -1,5 +1,6 @@
 <script lang="ts">
-	import { ArrowUpRight, Trash2, X } from '@lucide/svelte';
+	import { ArrowUpRight, Mail, Trash2, X } from '@lucide/svelte';
+	import { openEmail } from '../mail/openEmail.ts';
 	import { api } from '../api.ts';
 	import { fmtRecurrence, PRIORITY } from '../learn/util.svelte.ts';
 	import { open } from '../state/tabs.ts';
@@ -44,6 +45,12 @@
 		<a class="src" href="/doc/{task.document}#{task.block}" onclick={(e) => { e.preventDefault(); open(`/doc/${task.document}#${task.block}`, e); }}>
 			Checklist item in {ws.docs[task.document]?.title || 'Untitled'} <ArrowUpRight size={12} />
 		</a>
+	{/if}
+	{#if task.source?.key}
+		<a class="src" href="/mail" onclick={(e) => { e.preventDefault(); openEmail(task.source!.key, e); }}>
+			<Mail size={12} /> {task.source.kind === 'mail_followup' ? 'Follow-up on' : 'Email:'} {task.source.subject || 'the conversation'} <ArrowUpRight size={12} />
+		</a>
+		{#if task.source.kind === 'mail_followup'}<p class="srcnote">Completed automatically when someone replies. Moving the date moves the reminder.</p>{/if}
 	{/if}
 
 	<div class="grid">
@@ -105,6 +112,7 @@
 </aside>
 
 <style>
+	.srcnote { margin: -2px 0 8px; font-size: 12px; color: var(--text-3); }
 	.detail { flex: none; width: 360px; display: flex; flex-direction: column; gap: 8px; padding: 10px 14px 20px; border-left: 1px solid var(--border); background: var(--bg-side); overflow-y: auto; }
 	.head { display: flex; align-items: center; gap: 2px; }
 	.grow { flex: 1; }

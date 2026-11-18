@@ -13,6 +13,8 @@
 	let busy = $state(false);
 	let error = $state('');
 	let pending = $state(false);
+	let code = $state('');
+	let needsCode = $state(false);
 
 	let site = $derived(session.site!);
 	let canSignup = $derived(site.signup_mode !== 'closed');
@@ -28,12 +30,20 @@
 		}
 		busy = true;
 		try {
-			if (mode === 'login') await login(username.trim(), password);
+			if (mode === 'login') await login(username.trim(), password, needsCode ? code.trim() : '');
 			else {
 				const r = await signup(username.trim(), password, email.trim());
 				if (r.pending) pending = true;
 			}
 		} catch (err) {
+			if (err instanceof ApiError && err.data?.needs_code) {
+				// Right password; the second step. (The first time this isn't an error.)
+				if (needsCode) error = err.message;
+				needsCode = true;
+				code = '';
+				setTimeout(() => document.getElementById('kern-2fa-code')?.focus(), 0);
+				return;
+			}
 			error = err instanceof ApiError ? err.message : 'Something went wrong. Try again.';
 		} finally {
 			busy = false;
@@ -79,8 +89,16 @@
 					<input class="input" type="password" bind:value={confirm} autocomplete="new-password" required class:bad={mismatch} />
 				</label>
 			{/if}
+			{#if needsCode && mode === 'login'}
+				<label>
+					<span>Code from your authenticator app</span>
+					<input id="kern-2fa-code" class="input" bind:value={code} inputmode="numeric" autocomplete="one-time-code"
+						placeholder="123 456" required />
+					<small>Or one of your recovery codes.</small>
+				</label>
+			{/if}
 			{#if error}<div class="err" role="alert">{error}</div>{/if}
-			<button class="btn primary go" disabled={busy || !username || !password}>
+			<button class="btn primary go" disabled={busy || !username || !password || (needsCode && !code.trim())}>
 				{#if busy}<Loader size={14} class="spin" />{/if}{mode === 'login' ? 'Sign in' : 'Create account'}{#if !busy}<ArrowRight size={14} />{/if}
 			</button>
 		</form>

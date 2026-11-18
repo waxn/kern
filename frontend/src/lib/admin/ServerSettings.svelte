@@ -5,7 +5,7 @@
 	import { session } from '#lib/state/session.svelte.ts';
 	import { ui } from '#lib/state/ui.svelte.ts';
 
-	interface Cfg { site_name: string; landing_enabled: boolean; signup_mode: 'closed' | 'approval' | 'open'; allow_git: boolean }
+	interface Cfg { site_name: string; landing_enabled: boolean; signup_mode: 'closed' | 'approval' | 'open'; allow_git: boolean; allow_mail: boolean; allow_local_mail: boolean }
 	let cfg = $state<Cfg | null>(null);
 	let name = $state('');
 
@@ -50,6 +50,14 @@
 		<div class="item">
 			<div><b>Git hosting</b><span>Let people host repositories and push to them over HTTP. Turning it off also blocks git clients.</span></div>
 			<Toggle checked={cfg.allow_git} label="Git hosting" onchange={(v) => save({ allow_git: v })} />
+		</div>
+		<div class="item">
+			<div><b>Mail</b><span>Let people connect their own mailbox (Settings → Mail). It needs two-factor sign-in, and the <code>mail</code> service in docker-compose.yml does the syncing.</span></div>
+			<Toggle checked={cfg.allow_mail} label="Mail" onchange={(v) => save({ allow_mail: v })} />
+		</div>
+		<div class="item">
+			<div><b>Mail servers on the local network</b><span>Off: mail servers must have public addresses, so nobody can point Kern at machines on your private network. Turn on only to use a mail server you run at home.</span></div>
+			<Toggle checked={cfg.allow_local_mail} label="Local mail servers" onchange={(v) => save({ allow_local_mail: v })} />
 		</div>
 	</div>
 {:else}

@@ -4,6 +4,7 @@
 	import { logout, session } from '#lib/state/session.svelte.ts';
 	import { ui } from '#lib/state/ui.svelte.ts';
 	import { fullDate } from '#lib/util.ts';
+	import TwoFactorSettings from './TwoFactorSettings.svelte';
 
 	let user = $derived(session.user!);
 	let current = $state('');
@@ -49,6 +50,8 @@
 		<div class="row"><input class="input wide" type="email" bind:value={email} /><button class="btn" onclick={saveEmail} disabled={email === user.email}>Save</button></div>
 	</div>
 </div>
+
+<TwoFactorSettings />
 
 <div class="section-title">Change password</div>
 <form class="group" onsubmit={changePassword}>

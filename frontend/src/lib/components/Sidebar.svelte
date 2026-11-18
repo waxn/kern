@@ -1,6 +1,8 @@
 <script lang="ts">
 	import { page } from '$app/state';
-	import { Calendar, LayoutDashboard, Kanban, Archive, ChevronDown, ChevronRight, CircleCheck, Database, FolderOpen, GitBranch, Hash, House, Layers, LayoutTemplate, Network, PanelLeft, Plus, Search, Settings, Trash2, Globe, LogOut } from '@lucide/svelte';
+	import { Calendar, LayoutDashboard, Kanban, Archive, ChevronDown, ChevronRight, CircleCheck, Database, FolderOpen, GitBranch, Hash, House, Layers, LayoutTemplate, Mail, Network, PanelLeft, Plus, Search, Settings, Trash2, Globe, LogOut } from '@lucide/svelte';
+	import { onMount } from 'svelte';
+	import { mailToday, watchMailToday } from '#lib/mail/badge.svelte.js';
 	import { logout, session } from '#lib/state/session.svelte.ts';
 	import { counts } from '#lib/learn/util.svelte.ts';
 	import { importFiles } from '#lib/data/download.ts';
@@ -19,6 +21,7 @@
 	import TreeNode, { endTreeDrag, treeDragId } from './TreeNode.svelte';
 
 	let roots = $derived(ws.children(null).filter((d) => d.kind !== 'group'));
+	onMount(() => watchMailToday());
 	let path = $derived(page.url.pathname);
 	let resizing = $state(false);
 
@@ -143,6 +146,11 @@
 		<a class="nav" class:active={path === '/tasks'} href="/tasks" onclick={(e) => nav(e, '/tasks')}>
 			<CircleCheck size={15} strokeWidth={1.75} /><span>Tasks</span>{#if counts.today}<em class="badge">{counts.today}</em>{/if}
 		</a>
+		{#if session.site?.allow_mail !== false}
+			<a class="nav" class:active={path.startsWith('/mail')} href="/mail/inbox" onclick={(e) => nav(e, '/mail/inbox')}>
+				<Mail size={15} strokeWidth={1.75} /><span>Mail</span>{#if mailToday.data?.unread}<em class="badge">{mailToday.data.unread}</em>{/if}
+			</a>
+		{/if}
 		<a class="nav" class:active={path === '/cards' || path === '/review'} href="/cards" onclick={(e) => nav(e, '/cards')}>
 			<Layers size={15} strokeWidth={1.75} /><span>Flashcards</span>{#if counts.due}<em class="badge">{counts.due}</em>{/if}
 		</a>

@@ -16,10 +16,11 @@
 	import ServerSettings from '#lib/admin/ServerSettings.svelte';
 	import UsersSettings from '#lib/admin/UsersSettings.svelte';
 	import { session } from '#lib/state/session.svelte.ts';
+	import MailSettings from '#lib/mail/MailSettings.svelte';
 
-	type Section = 'appearance' | 'editor' | 'workspace' | 'flashcards' | 'ai' | 'shortcuts' | 'data' | 'account' | 'users' | 'server';
+	type Section = 'appearance' | 'editor' | 'workspace' | 'flashcards' | 'mail' | 'ai' | 'shortcuts' | 'data' | 'account' | 'users' | 'server';
 	const sections: [Section, string][] = $derived([
-		['appearance', 'Appearance'], ['editor', 'Editor'], ['workspace', 'Workspace'], ['flashcards', 'Flashcards'],
+		['appearance', 'Appearance'], ['editor', 'Editor'], ['workspace', 'Workspace'], ['flashcards', 'Flashcards'], ['mail', 'Mail'],
 		['ai', 'AI'], ['shortcuts', 'Keyboard'], ['data', 'Data & backups'], ['account', 'Account'],
 		...(session.user?.is_admin ? ([['users', 'Users'], ['server', 'Server']] as [Section, string][]) : [])
 	]);
@@ -285,6 +286,8 @@
 				<div class="item"><div><b>Export cards</b><span>All cards, for spreadsheets or Anki.</span></div>
 					<div class="row"><button class="btn" onclick={() => download('/export/cards?as=csv')}>CSV</button><button class="btn" onclick={() => download('/export/cards?as=apkg')}>Anki (.apkg)</button></div></div>
 			</div>
+		{:else if section === 'mail'}
+			<MailSettings />
 		{:else if section === 'ai'}
 			<div class="aihead"><Sparkle size={22} /><div><b>AI assistant</b><span>Optional. Generates flashcards and templates, and writes in pages when you type <kbd>/</kbd> then <kbd>Space</kbd>. Nothing is sent anywhere until you set a provider and use it.</span></div>
 				{#if ai.config?.configured}<span class="chip" data-c="green">Ready</span>{:else}<span class="chip">Not set up</span>{/if}</div>

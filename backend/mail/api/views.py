@@ -373,6 +373,7 @@ def thread_detail(request, pk: int):
         for d in Draft.objects.filter(status=DraftStatus.SCHEDULED, in_reply_to__thread=t).order_by("send_at")
     ]
     return {
+        "tasks": tasks_for_keys({m.message_key for m in msgs}),
         "scheduled": scheduled,
         "packages": ships,
         "thread": thread_json(t, snoozes=snooze.active_for_threads([t.id]), fups=followups.open_for_threads([t.id]),
@@ -610,8 +611,10 @@ def followup_action(request, pk: int):
 
     f = FollowUp.objects.get(pk=pk)
     data = body(request)
-    if data.get("action") == "done":
-        f.status = FollowUpStatus.DONE
+    if data.get("action") == "done":  # "I've dealt with it": its task is completed
+        followups.close(f, FollowUpStatus.DONE)
+    elif data.get("action") == "cancel":  # "don't nudge me after all": its task is removed
+        followups.close(f, FollowUpStatus.CANCELLED)
     elif data.get("action") == "later":
         try:
             until = datetime.fromisoformat(str(data.get("until", "")))
@@ -619,10 +622,9 @@ def followup_action(request, pk: int):
             raise ApiError("Pick a time.") from None
         if timezone.is_naive(until) or until <= timezone.now():
             raise ApiError("Pick a time in the future.")
-        f.status, f.due_at = FollowUpStatus.WAITING, until
+        followups.move(f, until)
     else:
         raise ApiError("Unknown action.")
-    f.save()
     return followup_json(f)
 
 
@@ -1167,3 +1169,87 @@ def changes(request):
         "events": [{"id": i, "kind": k, **(d or {})} for i, k, d in rows],
         "more": len(rows) == 200,
     }
+
+
+# --- Kern tasks and Home -------------------------------------------------------
+
+@api(("POST",))
+def thread_task(request, pk: int):
+    """Make a Kern task from this conversation (mail/taskbridge.py)."""
+    import datetime as _dt
+
+    from notes import tasks as ntasks
+
+    from .. import taskbridge
+
+    t = Thread.objects.get(pk=pk)
+    data = body(request)
+    due = None
+    if data.get("due"):
+        try:
+            due = _dt.date.fromisoformat(str(data["due"])[:10])
+        except ValueError:
+            raise ApiError("Dates look like 2026-11-20.") from None
+    try:
+        prio = max(0, min(3, int(data.get("priority") or 0)))
+    except (TypeError, ValueError):
+        prio = 0
+    task = taskbridge.task_for_thread(t, title=str(data.get("title") or "").strip()[:500], due=due, priority=prio)
+    from .. import events
+    events.emit("update", threads=[t.pk])
+    return ntasks.task_json(task)
+
+
+def tasks_for_keys(keys) -> list[dict]:
+    from notes import tasks as ntasks
+    from notes.models import Task
+
+    keys = [k for k in keys if k]
+    if not keys:
+        return []
+    return [ntasks.task_json(x) for x in Task.objects.filter(source__key__in=keys).order_by("done", "due")[:20]]
+
+
+@api()
+def open_by_key(request):
+    """A task's link back to its email: Message-ID -> the conversation now."""
+    key = request.GET.get("key", "").strip()[:998]
+    tid = Message.objects.filter(message_key=key, thread__isnull=False).exclude(
+        folder__role=FolderRole.TRASH).values_list("thread_id", flat=True).first() or \
+        Message.objects.filter(message_key=key, thread__isnull=False).values_list("thread_id", flat=True).first()
+    if not tid:
+        raise ApiError("That email isn't here any more (deleted, or not downloaded yet).", 404, "not_found")
+    return {"threadId": tid}
+
+
+@api()
+def today(request):
+    """Mail for Kern's Home: what's waiting, coming back and arriving today."""
+    from .. import account
+    from ..models import Draft, DraftStatus, FollowUp, FollowUpStatus, Shipment, Snooze, SnoozeStatus
+
+    if not account.cfg()["USERNAME"]:
+        return {"connected": False}
+    now = timezone.now()
+    end = timezone.localtime(now).replace(hour=23, minute=59, second=59)
+    inbox = Folder.objects.filter(role=FolderRole.INBOX).first()
+    unread = 0
+    if inbox:
+        unread = Message.objects.filter(folder=inbox, seen=False).values("thread_id").distinct().count()
+    important = []
+    if inbox:
+        for m in (Message.objects.filter(folder=inbox, seen=False).exclude(risk_level="high")
+                  .order_by("-sort_date").select_related("thread")[:5]):
+            important.append({"threadId": m.thread_id, "subject": m.subject, "from": m.from_name or m.from_addr,
+                              "date": iso(m.sort_date)})
+    snoozes = [{"threadId": s.thread_id, "subject": s.subject, "until": iso(s.wake_at)}
+               for s in Snooze.objects.filter(status=SnoozeStatus.ACTIVE, wake_at__lte=end).order_by("wake_at")[:10]]
+    nudged = [{"threadId": f.thread_id, "subject": f.subject, "id": f.pk}
+              for f in FollowUp.objects.filter(status=FollowUpStatus.NUDGED).order_by("due_at")[:10]]
+    ships = []
+    for s in Shipment.objects.filter(hidden=False).exclude(status="delivered"):
+        if s.status in ("out_for_delivery", "ready_for_pickup") or (s.expected and s.expected <= end.date()):
+            ships.append(shipment_json(s))
+    scheduled = Draft.objects.filter(status=DraftStatus.SCHEDULED, send_at__lte=end).count()
+    return {"connected": True, "unread": unread, "latest": important, "snoozes": snoozes, "nudged": nudged,
+            "packages": ships[:10], "scheduledToday": scheduled}

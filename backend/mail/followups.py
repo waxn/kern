@@ -14,7 +14,7 @@ from datetime import timedelta
 from django.db.models import Q
 from django.utils import timezone
 
-from . import events
+from . import events, taskbridge
 from .identity import my_addresses
 from .models import FollowUp, FollowUpStatus, Message, Thread
 
@@ -51,21 +51,40 @@ def create_for_thread(thread: Thread, until) -> FollowUp:
     mine = Message.objects.filter(thread=thread, from_addr__in=me).order_by("-sort_date").first()
     if mine is None:
         raise FollowUpError("Nudges are for conversations where you've written something.")
-    FollowUp.objects.filter(thread=thread, status__in=OPEN).update(status=FollowUpStatus.CANCELLED)
-    return FollowUp.objects.create(
+    for old in FollowUp.objects.filter(thread=thread, status__in=OPEN):
+        close(old, FollowUpStatus.CANCELLED)
+    f = FollowUp.objects.create(
         thread=thread, message_key=mine.message_key, subject=thread.subject[:2000],
         recipients=(mine.to_addrs or [])[:10], sent_at=mine.sort_date, due_at=until,
     )
+    taskbridge.task_for_followup(f)
+    return f
 
 
 def create_for_sent_draft(draft, sent_at) -> FollowUp | None:
     if not draft.followup_at:
         return None
     thread = draft.in_reply_to.thread if draft.in_reply_to_id and draft.in_reply_to else None
-    return FollowUp.objects.create(
+    f = FollowUp.objects.create(
         thread=thread, message_key=draft.message_id, subject=draft.subject[:2000],
         recipients=(draft.to_addrs or [])[:10], sent_at=sent_at, due_at=draft.followup_at,
     )
+    taskbridge.task_for_followup(f)
+    return f
+
+
+def close(f: FollowUp, status: str) -> None:
+    """End a follow-up and its task: DONE after a reply (task completed),
+    CANCELLED by the user (task removed)."""
+    FollowUp.objects.filter(pk=f.pk).update(status=status)
+    f.status = status
+    taskbridge.followup_closed(f, replied=status == FollowUpStatus.DONE)
+
+
+def move(f: FollowUp, until) -> None:
+    FollowUp.objects.filter(pk=f.pk).update(status=FollowUpStatus.WAITING, due_at=until)
+    f.status, f.due_at = FollowUpStatus.WAITING, until
+    taskbridge.followup_moved(f)
 
 
 def check_due(now=None) -> int:
@@ -73,8 +92,7 @@ def check_due(now=None) -> int:
     nudged = 0
     for f in FollowUp.objects.filter(status=FollowUpStatus.WAITING, due_at__lte=now)[:100]:
         if has_reply(f):
-            f.status = FollowUpStatus.DONE
-            f.save(update_fields=["status"])
+            close(f, FollowUpStatus.DONE)
             continue
         f.status = FollowUpStatus.NUDGED
         f.nudged_at = now
@@ -89,9 +107,11 @@ def on_new_message(message: Message) -> None:
     if message.thread_id is None or message.from_addr in my_addresses():
         return
     keys = set(Message.objects.filter(thread_id=message.thread_id).values_list("message_key", flat=True))
-    closed = FollowUp.objects.filter(status__in=OPEN).filter(
+    closed = list(FollowUp.objects.filter(status__in=OPEN).filter(
         Q(thread_id=message.thread_id) | Q(message_key__in=keys)
-    ).update(status=FollowUpStatus.DONE)
+    ))
+    for f in closed:
+        close(f, FollowUpStatus.DONE)
     if closed:
         events.emit("update", threads=[message.thread_id])
 

@@ -1,5 +1,8 @@
 {
 	"extends": "$app/tsconfig",
+	// The mail module (src/lib/mail) is plain JavaScript ported from Manifest and tested with
+	// `npm test`; Kern's own code is TypeScript and stays fully checked.
+	"compilerOptions": { "checkJs": false },
 	"include": ["src", "*"],
 	"exclude": ["src/service-worker"]
 }

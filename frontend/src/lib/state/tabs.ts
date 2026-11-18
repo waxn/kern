@@ -12,6 +12,7 @@ export function tabInfo(path: string): { title: string; icon: string } {
 	if (tag) return { title: '#' + (ws.tagMap[tag[1]]?.name ?? 'tag'), icon: '' };
 	const repo = path.match(/^\/git\/([^/]+)/);
 	if (repo) return { title: repo[1], icon: '' };
+	if (path === '/mail' || path.startsWith('/mail/')) return { title: 'Mail', icon: '' };
 	const names: Record<string, string> = {
 		'/': 'Home', '/tags': 'Tags', '/trash': 'Trash', '/archive': 'Archive', '/settings': 'Settings',
 		'/templates': 'Templates', '/graph': 'Graph', '/tasks': 'Tasks', '/cards': 'Flashcards', '/review': 'Review',

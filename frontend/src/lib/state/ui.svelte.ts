@@ -64,10 +64,22 @@ class UI {
 		});
 	}
 
-	toast(message: string, opts: { kind?: 'info' | 'error'; action?: Toast['action'] } = {}) {
+	toast(message: string, opts: { kind?: 'info' | 'error'; action?: Toast['action']; timeout?: number } = {}): number {
 		const id = ++this.seq;
 		this.toasts.push({ id, message, kind: opts.kind ?? 'info', action: opts.action });
-		setTimeout(() => this.dismiss(id), opts.action ? 7000 : 4000);
+		const ms = opts.timeout ?? (opts.action ? 7000 : 4000);
+		if (ms) setTimeout(() => this.dismiss(id), ms);
+		return id;
+	}
+
+	/** Change a toast that is still showing (e.g. "Sending…" → "Message sent"). */
+	update(id: number, patch: { message?: string; kind?: 'info' | 'error'; action?: Toast['action'] | null; timeout?: number }) {
+		const t = this.toasts.find((x) => x.id === id);
+		if (!t) return;
+		if (patch.message !== undefined) t.message = patch.message;
+		if (patch.kind) t.kind = patch.kind;
+		if (patch.action !== undefined) t.action = patch.action ?? undefined;
+		if (patch.timeout) setTimeout(() => this.dismiss(id), patch.timeout);
 	}
 
 	error(e: unknown) {

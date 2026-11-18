@@ -41,6 +41,7 @@ export const SHORTCUT_ACTIONS: [string, string, string][] = [
 	['nextTab', 'Next tab', 'Alt+]'],
 	['prevTab', 'Previous tab', 'Alt+['],
 	['tasks', 'Open tasks', 'Alt+T'],
+	['mail', 'Open mail', 'Alt+M'],
 	['review', 'Review flashcards', 'Alt+R'],
 	['home', 'Go home', 'Alt+H']
 ];

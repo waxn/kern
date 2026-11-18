@@ -8,6 +8,7 @@ export interface User {
 	is_active: boolean;
 	date_joined: string;
 	last_login: string | null;
+	two_factor?: boolean;
 }
 
 export interface Site {
@@ -16,6 +17,7 @@ export interface Site {
 	landing_enabled: boolean;
 	signup_mode: 'closed' | 'open' | 'approval';
 	allow_git: boolean;
+	allow_mail?: boolean;
 	user: User | null;
 }
 
@@ -78,8 +80,9 @@ export async function wipeLocal() {
 	}
 }
 
-export async function login(username: string, password: string) {
-	const site = await api.post<Site>('/auth/login', { username, password });
+/** Signs in. With two-factor on, the server answers 401 + needs_code until a code is given. */
+export async function login(username: string, password: string, code = '') {
+	const site = await api.post<Site>('/auth/login', code ? { username, password, code } : { username, password });
 	enter(site);
 }
 

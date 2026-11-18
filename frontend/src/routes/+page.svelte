@@ -12,6 +12,7 @@
 	import { ws } from '#lib/state/workspace.svelte.ts';
 	import type { Doc } from '#lib/types.ts';
 	import { modKey, relTime } from '#lib/util.ts';
+	import HomeMail from '#lib/mail/HomeMail.svelte';
 
 	let edited = $derived(
 		Object.values(ws.docs).filter((d) => !d.is_archived && !d.empty).sort((a, b) => (b.updated_at > a.updated_at ? 1 : -1)).slice(0, 14)
@@ -78,6 +79,8 @@
 				{/if}
 			</div>
 		{/if}
+
+		<HomeMail />
 
 		{#if ws.loaded && total === 0}
 			<div class="empty" style="margin-top:28px">

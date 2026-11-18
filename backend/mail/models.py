@@ -340,6 +340,8 @@ class FollowUp(models.Model):
     due_at = models.DateTimeField(db_index=True)
     status = models.CharField(max_length=16, choices=FollowUpStatus.choices, default=FollowUpStatus.WAITING, db_index=True)
     nudged_at = models.DateTimeField(null=True, blank=True)
+    # The Kern task that stands for this follow-up (mail/taskbridge.py).
+    task_id = models.CharField(max_length=36, blank=True, default="")
     created = models.DateTimeField(auto_now_add=True)
 
     class Meta:
