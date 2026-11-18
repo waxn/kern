@@ -1,0 +1,76 @@
+# Brands that phishers commonly imitate. `domains` are the brand's REAL
+# sending domains (any subdomain counts). `aliases` are extra names matched
+# in the From display name. Add your bank, your employer, etc.
+
+- name: PayPal
+  domains: [paypal.com, paypal.me, paypal-communication.com, paypal.de, paypal.co.uk, paypal.fr, paypal.se]
+- name: Apple
+  aliases: [iCloud, App Store, iTunes, Apple ID]
+  domains: [apple.com, icloud.com, me.com, mac.com, itunes.com, apple.news]
+- name: Microsoft
+  aliases: [Outlook, Office 365, Microsoft 365, OneDrive, Teams, Xbox]
+  domains: [microsoft.com, microsoftonline.com, outlook.com, office.com, office365.com, live.com, hotmail.com, onedrive.com, xbox.com, microsoftstore.com, skype.com, sharepoint.com]
+- name: Google
+  aliases: [Gmail, Google Drive, Google Workspace, YouTube]
+  domains: [google.com, gmail.com, googlemail.com, youtube.com, accounts.google.com, googleusercontent.com]
+- name: Amazon
+  aliases: [AWS, Prime Video, Amazon Prime]
+  domains: [amazon.com, amazon.co.uk, amazon.de, amazon.fr, amazon.it, amazon.es, amazon.se, amazon.nl, amazon.ca, amazon.com.au, amazon.co.jp, amazon.in, amazonses.com, aws.amazon.com, amazonaws.com, primevideo.com]
+- name: Netflix
+  domains: [netflix.com, mailer.netflix.com]
+- name: Facebook
+  aliases: [Meta, Instagram, WhatsApp, Messenger]
+  domains: [facebook.com, facebookmail.com, meta.com, instagram.com, whatsapp.com, fb.com, metamail.com]
+- name: LinkedIn
+  domains: [linkedin.com]
+- name: DHL
+  domains: [dhl.com, dhl.de, dhl.se, dhl.co.uk, dhl.fr, dhl.nl]
+- name: FedEx
+  domains: [fedex.com]
+- name: UPS
+  domains: [ups.com]
+- name: USPS
+  domains: [usps.com, usps.gov]
+- name: PostNord
+  domains: [postnord.com, postnord.se, postnord.dk]
+- name: DocuSign
+  domains: [docusign.com, docusign.net]
+- name: Dropbox
+  domains: [dropbox.com, dropboxmail.com]
+- name: Adobe
+  aliases: [Acrobat]
+  domains: [adobe.com, adobesign.com, mail.adobe.com]
+- name: Coinbase
+  domains: [coinbase.com]
+- name: Binance
+  domains: [binance.com]
+- name: Stripe
+  domains: [stripe.com]
+- name: Revolut
+  domains: [revolut.com]
+- name: Wise
+  aliases: [TransferWise]
+  domains: [wise.com, transferwise.com]
+- name: Chase
+  domains: [chase.com, jpmorgan.com]
+- name: Wells Fargo
+  domains: [wellsfargo.com]
+- name: Bank of America
+  domains: [bankofamerica.com, bofa.com]
+- name: Steam
+  aliases: [Valve]
+  domains: [steampowered.com, steamcommunity.com, valvesoftware.com]
+- name: Spotify
+  domains: [spotify.com]
+- name: GitHub
+  domains: [github.com, githubusercontent.com]
+- name: Zoom
+  domains: [zoom.us, zoom.com]
+- name: Norton
+  domains: [norton.com, nortonlifelock.com, gen.digital]
+- name: McAfee
+  domains: [mcafee.com]
+- name: Purelymail
+  domains: [purelymail.com]
+- name: IRS
+  domains: [irs.gov]

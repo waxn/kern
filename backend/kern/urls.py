@@ -6,6 +6,7 @@ from notes.views_git import git_entry
 urlpatterns = [
     path("api/", include("accounts.urls")),
     path("api/", include("notes.urls")),
+    path("api/mail/", include("mail.api.urls")),
     # Git smart-HTTP protocol (clone/fetch/push). Lives outside /api on purpose: git
     # clients cannot send the X-Kern header that ApiGuardMiddleware requires there.
     re_path(r"^git/(?P<subpath>.+)$", git_entry),

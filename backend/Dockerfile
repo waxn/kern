@@ -1,4 +1,5 @@
-FROM python:3.13-slim
+# 3.14: the mail worker uses imaplib IDLE (added in 3.14).
+FROM python:3.14-slim
 
 ENV PYTHONDONTWRITEBYTECODE=1 PYTHONUNBUFFERED=1 KERN_DATA_DIR=/data
 WORKDIR /app
@@ -15,4 +16,4 @@ VOLUME /data
 EXPOSE 8000
 
 # Starts as root only long enough to fix the data volume's ownership, then drops to "kern".
-CMD ["/app/entrypoint.sh"]
+ENTRYPOINT ["/app/entrypoint.sh"]

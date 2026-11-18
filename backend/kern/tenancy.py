@@ -117,6 +117,7 @@ def ensure_db(uid: int) -> str:
             cfg["NAME"] = d / "kern.sqlite3"
             connections.settings[alias] = cfg
         call_command("migrate", "notes", database=alias, interactive=False, verbosity=0)
+        call_command("migrate", "mail", database=alias, interactive=False, verbosity=0)
         _ready.add(alias)
     return alias
 

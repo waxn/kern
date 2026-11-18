@@ -5,12 +5,12 @@ from pathlib import Path
 import sys
 
 BASE_DIR = Path(__file__).resolve().parent.parent
-if "test" in sys.argv:
+if "test" in sys.argv or os.environ.get("KERN_TESTING") == "1":
     os.environ.setdefault("KERN_NO_AUTO_BACKUP", "1")
 DATA_DIR = Path(os.environ.get("KERN_DATA_DIR", BASE_DIR / "data"))
 DATA_DIR.mkdir(parents=True, exist_ok=True)
 # Each user's database, files and repositories live in DATA_DIR/users/<id>/ (see kern/tenancy.py).
-KERN_TESTING = "test" in sys.argv
+KERN_TESTING = "test" in sys.argv or os.environ.get("KERN_TESTING") == "1"
 HTTPS = os.environ.get("KERN_HTTPS", "0") == "1"  # served over HTTPS (by a proxy in front)
 
 
@@ -36,6 +36,7 @@ INSTALLED_APPS = [
     "rest_framework",
     "accounts",
     "notes",
+    "mail",
 ]
 
 MIDDLEWARE = [
@@ -45,6 +46,7 @@ MIDDLEWARE = [
     "django.contrib.auth.middleware.AuthenticationMiddleware",
     "kern.middleware.ApiGuardMiddleware",
     "kern.middleware.AccessMiddleware",
+    "mail.api.guard.MailGuardMiddleware",
 ]
 
 # ---- accounts and sessions
@@ -111,3 +113,22 @@ REST_FRAMEWORK = {
 
 # Extra host names (comma separated) allowed as the Origin of writes, e.g. when a proxy rewrites Host.
 KERN_TRUSTED_HOSTS = os.environ.get("KERN_TRUSTED_HOSTS", "").split(",")
+
+# ---- mail (mail/): each user connects their own account in Settings → Mail.
+# Processing pipeline for incoming mail, in order (see mail/pipeline/).
+MAIL_PIPELINE = [
+    "mail.pipeline.stages.RiskStage",
+    "mail.pipeline.stages.ContactsStage",
+    "mail.pipeline.stages.BlockListStage",
+    "mail.pipeline.stages.PackageStage",
+    "mail.pipeline.stages.MuteStage",
+    "mail.pipeline.stages.SnoozeReplyStage",
+]
+RISK_RULES_FILE = os.environ.get("KERN_RISK_RULES_FILE", str(BASE_DIR / "mail" / "risk" / "rules.yaml"))
+IMAGE_PROXY_MAX_BYTES = 10 * 1024 * 1024
+MAX_ATTACHMENT_BYTES = int(os.environ.get("KERN_MAIL_MAX_ATTACHMENT_MB", "25")) * 1024 * 1024
+MAIL_TUNING = {
+    "POLL_SECONDS": int(os.environ.get("KERN_MAIL_POLL_SECONDS", "120")),
+    "FETCH_BATCH": int(os.environ.get("KERN_MAIL_FETCH_BATCH", "50")),
+}
+

@@ -18,7 +18,7 @@ from rest_framework.response import Response
 
 from kern import tenancy
 
-from . import site, throttle
+from . import site, throttle, totp
 from .auth import IsAdmin
 
 BACKEND = "django.contrib.auth.backends.ModelBackend"
@@ -34,6 +34,7 @@ def user_json(u: User) -> dict:
     return {
         "id": u.id, "username": u.username, "email": u.email, "is_admin": u.is_staff,
         "is_active": u.is_active, "date_joined": u.date_joined, "last_login": u.last_login,
+        "two_factor": totp.enabled(u),
     }
 
 
@@ -47,6 +48,7 @@ def site_json(request, user=None) -> dict:
         "landing_enabled": cfg["landing_enabled"],
         "signup_mode": cfg["signup_mode"],
         "allow_git": cfg["allow_git"],
+        "allow_mail": cfg["allow_mail"],
         "user": user_json(u) if signed_in else None,
     }
 
@@ -263,9 +265,23 @@ def login_view(request):
         return bad("Wrong username or password.", 401)
     if not user.is_active:
         return bad("This account is waiting for an administrator's approval, or has been disabled.", 403)
+    second = False
+    if totp.enabled(user):
+        code = str(data.get("code") or "").strip()[:64]
+        if not code:
+            # Right password; ask for the second step. Not counted as a failure.
+            return bad("Enter the code from your authenticator app.", 401, needs_code=True)
+        kind = totp.check_code(user, code)
+        if not kind:
+            throttle.fail(ukey, 8)
+            throttle.fail(ikey, 60)
+            return bad("That code didn't work. Codes change every 30 seconds.", 401, needs_code=True)
+        second = True
     throttle.clear(ukey)
     tenancy.ensure_db(user.id)
     sign_in(request, user)
+    if second:
+        totp.mark_session(request._request)
     return Response(site_json(request, user))
 
 
@@ -437,3 +453,105 @@ def admin_site(request):
         except ValueError as e:
             return bad(str(e))
     return Response(site.get_all())
+
+
+# ------------------------------------------------------------------ two-factor sign-in
+
+
+def _mail_connected(user) -> bool:
+    try:
+        with tenancy.use(user.id):
+            from mail.models import MailAccount
+
+            return MailAccount.objects.filter(enabled=True).exists()
+    except Exception:
+        return False
+
+
+def _check_password_step(request, user, data) -> Response | None:
+    key = f"2fa:{user.id}"
+    wait = throttle.locked(key)
+    if wait:
+        return bad("Too many attempts. Try again later.", 429, retry_after=wait)
+    if not user.check_password(str(data.get("password") or "")):
+        throttle.fail(key, 6)
+        return bad("Your password is wrong.", 403)
+    return None
+
+
+@api_view(["GET"])
+def two_factor(request):
+    u = request.user
+    d = totp.device(u)
+    return Response({
+        "enabled": bool(d and d.confirmed),
+        "recovery_left": totp.recovery_left(u) if d and d.confirmed else 0,
+        "session_verified": totp.session_verified(request._request),
+        "mail_connected": _mail_connected(u),
+    })
+
+
+@api_view(["POST"])
+def two_factor_setup(request):
+    """Step 1: password again, then a new secret + QR code to scan."""
+    u, data = request.user, request.data if isinstance(request.data, dict) else {}
+    if totp.enabled(u):
+        return bad("Two-factor sign-in is already on. Turn it off first to use a new authenticator.", 409)
+    err = _check_password_step(request, u, data)
+    if err:
+        return err
+    secret, uri = totp.start_setup(u)
+    return Response({"secret": secret, "uri": uri, "qr_svg": totp.qr_svg(uri)})
+
+
+@api_view(["POST"])
+def two_factor_confirm(request):
+    """Step 2: a first code from the app turns it on. Other sessions are signed out."""
+    u, data = request.user, request.data if isinstance(request.data, dict) else {}
+    key = f"2fa:{u.id}"
+    if throttle.locked(key):
+        return bad("Too many attempts. Try again later.", 429)
+    d = totp.device(u)
+    if d is None or d.confirmed:
+        return bad("Start the setup first.", 409)
+    if not totp.verify(u, str(data.get("code") or ""), allow_unconfirmed=True):
+        throttle.fail(key, 6)
+        return bad("That code didn't work. Check the time on your phone and try again.")
+    d.refresh_from_db()
+    d.confirmed = True
+    d.save(update_fields=["confirmed"])
+    codes = totp.new_recovery_codes(u)
+    totp.mark_session(request._request)
+    signed_out = totp.end_other_sessions(u, request._request.session.session_key)
+    throttle.clear(key)
+    return Response({"enabled": True, "recovery_codes": codes, "signed_out": signed_out})
+
+
+@api_view(["POST"])
+def two_factor_disable(request):
+    u, data = request.user, request.data if isinstance(request.data, dict) else {}
+    if not totp.enabled(u):
+        return Response({"enabled": False})
+    if _mail_connected(u):
+        return bad("Mail needs two-factor sign-in. Disconnect your mail account first (Settings → Mail).", 409)
+    err = _check_password_step(request, u, data)
+    if err:
+        return err
+    if not totp.check_code(u, str(data.get("code") or "")):
+        throttle.fail(f"2fa:{u.id}", 6)
+        return bad("That code didn't work.", 403)
+    totp.disable(u)
+    request._request.session.pop(totp.SESSION_KEY, None)
+    return Response({"enabled": False})
+
+
+@api_view(["POST"])
+def two_factor_recovery(request):
+    """New recovery codes (the old ones stop working)."""
+    u, data = request.user, request.data if isinstance(request.data, dict) else {}
+    if not totp.enabled(u):
+        return bad("Two-factor sign-in is off.", 409)
+    err = _check_password_step(request, u, data)
+    if err:
+        return err
+    return Response({"recovery_codes": totp.new_recovery_codes(u)})

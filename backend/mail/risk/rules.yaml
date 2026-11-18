@@ -1,0 +1,34 @@
+# Phishing risk rule weights. Scores add up per message.
+#   score >= medium  -> "medium" risk badge
+#   score >= high    -> "high" risk badge
+# Set `enabled: false` to turn a rule off, or change its weight. Negative
+# weights lower the score. Rule logic lives in mail/risk/rules.py.
+#
+# To use your own copy without rebuilding, mount a file and point
+# RISK_RULES_FILE at it. After editing, rescore existing mail:
+#   docker compose run --rm app python manage.py reprocess --stage risk
+
+thresholds:
+  medium: 30
+  high: 60
+
+rules:
+  dmarc_fail:                 { weight: 45 }
+  spf_fail:                   { weight: 20 }
+  spf_softfail:               { weight: 8 }
+  dkim_fail:                  { weight: 15 }
+  unauthenticated:            { weight: 15 }
+  no_auth_results:            { weight: 5 }
+  reply_to_mismatch:          { weight: 20 }
+  return_path_mismatch:       { weight: 8 }
+  brand_impersonation:        { weight: 50 }
+  brand_lookalike_domain:     { weight: 50 }
+  contact_lookalike_domain:   { weight: 45 }
+  contact_impersonation:      { weight: 45 }
+  display_name_address:       { weight: 35 }
+  idn_domain:                 { weight: 25 }
+  first_time_sender:          { weight: 10 }
+  trusted_correspondent:      { weight: -20 }
+  link_text_mismatch:         { weight: 30 }
+  link_ip:                    { weight: 20 }
+  dangerous_attachment:       { weight: 35 }

@@ -13,6 +13,8 @@ DEFAULTS = {
     "landing_enabled": False,   # show a public landing page at / to people who are not signed in
     "signup_mode": "closed",    # closed | open | approval
     "allow_git": True,          # let users host git repositories
+    "allow_mail": True,         # let users connect a mail account (mail/)
+    "allow_local_mail": False,  # allow mail servers on private addresses (mail/hosts.py)
 }
 SIGNUP_MODES = ("closed", "open", "approval")
 
@@ -31,7 +33,7 @@ def update(values: dict) -> dict:
     if "site_name" in values:
         name = str(values["site_name"] or "").strip()[:60]
         clean["site_name"] = name or DEFAULTS["site_name"]
-    for k in ("landing_enabled", "allow_git"):
+    for k in ("landing_enabled", "allow_git", "allow_mail", "allow_local_mail"):
         if k in values:
             clean[k] = bool(values[k])
     if "signup_mode" in values:

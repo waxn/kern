@@ -25,6 +25,20 @@ services:
       start_period: 30s
       start_interval: 2s
 
+  # Keeps every connected mailbox in sync (Settings → Mail): IMAP IDLE for new mail,
+  # periodic folder checks, and sending. Same image as the backend, its own process.
+  mail:
+    build: ./backend
+    command: ["mail-worker"]
+    restart: unless-stopped
+    depends_on:
+      backend:
+        condition: service_healthy
+    environment:
+      KERN_DATA_DIR: /data
+    volumes:
+      - kern_data:/data
+
   web:
     build: ./frontend
     restart: unless-stopped

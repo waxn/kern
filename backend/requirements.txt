@@ -6,3 +6,9 @@ requests==2.34.2
 anthropic==2.8.0
 yt-dlp[default]==2026.10.26
 deno==2.9.8
+# mail (mail/): two-factor sign-in, encrypted secrets, risk rules, sender domains
+pyotp==2.12.0
+qrcode==8.2
+cryptography==50.0.2
+PyYAML==6.0.3
+publicsuffixlist==1.1.2.20261118

@@ -150,6 +150,9 @@ def create(kind: str = "manual", downloads: bool | None = None) -> dict:
             dst = sqlite3.connect(snap)
             with dst:
                 tenancy.conn().connection.backup(dst)  # consistent even while the app is writing
+            from mail import lifecycle as mail_lifecycle
+            mail_lifecycle.scrub_backup(dst)  # downloaded messages stay out (they're on the mail server)
+            dst.execute("VACUUM")
             dst.close()
             from .models import Attachment, Card, Document
             from .models_web import WebArchive
@@ -315,6 +318,9 @@ def restore(zip_path, safety: bool = True) -> dict:
             if git_tmp:
                 shutil.rmtree(git_tmp, ignore_errors=True)
     call_command("migrate", "notes", database=tenancy.current_alias(), interactive=False, verbosity=0)  # backups from older versions
+    call_command("migrate", "mail", database=tenancy.current_alias(), interactive=False, verbosity=0)
+    from mail import lifecycle as mail_lifecycle
+    mail_lifecycle.after_restore()
     _forget_missing_videos()
     return {"restored": manifest, "contents": contents, "safety_backup": safety_copy["name"] if safety_copy else None}
 

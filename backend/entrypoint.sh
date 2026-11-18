@@ -18,6 +18,11 @@ if ! touch "${KERN_DATA_DIR:-/data}/.write-test" 2>/dev/null; then
 fi
 rm -f "${KERN_DATA_DIR:-/data}/.write-test"
 
+if [ "${1:-}" = "mail-worker" ]; then
+	# The mail service (docker-compose.yml): the backend has already migrated everything.
+	exec python manage.py mail_worker
+fi
+
 python manage.py kern_boot
 exec gunicorn kern.wsgi:application --bind 0.0.0.0:8000 --workers 2 --threads 4 --timeout 600 \
 	--no-control-socket --access-logfile - --error-logfile -

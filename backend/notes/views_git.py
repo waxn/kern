@@ -221,7 +221,11 @@ def _basic_user(request):
     user = User.objects.filter(username__iexact=name).first() if name else None
     ok = False
     if user is not None and user.is_active:
-        ok = user.check_password(pw)
+        from accounts import totp
+
+        # With two-factor sign-in on, the account password alone is not enough: git
+        # clients can't send a code, so only the separate git password works.
+        ok = (not totp.enabled(user)) and user.check_password(pw)
         if not ok:
             with tenancy.use(user.id):
                 s = Setting.objects.filter(key=AUTH_KEY).first()
