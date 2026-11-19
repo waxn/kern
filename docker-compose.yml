@@ -12,6 +12,9 @@ services:
       # Set KERN_HTTPS=1 when Kern is served over HTTPS by a proxy in front of it.
       KERN_HTTPS: ${KERN_HTTPS:-0}
       KERN_TRUSTED_HOSTS: ${KERN_TRUSTED_HOSTS:-}
+      # Used to build ssh:// clone URLs (host defaults to the one you browse Kern with).
+      KERN_SSH_HOST: ${KERN_SSH_HOST:-}
+      KERN_SSH_PORT: ${KERN_SSH_PORT:-2222}
     volumes:
       - kern_data:/data
     extra_hosts:
@@ -64,6 +67,22 @@ services:
     volumes:
       - kern_data:/data
       - /var/run/docker.sock:/var/run/docker.sock
+
+  # Git over SSH with public keys (Git → SSH keys). Only git-upload-pack / git-receive-pack,
+  # no shell. See docs/git-ssh.md; remove this service if you do not want an SSH port.
+  ssh:
+    build: ./backend
+    command: ["ssh-server"]
+    restart: unless-stopped
+    depends_on:
+      backend:
+        condition: service_healthy
+    environment:
+      KERN_DATA_DIR: /data
+    volumes:
+      - kern_data:/data
+    ports:
+      - "${KERN_BIND:-0.0.0.0}:${KERN_SSH_PORT:-2222}:2222"
 
   web:
     build: ./frontend

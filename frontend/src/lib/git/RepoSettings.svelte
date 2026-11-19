@@ -8,6 +8,7 @@
 	import MirrorsSettings from './MirrorsSettings.svelte';
 	import WebhooksSettings from './WebhooksSettings.svelte';
 	import CISecrets from './CISecrets.svelte';
+	import SshKeys from './SshKeys.svelte';
 	import type { ProtectedRule, RepoDetail } from './types.ts';
 
 	let { repo, onchange }: { repo: RepoDetail; onchange: (r: RepoDetail) => void } = $props();
@@ -62,6 +63,7 @@
 <MirrorsSettings {repo} />
 <WebhooksSettings {repo} />
 <CISecrets repo={repo.name} />
+<SshKeys repo={repo.name} />
 
 <style>
 	.set { margin-bottom: 28px; }

@@ -9,6 +9,7 @@
 	import CIDot from '#lib/git/CIDot.svelte';
 	import CIRuns from '#lib/git/CIRuns.svelte';
 	import CloneBox from '#lib/git/CloneBox.svelte';
+	import { activeCloneUrl } from '#lib/git/sshConfig.svelte.ts';
 	import DiffView from '#lib/git/DiffView.svelte';
 	import ReleasesView from '#lib/git/ReleasesView.svelte';
 	import RepoSettings from '#lib/git/RepoSettings.svelte';
@@ -247,11 +248,11 @@
 				<div class="setup">
 					<h3>This repository is empty</h3>
 					<p class="muted">Push an existing project to it:</p>
-					<pre><code>git remote add kern {cloneUrl(repo.name)}
+					<pre><code>git remote add kern {activeCloneUrl(repo.name, cloneUrl(repo.name))}
 git push -u kern main</code></pre>
-					<button class="btn ghost" onclick={() => copy(`git remote add kern ${cloneUrl(repo!.name)}\ngit push -u kern main`, 'Commands')}><Copy size={13} />Copy</button>
+					<button class="btn ghost" onclick={() => copy(`git remote add kern ${activeCloneUrl(repo!.name, cloneUrl(repo!.name))}\ngit push -u kern main`, 'Commands')}><Copy size={13} />Copy</button>
 					<p class="muted">Or start fresh:</p>
-					<pre><code>git clone {cloneUrl(repo.name)}
+					<pre><code>git clone {activeCloneUrl(repo.name, cloneUrl(repo.name))}
 cd {repo.name}
 echo "# {repo.name}" &gt; README.md
 git add README.md &amp;&amp; git commit -m "First commit"

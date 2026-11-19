@@ -8,6 +8,7 @@ from . import views_ci as civ
 from . import views_git as gitv
 from . import views_git_releases as gitrel
 from . import views_git_hooks as gith
+from . import views_gitssh as sshv
 from . import views_files as files
 from . import views_web as web
 
@@ -126,6 +127,10 @@ urlpatterns = [
     path("git/repos/<str:name>/ci/secrets/<str:secret>", civ.secret_item),
     path("git/repos/<str:name>/ci/status", civ.status),
     path("git/repos/<str:name>/ci/pipeline", civ.pipeline),
+    path("git/ssh-keys", sshv.ssh_keys),
+    path("git/ssh-keys/<int:key_id>", sshv.ssh_key),
+    path("git/repos/<str:name>/deploy-keys", sshv.deploy_keys),
+    path("git/repos/<str:name>/deploy-keys/<int:key_id>", sshv.deploy_key),
     # Web archive endpoints
     path("web/list", web.web_list),
     path("web/archive", web.web_create),

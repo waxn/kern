@@ -12,3 +12,4 @@ qrcode==8.2
 cryptography==50.0.2
 PyYAML==6.0.3
 publicsuffixlist==1.1.2.20261118
+asyncssh==2.24.1

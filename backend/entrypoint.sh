@@ -32,6 +32,10 @@ if [ "${1:-}" = "ci-worker" ]; then
 	# The ci service (docker-compose.yml): runs queued CI pipelines of the git server.
 	exec python manage.py ci_worker
 fi
+if [ "${1:-}" = "ssh-server" ]; then
+	# The ssh service (docker-compose.yml): git over SSH with public keys.
+	exec python manage.py ssh_server --port 2222
+fi
 if [ "$#" -gt 0 ]; then
 	# One-off commands: docker compose run --rm backend python manage.py …
 	exec "$@"

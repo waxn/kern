@@ -2,6 +2,7 @@
 protocol for git clients (under /git/<name>.git, outside /api so the X-Kern guard
 does not apply — git clients cannot send that header)."""
 import base64
+import os
 import re
 import subprocess
 import threading
@@ -13,10 +14,10 @@ from django.views.decorators.csrf import csrf_exempt
 from rest_framework.decorators import api_view
 from rest_framework.response import Response
 
-from accounts import site, throttle
+from accounts import site, sshkeys, throttle
 from kern import tenancy
 
-from . import gitevents
+from . import gitevents, gitssh
 from . import gitrepo as g
 from . import gittokens
 from .models import Setting
@@ -69,6 +70,7 @@ def repo_detail(request, name):
         forget_repo(name)
         from . import ci
         ci.purge_repo(name)  # runs, logs, artifacts and secrets go with the repository
+        sshkeys.delete_for_repo(request.user.id, name)
         return Response(status=204)
     if request.method == "PATCH":
         data = request.data if isinstance(request.data, dict) else {}
@@ -265,7 +267,24 @@ def git_config(request):
         "username": request.user.username,
         "has_password": bool(cur.get("hash")),
         "enabled": site.get_all()["allow_git"],
+        "ssh": ssh_config(request),
     })
+
+
+def ssh_config(request) -> dict:
+    """What the UI needs to show ssh:// clone URLs. ``enabled`` is true while the ssh service's
+    heartbeat file is fresh (see gitssh.status), so it is off when the service is not running."""
+    beat = gitssh.status()
+    host = os.environ.get("KERN_SSH_HOST", "").strip()
+    if not host:
+        host = request.get_host()
+        host = host[:host.index("]") + 1] if host.startswith("[") else host.split(":")[0]
+    try:
+        port = int(os.environ.get("KERN_SSH_PORT", "") or 2222)
+    except ValueError:
+        port = 2222
+    return {"enabled": bool(beat) and site.get_all()["allow_git"], "host": host, "port": port,
+            "fingerprint": beat.get("fingerprint") if beat else None}
 
 
 # ------------------------------------------------------- smart HTTP protocol

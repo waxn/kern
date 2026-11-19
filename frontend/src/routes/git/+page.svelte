@@ -3,6 +3,7 @@
 	import { onMount } from 'svelte';
 	import { api } from '#lib/api.ts';
 	import CloneBox from '#lib/git/CloneBox.svelte';
+	import SshKeys from '#lib/git/SshKeys.svelte';
 	import { cloneUrl, type Repo } from '#lib/git/types.ts';
 	import { session } from '#lib/state/session.svelte.ts';
 	import { open } from '#lib/state/tabs.ts';
@@ -118,6 +119,7 @@
 					<span class="faint">At least 10 characters.</span>
 				</div>
 			</div>
+			<div class="panel"><SshKeys /></div>
 		{/if}
 
 		{#if creating}

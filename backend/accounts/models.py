@@ -56,3 +56,19 @@ class GitToken(models.Model):
 
     class Meta:
         indexes = [models.Index(fields=["owner", "repo"])]
+
+
+class SSHKey(models.Model):
+    """A public key that may sign in to Kern's git-over-SSH server. Lives in the shared database
+    because the key is looked up before anyone is known. ``repo`` empty: an account key (every
+    repository of ``user``); otherwise a deploy key for that one repository."""
+
+    user = models.ForeignKey(settings.AUTH_USER_MODEL, on_delete=models.CASCADE, related_name="ssh_keys")
+    repo = models.CharField(max_length=64, blank=True, default="")
+    title = models.CharField(max_length=80)
+    key_type = models.CharField(max_length=40)
+    public_key = models.TextField()  # normalized "<type> <base64>"
+    fingerprint = models.CharField(max_length=80, unique=True)  # "SHA256:…"; one registration per server
+    read_only = models.BooleanField(default=False)
+    created = models.DateTimeField(auto_now_add=True)
+    last_used = models.DateTimeField(null=True, blank=True)
