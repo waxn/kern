@@ -337,3 +337,7 @@ class Chat(models.Model):
 
     class Meta:
         ordering = ["-updated_at"]
+
+
+# Models split into their own modules (Django must see them for migrations).
+from . import models_git_hooks  # noqa: E402,F401

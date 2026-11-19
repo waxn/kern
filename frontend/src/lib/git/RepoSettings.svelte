@@ -5,6 +5,8 @@
 	import { api } from '#lib/api.ts';
 	import { ui } from '#lib/state/ui.svelte.ts';
 	import RepoAccess from './RepoAccess.svelte';
+	import MirrorsSettings from './MirrorsSettings.svelte';
+	import WebhooksSettings from './WebhooksSettings.svelte';
 	import type { ProtectedRule, RepoDetail } from './types.ts';
 
 	let { repo, onchange }: { repo: RepoDetail; onchange: (r: RepoDetail) => void } = $props();
@@ -56,6 +58,8 @@
 </section>
 
 <RepoAccess {repo} {onchange} />
+<MirrorsSettings {repo} />
+<WebhooksSettings {repo} />
 
 <style>
 	.set { margin-bottom: 28px; }

@@ -22,7 +22,10 @@ log = logging.getLogger(__name__)
 ZERO = "0" * 40
 
 # Modules that register push listeners; imported lazily on the first push.
-LISTENER_MODULES: list[str] = []
+LISTENER_MODULES: list[str] = [
+    "notes.gitmirrors",
+    "notes.gitwebhooks",
+]
 
 _listeners = []
 _loaded = False

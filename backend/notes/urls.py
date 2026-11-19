@@ -6,6 +6,7 @@ from . import views_learn as learn
 from . import views_data as data
 from . import views_git as gitv
 from . import views_git_releases as gitrel
+from . import views_git_hooks as gith
 from . import views_files as files
 from . import views_web as web
 
@@ -105,6 +106,15 @@ urlpatterns = [
     path("git/repos/<str:name>/releases/<int:rid>/assets", gitrel.release_assets),
     path("git/repos/<str:name>/releases/<int:rid>/assets/<int:aid>", gitrel.release_asset),
     path("git/repos/<str:name>/releases/<int:rid>/assets/<int:aid>/download", gitrel.asset_download),
+    path("git/repos/<str:name>/mirrors", gith.mirrors),
+    path("git/repos/<str:name>/mirrors/<int:mid>", gith.mirror_detail),
+    path("git/repos/<str:name>/mirrors/<int:mid>/sync", gith.mirror_sync),
+    path("git/repos/<str:name>/webhooks", gith.webhooks),
+    path("git/repos/<str:name>/webhooks/<int:hid>", gith.webhook_detail),
+    path("git/repos/<str:name>/webhooks/<int:hid>/test", gith.webhook_test),
+    path("git/repos/<str:name>/webhooks/<int:hid>/deliveries", gith.webhook_deliveries),
+    path("git/repos/<str:name>/webhooks/<int:hid>/deliveries/<int:did>", gith.webhook_delivery),
+    path("git/repos/<str:name>/webhooks/<int:hid>/deliveries/<int:did>/redeliver", gith.webhook_redeliver),
     # Web archive endpoints
     path("web/list", web.web_list),
     path("web/archive", web.web_create),

@@ -91,6 +91,45 @@ export interface GitToken {
 	expired: boolean;
 	last_used: string | null;
 }
+
+export interface GitMirror {
+	id: number;
+	url: string;
+	username: string;
+	has_secret: boolean;
+	enabled: boolean;
+	only_protected: boolean;
+	branch_filter: string;
+	last_attempt: string | null;
+	last_success: string | null;
+	last_error: string;
+	syncing: boolean;
+}
+
+export interface WebhookDeliveryBrief {
+	id: number;
+	guid: string;
+	event: string;
+	status_code: number | null;
+	ok: boolean;
+	attempts: number;
+	duration_ms: number;
+	error: string;
+	at: string;
+}
+export interface WebhookDelivery extends WebhookDeliveryBrief {
+	request_headers?: Record<string, string>;
+	request_body?: string;
+	response_body?: string;
+}
+export interface GitWebhook {
+	id: number;
+	url: string;
+	has_secret: boolean;
+	events: string[];
+	enabled: boolean;
+	last_delivery: { id: number; event: string; status_code: number | null; ok: boolean; error: string; at: string } | null;
+}
 export const short = (sha: string) => sha.slice(0, 7);
 
 export interface ReleaseAsset { id: number; filename: string; size: number; sha256: string; content_type: string; downloads: number; created: string; url: string }

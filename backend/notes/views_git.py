@@ -65,6 +65,8 @@ def repo_detail(request, name):
     if request.method == "DELETE":
         g.delete(name)
         gittokens.revoke_repo(request.user.id, name)
+        from .views_git_hooks import forget_repo
+        forget_repo(name)
         return Response(status=204)
     if request.method == "PATCH":
         data = request.data if isinstance(request.data, dict) else {}

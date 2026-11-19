@@ -5,7 +5,7 @@
 	import { session } from '#lib/state/session.svelte.ts';
 	import { ui } from '#lib/state/ui.svelte.ts';
 
-	interface Cfg { site_name: string; landing_enabled: boolean; signup_mode: 'closed' | 'approval' | 'open'; allow_git: boolean; allow_mail: boolean; allow_local_mail: boolean }
+	interface Cfg { site_name: string; landing_enabled: boolean; signup_mode: 'closed' | 'approval' | 'open'; allow_git: boolean; allow_mail: boolean; allow_local_mail: boolean; allow_local_git_remotes: boolean }
 	let cfg = $state<Cfg | null>(null);
 	let name = $state('');
 
@@ -58,6 +58,10 @@
 		<div class="item">
 			<div><b>Mail servers on the local network</b><span>Off: mail servers must have public addresses, so nobody can point Kern at machines on your private network. Turn on only to use a mail server you run at home.</span></div>
 			<Toggle checked={cfg.allow_local_mail} label="Local mail servers" onchange={(v) => save({ allow_local_mail: v })} />
+		</div>
+		<div class="item">
+			<div><b>Git mirrors and webhooks on the local network</b><span>Off: push mirrors and webhooks may only reach public addresses, so nobody can point Kern at machines on your private network. Turn on to mirror to or notify a server you run at home.</span></div>
+			<Toggle checked={cfg.allow_local_git_remotes} label="Local git remotes and webhooks" onchange={(v) => save({ allow_local_git_remotes: v })} />
 		</div>
 	</div>
 {:else}

@@ -15,6 +15,7 @@ DEFAULTS = {
     "allow_git": True,          # let users host git repositories
     "allow_mail": True,         # let users connect a mail account (mail/)
     "allow_local_mail": False,  # allow mail servers on private addresses (mail/hosts.py)
+    "allow_local_git_remotes": False,  # allow git mirrors and webhooks to private addresses (notes/remote_guard.py)
 }
 SIGNUP_MODES = ("closed", "open", "approval")
 
@@ -33,7 +34,7 @@ def update(values: dict) -> dict:
     if "site_name" in values:
         name = str(values["site_name"] or "").strip()[:60]
         clean["site_name"] = name or DEFAULTS["site_name"]
-    for k in ("landing_enabled", "allow_git", "allow_mail", "allow_local_mail"):
+    for k in ("landing_enabled", "allow_git", "allow_mail", "allow_local_mail", "allow_local_git_remotes"):
         if k in values:
             clean[k] = bool(values[k])
     if "signup_mode" in values:
