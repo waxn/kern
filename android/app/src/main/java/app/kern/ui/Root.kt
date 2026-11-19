@@ -227,6 +227,14 @@ private fun SignedIn(ws: Workspace, launch: MutableStateFlow<Launch?>, host: Sna
             composable("doc/{id}") { DocScreen(ws, n, it.arguments!!.getString("id")!!) }
             composable("block/{id}") { app.kern.ui.doc.BlockRedirect(ws, n, it.arguments!!.getString("id")!!) }
             composable("search") { SearchScreen(ws, n) }
+            composable("mail?view={view}", arguments = listOf(
+                navArgument("view") { type = NavType.StringType; nullable = true; defaultValue = null },
+            )) { app.kern.ui.screens.MailScreen(ws, n, it.arguments?.getString("view")) }
+            composable("mail/thread/{id}") { app.kern.ui.screens.MailThreadScreen(ws, n, it.arguments!!.getString("id")!!.toLong()) }
+            composable("mail/compose?msg={msg}&mode={mode}", arguments = listOf(
+                navArgument("msg") { type = NavType.StringType; nullable = true; defaultValue = null },
+                navArgument("mode") { type = NavType.StringType; nullable = true; defaultValue = null },
+            )) { app.kern.ui.screens.MailComposeScreen(ws, n, it.arguments?.getString("msg")?.toLongOrNull(), it.arguments?.getString("mode")) }
             composable("review?deck={deck}&doc={doc}", arguments = listOf(
                 navArgument("deck") { type = NavType.StringType; nullable = true; defaultValue = null },
                 navArgument("doc") { type = NavType.StringType; nullable = true; defaultValue = null },

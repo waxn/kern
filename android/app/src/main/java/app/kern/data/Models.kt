@@ -21,6 +21,7 @@ data class User(
     @SerialName("date_joined") val dateJoined: String? = null,
     @SerialName("last_login") val lastLogin: String? = null,
     @SerialName("storage_bytes") val storageBytes: Long? = null,
+    @SerialName("two_factor") val twoFactor: Boolean = false,
 )
 
 @Serializable
@@ -30,6 +31,7 @@ data class SiteInfo(
     @SerialName("landing_enabled") val landingEnabled: Boolean = false,
     @SerialName("signup_mode") val signupMode: String = "closed",
     @SerialName("allow_git") val allowGit: Boolean = true,
+    @SerialName("allow_mail") val allowMail: Boolean = true,
     val user: User? = null,
     val pending: Boolean = false,
 )
@@ -187,9 +189,14 @@ data class Task(
     val project: String? = null,
     val block: String? = null,
     val tags: List<String> = emptyList(),
+    /** Made from an email or a follow-up nudge (backend mail/taskbridge.py). */
+    val source: TaskSource? = null,
     val position: Double = 0.0,
     @SerialName("created_at") val createdAt: String? = null,
 )
+
+@Serializable
+data class TaskSource(val kind: String = "", val key: String = "", val subject: String = "", val from: String = "")
 
 @Serializable
 data class TaskSummary(

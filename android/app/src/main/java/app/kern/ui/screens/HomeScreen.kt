@@ -74,11 +74,14 @@ fun HomeScreen(ws: Workspace, nav: Nav) {
     val ctx = LocalContext.current
     var tasks by remember { mutableStateOf(ws.settings.cachedTasks) }
     var cards by remember { mutableStateOf<CardStats?>(null) }
+    var mail by remember { mutableStateOf<app.kern.data.MailToday?>(null) }
     var refreshing by remember { mutableStateOf(false) }
 
     suspend fun load() {
         runCatching { tasks = ws.kern.tasks("today") }
         runCatching { cards = ws.kern.cardStats() }
+        // Mail answers 403 until two-factor sign-in is on; then the card just stays hidden.
+        mail = runCatching { ws.kern.mailToday() }.getOrNull()?.takeIf { it.connected }
     }
     LaunchedEffect(Unit) { load() }
 
@@ -137,6 +140,27 @@ fun HomeScreen(ws: Workspace, nav: Nav) {
                         }
                         if (tasks.size > 8) Text("All ${tasks.size} tasks →", color = kern.text3, style = MaterialTheme.typography.bodySmall,
                             modifier = Modifier.fillMaxWidth().clickable { nav.tab("tasks") }.padding(12.dp))
+                    }
+                }
+
+                // Mail
+                mail?.let { m ->
+                    item { Heading("Mail · " + if (m.unread > 0) "${m.unread} unread" else "all read") { nav.go("mail") } }
+                    item {
+                        Bordered {
+                            if (m.latest.isEmpty()) Text("Nothing new.", color = kern.text3, style = MaterialTheme.typography.bodyMedium, modifier = Modifier.padding(14.dp))
+                            m.latest.take(4).forEachIndexed { i, x ->
+                                if (i > 0) app.kern.ui.components.Divider()
+                                Row(Modifier.fillMaxWidth().clickable { nav.go("mail/thread/${x.threadId}") }.padding(horizontal = 12.dp, vertical = 10.dp),
+                                    verticalAlignment = Alignment.CenterVertically) {
+                                    Column(Modifier.weight(1f)) {
+                                        Text(x.from, maxLines = 1, overflow = TextOverflow.Ellipsis, fontWeight = FontWeight.SemiBold, style = MaterialTheme.typography.bodyMedium)
+                                        Text(x.subject.ifBlank { "(no subject)" }, maxLines = 1, overflow = TextOverflow.Ellipsis, color = kern.text2, style = MaterialTheme.typography.bodySmall)
+                                    }
+                                    Text(ago(x.date), color = kern.text3, style = MaterialTheme.typography.bodySmall)
+                                }
+                            }
+                        }
                     }
                 }
 

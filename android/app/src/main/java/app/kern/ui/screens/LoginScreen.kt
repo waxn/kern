@@ -61,6 +61,8 @@ fun LoginScreen(ws: Workspace) {
     var username by remember { mutableStateOf("") }
     var email by remember { mutableStateOf("") }
     var password by remember { mutableStateOf("") }
+    var code by remember { mutableStateOf("") }
+    var needsCode by remember { mutableStateOf(false) }
     var busy by remember { mutableStateOf(false) }
     var error by remember { mutableStateOf<String?>(null) }
     var info by remember { mutableStateOf<String?>(null) }
@@ -84,14 +86,20 @@ fun LoginScreen(ws: Workspace) {
     fun submit() = scope.launch {
         busy = true; error = null; info = null
         try {
-            val s = if (mode == "signin") ws.kern.login(username.trim(), password) else ws.kern.signup(username.trim(), email.trim(), password)
+            val s = if (mode == "signin") ws.kern.login(username.trim(), password, if (needsCode) code else "")
+                    else ws.kern.signup(username.trim(), email.trim(), password)
             when {
                 s.user != null -> ws.signedIn(s.user)
                 s.pending -> { info = "Account created. An administrator needs to approve it before you can sign in."; mode = "signin" }
             }
         } catch (e: Exception) {
             val d = (e as? app.kern.data.ApiError)?.data
-            if (d.toString().contains("\"pending\"")) info = "Account created. An administrator needs to approve it before you can sign in."
+            if (mode == "signin" && d.toString().contains("\"needs_code\"")) {
+                // Right password: now the code from the authenticator app (not an error the first time).
+                if (needsCode) error = e.message
+                needsCode = true
+                code = ""
+            } else if (d.toString().contains("\"pending\"")) info = "Account created. An administrator needs to approve it before you can sign in."
             else error = e.message
         } finally { busy = false }
     }
@@ -148,9 +156,17 @@ fun LoginScreen(ws: Workspace) {
                             actions = KeyboardActions(onDone = { submit() }),
                         )
                         if (mode == "signup") Text("At least 10 characters.", style = MaterialTheme.typography.bodySmall, color = kern.text3)
+                        if (mode == "signin" && needsCode) {
+                            KField(
+                                code, { code = it }, "Code from your authenticator app",
+                                keyboard = KeyboardOptions(keyboardType = KeyboardType.Number, imeAction = ImeAction.Done, autoCorrectEnabled = false),
+                                actions = KeyboardActions(onDone = { submit() }),
+                            )
+                            Text("Or one of your recovery codes.", style = MaterialTheme.typography.bodySmall, color = kern.text3)
+                        }
                         KButton(
                             if (busy) "…" else if (mode == "signin") "Sign in" else "Create account",
-                            Modifier.fillMaxWidth(), primary = true, enabled = !busy && username.isNotBlank() && password.isNotEmpty(),
+                            Modifier.fillMaxWidth(), primary = true, enabled = !busy && username.isNotBlank() && password.isNotEmpty() && (!needsCode || code.isNotBlank()),
                         ) { submit() }
                         if (s.signupMode != "closed") {
                             Row(Modifier.fillMaxWidth(), horizontalArrangement = Arrangement.Center, verticalAlignment = Alignment.CenterVertically) {

@@ -33,6 +33,7 @@ class SyncWorker(ctx: Context, params: WorkerParameters) : CoroutineWorker(ctx, 
             refresh(applicationContext)
             if (notify) remind(applicationContext)
             if (notify) runCatching { watchChanges(applicationContext) }
+            if (notify) runCatching { checkMail(applicationContext) }
         } catch (e: ApiError) {
             return if (e.status == 0) Result.retry() else Result.success()
         }
@@ -103,6 +104,17 @@ class SyncWorker(ctx: Context, params: WorkerParameters) : CoroutineWorker(ctx, 
                     else -> WebNotice(w.id, "$name changed", if (w.unseen > 1) "${w.unseen} changes since you last looked" else "Tap to see what changed")
                 }
             }
+
+        /** "New mail" when the Inbox has more unread conversations than at the last check. */
+        suspend fun checkMail(ctx: Context) {
+            val s = ctx.app.settings
+            val t = runCatching { ctx.app.kern.mailToday() }.getOrNull()
+            if (t == null || !t.connected) { s.mailUnread = null; return }
+            val before = s.mailUnread
+            if (before != null && t.unread > before) Notifications.showMail(ctx, t.unread - before)
+            if (t.unread == 0) Notifications.cancel(ctx, Notifications.ID_MAIL)
+            s.mailUnread = t.unread
+        }
 
         /** Polls the watched bookmarks and notifies about each one with a new change. */
         suspend fun watchChanges(ctx: Context) {

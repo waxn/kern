@@ -23,6 +23,7 @@ import androidx.compose.material.icons.automirrored.outlined.InsertDriveFile
 import androidx.compose.material.icons.outlined.Archive
 import androidx.compose.material.icons.outlined.AudioFile
 import androidx.compose.material.icons.outlined.AutoAwesome
+import androidx.compose.material.icons.outlined.Email
 import androidx.compose.material.icons.outlined.Bookmark
 import androidx.compose.material.icons.outlined.ChevronRight
 import androidx.compose.material.icons.outlined.Delete
@@ -106,6 +107,7 @@ fun MoreScreen(ws: Workspace, nav: Nav) {
         item { Heading("Workspace") }
         item {
             Bordered {
+                if (site?.allowMail != false) MoreRow(Icons.Outlined.Email, "Mail") { nav.go("mail") }
                 MoreRow(Icons.Outlined.AutoAwesome, "Intelligence", kern.accent) { nav.go("intelligence") }
                 MoreRow(Icons.Outlined.Bookmark, "Bookmarks") { nav.go("bookmarks") }
                 MoreRow(Icons.AutoMirrored.Outlined.ViewQuilt, "Templates") { nav.go("templates") }

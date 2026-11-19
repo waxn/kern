@@ -60,6 +60,11 @@ cannot read anyone's pages through the app.
   from the signed-in user's own folder, never straight from disk.
 - Changing a password signs out every other device. Signing out clears the offline copies this
   browser kept.
+- **Two-factor sign-in** (Settings → Account): an authenticator app code at every sign-in, with
+  single-use recovery codes. Required for mail. Turning it on signs out other devices; with it
+  on, git over HTTP needs the separate git password. Seeds are encrypted with a key file outside
+  the databases (`DATA_DIR/secrets/kern.key`, or `KERN_SECRET_BOX_KEY_FILE`); back it up with
+  your data.
 - Backend: `KERN_SETUP_CODE` sets the setup code yourself instead of a random one.
 
 ### Backups
@@ -106,6 +111,22 @@ contributors, totals).
   server in Settings → Server.
 - Repository names: letters, digits, `.`, `-`, `_`, up to 64 characters. Server-side
   hooks are disabled and pushed objects are checked (`receive.fsckObjects`).
+
+### Mail
+
+**Mail** in the sidebar (`Alt M`) is a full mail client for your own mailbox (any IMAP/SMTP
+provider), connected in Settings → Mail: conversations, fast search with operators, folders and
+labels, archive/star/move, compose with drafts, attachments, signature and undo send, send later,
+snooze, "nudge me if nobody replies", mute, reply templates, one-click unsubscribe, package
+tracking from shipping emails, rule-based phishing warnings with the reasons shown, spam
+reporting with sender or domain blocking, and every attachment in one list. Remote images are
+blocked until you load them (through a privacy proxy), and email HTML can never run code.
+
+It's tied into the rest of Kern: `t` turns a conversation into a task that links back to the
+email, follow-up nudges are tasks too (a reply completes them), Home shows what's new and what's
+coming back today, and the sidebar counts unread mail. Each user connects their own mailbox;
+two-factor sign-in is required. The `mail` service in `docker-compose.yml` keeps every mailbox in
+sync. Details, and the security decisions behind it: [docs/mail.md](docs/mail.md).
 
 ### Bookmarks
 
@@ -310,16 +331,23 @@ cd frontend && npm install && npm run dev
 The Vite dev server proxies `/api`, `/media` and git traffic (`/git/<name>.git/…`) to
 `127.0.0.1:8421`. Large pushes are sent chunked, which `runserver` cannot read; run the
 backend with gunicorn (as in Docker) to test those.
-Backend tests: `cd backend && .venv/bin/python manage.py test` (accounts, per-user isolation, and the notes app).
+Backend tests: `cd backend && .venv/bin/python manage.py test` (accounts, per-user isolation, and the notes app),
+and for mail `KERN_TESTING=1 .venv/bin/python -m pytest` (needs `requirements-dev.txt`).
+Mail sync runs separately: `.venv/bin/python manage.py mail_worker`, or `manage.py demo --user <name>` for a
+demo mailbox with no mail server (see [docs/mail.md](docs/mail.md)).
 The setup code for a development server is printed by `kern_boot` (or set `KERN_SETUP_CODE`).
 The service worker only runs in a production build: `npm run build && npm run preview`
 (also proxies the API).
-Frontend checks: `cd frontend && npm run check`.
+Frontend checks: `cd frontend && npm run check`; unit tests: `npm test`.
 
 ## Layout
 
 ```
-backend/   Django project (kern/) and app (notes/)
+backend/   Django project (kern/), apps notes/, accounts/ and mail/
+  mail/               mail: IMAP sync, sending, search, sanitizer, phishing rules, snooze, packages…
+  mail/api/           /api/mail endpoints; guard.py requires two-factor sign-in
+  accounts/totp.py    two-factor sign-in
+  kern/secretbox.py   encryption for mail passwords and 2FA seeds
   notes/views.py      documents, blocks, links, tags, properties, search
   notes/views_db.py   databases, views, entries, templates, graph
   notes/views_learn.py flashcard and task endpoints
@@ -341,6 +369,7 @@ frontend/  SvelteKit single-page app, served by Caddy in production
   src/lib/db/         database views
   src/lib/learn/      flashcard editor and card rendering
   src/lib/tasks/      task list, detail panel, quick-add parser
+  src/lib/mail/       mail client (plain JavaScript, tested with npm test)
   src/service-worker/ offline caching
 docker-compose.yml
 ```

@@ -45,7 +45,10 @@ fun toJson(v: Any?): JsonElement = when (v) {
 class Kern(val api: Api) {
     // ---- accounts
     suspend fun site(): SiteInfo = api.get("/site")
-    suspend fun login(username: String, password: String): SiteInfo = api.post("/auth/login", jsonOf("username" to username, "password" to password))
+    /** With two-factor sign-in on, the server answers 401 + needs_code until a code (or recovery code) is sent. */
+    suspend fun login(username: String, password: String, code: String = ""): SiteInfo =
+        api.post("/auth/login", if (code.isBlank()) jsonOf("username" to username, "password" to password)
+                                else jsonOf("username" to username, "password" to password, "code" to code.trim()))
     suspend fun signup(username: String, email: String, password: String): SiteInfo =
         api.post("/auth/signup", jsonOf("username" to username, "email" to email, "password" to password))
     suspend fun logout() { runCatching { api.raw("POST", "/auth/logout") }; api.cookieJar.clear() }
@@ -157,6 +160,28 @@ class Kern(val api: Api) {
     suspend fun repoBlob(name: String, ref: String?, path: String): Blob = api.get("/git/repos/$name/blob" + qs("ref" to ref, "path" to path))
     suspend fun repoCommits(name: String, ref: String?): JsonObject = api.get("/git/repos/$name/commits" + qs("ref" to ref, "per" to 50))
     suspend fun createRepo(name: String, description: String): Repo = api.post("/git/repos", jsonOf("name" to name, "description" to description))
+
+    // ---- mail (needs two-factor sign-in; /mail/account/status answers without it)
+    suspend fun mailStatus(): MailStatus = api.get("/mail/account/status")
+    suspend fun mailToday(): MailToday = api.get("/mail/today")
+    suspend fun mailFolders(): MailFolders = api.get("/mail/folders")
+    suspend fun mailThreads(view: String, q: String? = null, cursor: String? = null, unread: Boolean = false): MailThreads =
+        api.get("/mail/threads" + qs("view" to (if (q.isNullOrBlank()) view else null), "q" to q, "cursor" to cursor, "unread" to (if (unread) "1" else null)))
+    suspend fun mailThread(id: Long): MailThreadDetail = api.get("/mail/threads/$id")
+    suspend fun mailBody(id: Long): MailBody = api.get("/mail/messages/$id/body")
+    suspend fun mailAction(ids: List<Long>, action: String, vararg extra: Pair<String, Any?>): JsonObject =
+        api.post("/mail/threads/actions", jsonOf("ids" to ids, "action" to action, *extra))
+    suspend fun mailTask(thread: Long, title: String, due: String?): Task =
+        api.post("/mail/threads/$thread/task", jsonOf("title" to title, "due" to due))
+    suspend fun mailOpen(key: String): MailOpen = api.get("/mail/open" + qs("key" to key))
+    suspend fun mailPrefill(message: Long, mode: String): MailPrefill = api.get("/mail/compose/prefill" + qs("message" to message, "mode" to mode))
+    /** New draft, then send it (the server's undo delay still applies). */
+    suspend fun mailSend(mode: String, inReplyTo: Long?, to: List<MailAddr>, cc: List<MailAddr>, subject: String, bodyHtml: String): MailDraft {
+        fun addrs(l: List<MailAddr>) = l.map { mapOf("name" to it.name, "addr" to it.addr) }
+        val d: MailDraft = api.post("/mail/drafts", jsonOf("mode" to mode, "inReplyTo" to inReplyTo, "to" to addrs(to), "cc" to addrs(cc),
+            "subject" to subject, "bodyHtml" to bodyHtml))
+        return api.post("/mail/drafts/${d.id}/send")
+    }
 
     // ---- misc
     suspend fun settings(): JsonObject = api.get("/settings")

@@ -95,6 +95,11 @@ class Settings(context: Context) {
         get() = p.getLong("cache_at", 0)
         set(v) = p.edit().putLong("cache_at", v).apply()
 
+    /** Unread Inbox conversations at the last check (null before the first), for "New mail". */
+    var mailUnread: Int?
+        get() = if (p.contains("mail_unread")) p.getInt("mail_unread", 0) else null
+        set(v) = p.edit().apply { if (v == null) remove("mail_unread") else putInt("mail_unread", v) }.apply()
+
     /**
      * Unseen-change counts per watched bookmark at the last check ("id:n" lines), so only new
      * changes notify. Null until the first check, which only records what is already there.

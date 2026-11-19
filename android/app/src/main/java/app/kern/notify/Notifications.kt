@@ -21,6 +21,8 @@ object Notifications {
     const val CH_CARDS = "cards"
     const val CH_GENERAL = "general"
     const val CH_WEB = "web"
+    const val CH_MAIL = "mail"
+    const val ID_MAIL = 5
     private const val GROUP_TASKS = "app.kern.TASKS"
     const val ID_CARDS = 2
     const val ID_TASK_SUMMARY = 3
@@ -39,6 +41,9 @@ object Notifications {
                 },
                 NotificationChannel(CH_WEB, "Watched pages", NotificationManager.IMPORTANCE_DEFAULT).apply {
                     description = "New posts, price changes and edits on bookmarks you watch"
+                },
+                NotificationChannel(CH_MAIL, "New mail", NotificationManager.IMPORTANCE_DEFAULT).apply {
+                    description = "When new mail arrives in your Inbox (never shows the sender or subject)"
                 },
                 NotificationChannel(CH_GENERAL, "Updates", NotificationManager.IMPORTANCE_LOW).apply {
                     description = "Bookmarks finished saving and similar updates"
@@ -144,6 +149,20 @@ object Notifications {
             .setContentIntent(openIntent(ctx, route, 60))
             .build()
         try { NotificationManagerCompat.from(ctx).notify(ID_GENERAL + route.hashCode(), n) } catch (_: SecurityException) {}
+    }
+
+    /** Deliberately generic, like the web app: no sender or subject on the lock screen. */
+    fun showMail(ctx: Context, newCount: Int) {
+        if (!allowed(ctx)) return
+        val n = NotificationCompat.Builder(ctx, CH_MAIL)
+            .setSmallIcon(R.drawable.ic_stat_kern)
+            .setColor(ACCENT)
+            .setContentTitle("New mail")
+            .setContentText(if (newCount == 1) "You have a new message in Kern." else "You have $newCount new messages in Kern.")
+            .setAutoCancel(true)
+            .setContentIntent(openIntent(ctx, "mail", 70))
+            .build()
+        try { NotificationManagerCompat.from(ctx).notify(ID_MAIL, n) } catch (_: SecurityException) {}
     }
 
     fun webId(bookmark: Long) = 10_000 + (bookmark % 1_000_000).toInt()

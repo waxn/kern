@@ -361,6 +361,19 @@ fun TaskSheet(ws: Workspace, nav: Nav, task: Task, onDismiss: () -> Unit, onChan
                     modifier = Modifier.weight(1f).padding(top = 12.dp),
                 )
             }
+            t.source?.takeIf { it.key.isNotBlank() }?.let { src ->
+                // Made from an email (or a follow-up nudge): back to that conversation.
+                Text(
+                    (if (src.kind == "mail_followup") "Follow-up on: " else "Email: ") + src.subject.ifBlank { "the conversation" } + "  ↗",
+                    color = kern.accent, style = MaterialTheme.typography.bodyMedium,
+                    modifier = Modifier.clickable {
+                        scope.launch {
+                            try { nav.go("mail/thread/${ws.kern.mailOpen(src.key).threadId}"); onDismiss() } catch (e: Exception) { snack.error(e) }
+                        }
+                    },
+                )
+                if (src.kind == "mail_followup") Text("Completed automatically when someone replies.", color = kern.text3, style = MaterialTheme.typography.bodySmall)
+            }
             KField(desc, { desc = it }, "Notes", singleLine = false, minLines = 2)
 
             Text("DUE", style = MaterialTheme.typography.labelSmall, color = kern.text3)

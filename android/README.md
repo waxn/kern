@@ -29,7 +29,12 @@ allowed because Kern is usually self-hosted on a home network; use HTTPS when it
 ## What's in it
 
 - **Sign in / sign up** (approval-pending and setup-needed servers are handled; the first-run
-  setup wizard stays in the browser).
+  setup wizard stays in the browser), with the two-factor code step when it's on.
+- **Mail** (More → Mail): folders, search, conversations (email HTML in a WebView with
+  JavaScript, network and file access off), archive, trash, star, mark unread, snooze, report
+  spam, make a task, reply/reply all/forward and new messages (plain text, with your signature).
+  A "New mail" notification (never the sender or subject), a Mail card on Home, and tasks made
+  from an email open it. Connecting the account and two-factor setup are in the web app.
 - **Home**: greeting, today's tasks, flashcards due, favorites, recently edited.
 - **Pages**: the page tree (expand, long-press for sub-page, favorite, rename, duplicate,
   archive, trash), favorites, databases; new page, group, database, kanban, calendar or

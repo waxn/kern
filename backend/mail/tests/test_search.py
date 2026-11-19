@@ -29,9 +29,15 @@ def test_trash_and_junk_excluded_unless_asked(loaded):
     assert search.message_queryset("lunch in:trash").filter(pk=m.pk).exists()
 
 
-@pytest.mark.skipif(connection.vendor != "postgresql", reason="Postgres full-text search (runs in Docker)")
-def test_postgres_fulltext(loaded):
+def test_fulltext(loaded):
     assert search.message_queryset("lisbo").exists()  # prefix match
     assert search.message_queryset("brulee").exists()  # unaccent
     assert search.message_queryset('"tram 28"').count() == 0
     assert search.message_queryset("lisbon -yes").count() == 1
+
+
+def test_fts_syntax_in_user_text_is_harmless(loaded):
+    # FTS5 operators and quotes typed by the user are searched for, never interpreted.
+    for q in ['NEAR(a b)', 'a OR', '"unbalanced', 'x*', 'col:term', '^start', 'AND', '(', ')', 'subject:"', '-', '""']:
+        list(search.message_queryset(q)[:5])
+    assert search.message_queryset("lisbon OR nothing-at-all").count() == 0  # OR is a word here
