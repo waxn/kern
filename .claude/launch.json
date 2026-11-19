@@ -41,6 +41,226 @@
         "--strictPort"
       ],
       "port": 4173
+    },
+    {
+      "name": "kern-files-backend",
+      "runtimeExecutable": "env",
+      "runtimeArgs": [
+        "KERN_DATA_DIR=/tmp/claude-1000/-home-linus-Documents-dev-kern/334c81be-0a83-4778-85cf-00f548c825b3/scratchpad/filesdata",
+        "KERN_NO_AUTO_BACKUP=1",
+        "sh",
+        "-c",
+        "backend/.venv/bin/python backend/manage.py migrate --noinput && exec backend/.venv/bin/python backend/manage.py runserver 127.0.0.1:8451 --noreload"
+      ],
+      "port": 8451
+    },
+    {
+      "name": "kern-files-frontend",
+      "runtimeExecutable": "env",
+      "runtimeArgs": [
+        "KERN_BACKEND=http://127.0.0.1:8451",
+        "npm",
+        "--prefix",
+        "frontend",
+        "run",
+        "dev",
+        "--",
+        "--port",
+        "5203",
+        "--strictPort"
+      ],
+      "port": 5203
+    },
+    {
+      "name": "kern-web-backend",
+      "runtimeExecutable": "env",
+      "runtimeArgs": [
+        "KERN_DATA_DIR=/tmp/claude-1000/-home-linus-Documents-dev-kern/43273514-81ca-4597-a63f-4afbf38e233c/scratchpad/webdata",
+        "KERN_NO_AUTO_BACKUP=1",
+        "sh",
+        "-c",
+        "backend/.venv/bin/python backend/manage.py migrate --noinput && exec backend/.venv/bin/python backend/manage.py runserver 127.0.0.1:8451 --noreload"
+      ],
+      "port": 8451
+    },
+    {
+      "name": "kern-web-frontend",
+      "runtimeExecutable": "env",
+      "runtimeArgs": [
+        "KERN_BACKEND=http://127.0.0.1:8451",
+        "npm",
+        "--prefix",
+        "frontend",
+        "run",
+        "dev",
+        "--",
+        "--port",
+        "5203",
+        "--strictPort"
+      ],
+      "port": 5203
+    },
+    {
+      "name": "kern-auth-backend",
+      "runtimeExecutable": "env",
+      "runtimeArgs": [
+        "KERN_DATA_DIR=/tmp/claude-1000/-home-linus-Documents-dev-kern/86ea4874-65bb-4156-b187-fa2e062beb43/scratchpad/authdata",
+        "KERN_NO_AUTO_BACKUP=1",
+        "KERN_SETUP_CODE=TESTCODE",
+        "sh",
+        "-c",
+        "backend/.venv/bin/python backend/manage.py kern_boot && exec backend/.venv/bin/python backend/manage.py runserver 127.0.0.1:8461 --noreload"
+      ],
+      "port": 8461
+    },
+    {
+      "name": "kern-auth-frontend",
+      "runtimeExecutable": "env",
+      "runtimeArgs": [
+        "KERN_BACKEND=http://127.0.0.1:8461",
+        "npm",
+        "--prefix",
+        "frontend",
+        "run",
+        "dev",
+        "--",
+        "--port",
+        "5213",
+        "--strictPort"
+      ],
+      "port": 5213
+    },
+    {
+      "name": "kern-android-backend",
+      "runtimeExecutable": "env",
+      "runtimeArgs": [
+        "KERN_DATA_DIR=/tmp/claude-1000/-home-linus-Documents-dev-kern/7cb2b004-005d-4df5-92a2-0280277c4e20/scratchpad/androiddata",
+        "KERN_NO_AUTO_BACKUP=1",
+        "KERN_SETUP_CODE=TESTCODE",
+        "sh",
+        "-c",
+        "backend/.venv/bin/python backend/manage.py kern_boot && exec backend/.venv/bin/python backend/manage.py runserver 0.0.0.0:8471 --noreload"
+      ],
+      "port": 8471
+    },
+    {
+      "name": "kern-restore-backend",
+      "runtimeExecutable": "env",
+      "runtimeArgs": [
+        "KERN_DATA_DIR=/tmp/claude-1000/-home-linus-Documents-dev-kern/7cb2b004-005d-4df5-92a2-0280277c4e20/scratchpad/restoredata",
+        "KERN_NO_AUTO_BACKUP=1",
+        "KERN_SETUP_CODE=TESTCODE",
+        "sh",
+        "-c",
+        "backend/.venv/bin/python backend/manage.py kern_boot && exec backend/.venv/bin/python backend/manage.py runserver 127.0.0.1:8481 --noreload"
+      ],
+      "port": 8481
+    },
+    {
+      "name": "kern-restore-frontend",
+      "runtimeExecutable": "env",
+      "runtimeArgs": [
+        "KERN_BACKEND=http://127.0.0.1:8481",
+        "npm",
+        "--prefix",
+        "frontend",
+        "run",
+        "dev",
+        "--",
+        "--port",
+        "5223",
+        "--strictPort"
+      ],
+      "port": 5223
+    },
+    {
+      "name": "kern-monitor-backend",
+      "runtimeExecutable": "env",
+      "runtimeArgs": [
+        "KERN_DATA_DIR=/tmp/claude-1000/-home-linus--claude-spares-spare-7JCgoU/95297aef-229c-4e0c-82e6-62953cba4082/scratchpad/monitordata",
+        "KERN_NO_AUTO_BACKUP=1",
+        "KERN_SETUP_CODE=TESTCODE",
+        "sh",
+        "-c",
+        "backend/.venv/bin/python backend/manage.py kern_boot && exec backend/.venv/bin/python backend/manage.py runserver 127.0.0.1:8491 --noreload"
+      ],
+      "port": 8491
+    },
+    {
+      "name": "kern-monitor-frontend",
+      "runtimeExecutable": "env",
+      "runtimeArgs": [
+        "KERN_BACKEND=http://127.0.0.1:8491",
+        "npm",
+        "--prefix",
+        "frontend",
+        "run",
+        "dev",
+        "--",
+        "--port",
+        "5233",
+        "--strictPort"
+      ],
+      "port": 5233
+    },
+    {
+      "name": "kern-mailpreview-backend",
+      "runtimeExecutable": "env",
+      "runtimeArgs": [
+        "KERN_DATA_DIR=/tmp/claude-1000/-home-linus-Documents-dev-kern/2e8cf5ed-f18b-478b-9801-c36cbf42965c/scratchpad/previewdata",
+        "KERN_NO_AUTO_BACKUP=1",
+        "sh",
+        "-c",
+        "backend/.venv/bin/python backend/manage.py migrate --noinput && (backend/.venv/bin/python backend/manage.py demo --user demo &) && exec backend/.venv/bin/python backend/manage.py runserver 127.0.0.1:8501 --noreload"
+      ],
+      "port": 8501
+    },
+    {
+      "name": "kern-mailpreview-frontend",
+      "runtimeExecutable": "env",
+      "runtimeArgs": [
+        "KERN_BACKEND=http://127.0.0.1:8501",
+        "npm",
+        "--prefix",
+        "frontend",
+        "run",
+        "dev",
+        "--",
+        "--port",
+        "5243",
+        "--strictPort"
+      ],
+      "port": 5243
+    },
+    {
+      "name": "kern-git-backend",
+      "runtimeExecutable": "env",
+      "runtimeArgs": [
+        "KERN_DATA_DIR=/tmp/claude-1000/-home-linus--claude-spares-spare-hpUUJP/cb4e280e-3c33-4912-be88-d2e299bd1ba7/scratchpad/gitdata",
+        "KERN_NO_AUTO_BACKUP=1",
+        "KERN_SETUP_CODE=TESTCODE",
+        "sh",
+        "-c",
+        "backend/.venv/bin/python backend/manage.py kern_boot && exec backend/.venv/bin/python backend/manage.py runserver 127.0.0.1:8511 --noreload"
+      ],
+      "port": 8511
+    },
+    {
+      "name": "kern-git-frontend",
+      "runtimeExecutable": "env",
+      "runtimeArgs": [
+        "KERN_BACKEND=http://127.0.0.1:8511",
+        "npm",
+        "--prefix",
+        "frontend",
+        "run",
+        "dev",
+        "--",
+        "--port",
+        "5253",
+        "--strictPort"
+      ],
+      "port": 5253
     }
   ]
 }
