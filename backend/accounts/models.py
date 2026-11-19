@@ -37,3 +37,22 @@ class RecoveryCode(models.Model):
     user = models.ForeignKey(settings.AUTH_USER_MODEL, on_delete=models.CASCADE, related_name="recovery_codes")
     code_hash = models.CharField(max_length=256)
     used_at = models.DateTimeField(null=True, blank=True)
+
+
+class GitToken(models.Model):
+    """An access token for one git repository of one user.
+
+    Lives in the shared database so a request can find it from the token alone (`kern_<id>_<secret>`)
+    without scanning every user's data. Only a hash of the secret is stored; it is shown once."""
+
+    owner = models.IntegerField(db_index=True)       # the owner's user id (their tenant)
+    repo = models.CharField(max_length=64)
+    label = models.CharField(max_length=60)
+    scope = models.CharField(max_length=5, choices=[("read", "read"), ("write", "write")])
+    secret_hash = models.CharField(max_length=64)    # sha256 of the secret (a long random string)
+    created = models.DateTimeField(auto_now_add=True)
+    expires = models.DateTimeField(null=True, blank=True)
+    last_used = models.DateTimeField(null=True, blank=True)
+
+    class Meta:
+        indexes = [models.Index(fields=["owner", "repo"])]

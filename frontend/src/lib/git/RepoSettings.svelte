@@ -4,6 +4,7 @@
 	import { Plus, ShieldCheck, Trash2 } from '@lucide/svelte';
 	import { api } from '#lib/api.ts';
 	import { ui } from '#lib/state/ui.svelte.ts';
+	import RepoAccess from './RepoAccess.svelte';
 	import type { ProtectedRule, RepoDetail } from './types.ts';
 
 	let { repo, onchange }: { repo: RepoDetail; onchange: (r: RepoDetail) => void } = $props();
@@ -53,6 +54,8 @@
 		<button class="btn" disabled={!pattern.trim()}><Plus size={13} />Protect</button>
 	</form>
 </section>
+
+<RepoAccess {repo} {onchange} />
 
 <style>
 	.set { margin-bottom: 28px; }

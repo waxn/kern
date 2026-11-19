@@ -14,7 +14,8 @@
 	}
 
 	# Git smart HTTP (clone/fetch/push): stream both ways, no size limit, no buffering.
-	@git path_regexp ^/git/[^/]+\.git/
+	# Both /git/<name>.git/ and the owner-qualified /git/<user>/<name>.git/.
+	@git path_regexp ^/git/([^/]+/)?[^/]+\.git/
 	handle @git {
 		reverse_proxy backend:8000 {
 			flush_interval -1

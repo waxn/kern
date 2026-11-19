@@ -316,6 +316,7 @@ def summary(name: str, path: Path) -> dict:
         "default_branch": default,
         "branches": len(heads),
         "last_push": meta.get("last_push"),
+        "public": bool(meta.get("public")),
         "created": meta.get("created"),
         "last_commit": last and {"sha": last["sha"], "date": last["date"], "subject": last["subject"], "author": last["author"]},
     }

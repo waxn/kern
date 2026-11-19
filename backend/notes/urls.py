@@ -90,6 +90,8 @@ urlpatterns = [
     path("git/config", gitv.git_config),
     path("git/repos", gitv.repos),
     path("git/repos/<str:name>", gitv.repo_detail),
+    path("git/repos/<str:name>/tokens", gitv.repo_tokens),
+    path("git/repos/<str:name>/tokens/<int:token_id>", gitv.repo_token),
     path("git/repos/<str:name>/tree", gitv.repo_tree),
     path("git/repos/<str:name>/blob", gitv.repo_blob),
     path("git/repos/<str:name>/raw", gitv.repo_raw),

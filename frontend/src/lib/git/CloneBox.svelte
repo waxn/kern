@@ -3,8 +3,10 @@
 	import { ui } from '#lib/state/ui.svelte.ts';
 	import { cloneUrl } from './types.ts';
 
-	let { name, compact = false }: { name: string; compact?: boolean } = $props();
-	let url = $derived(cloneUrl(name));
+	// Public repositories show the owner-qualified URL, which works anonymously; private ones keep
+	// the classic URL, which always asks you to sign in as the owner.
+	let { name, compact = false, owner = '', isPublic = false }: { name: string; compact?: boolean; owner?: string; isPublic?: boolean } = $props();
+	let url = $derived(cloneUrl(name, isPublic ? owner : undefined));
 	let copied = $state(false);
 
 	async function copy(e: MouseEvent) {

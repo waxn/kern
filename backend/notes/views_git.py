@@ -18,6 +18,7 @@ from kern import tenancy
 
 from . import gitevents
 from . import gitrepo as g
+from . import gittokens
 from .models import Setting
 from .views import bad
 
@@ -63,9 +64,12 @@ def repo_detail(request, name):
     path = _repo(name)
     if request.method == "DELETE":
         g.delete(name)
+        gittokens.revoke_repo(request.user.id, name)
         return Response(status=204)
     if request.method == "PATCH":
         data = request.data if isinstance(request.data, dict) else {}
+        if "public" in data:
+            g.write_meta(path, public=bool(data["public"]))
         if "description" in data:
             g.set_description(path, str(data["description"] or ""))
         if data.get("default_branch"):
@@ -76,10 +80,35 @@ def repo_detail(request, name):
         if "protected" in data:
             g.set_protected(path, data["protected"])
     out = g.summary(name, path)
+    out["owner"] = request.user.username
     out["branch_list"] = g.branches(path)
     out["tag_list"] = g.tags(path)
     out["protected"] = g.protected(path)
     return Response(out)
+
+
+@api_view(["GET", "POST"])
+@handle
+def repo_tokens(request, name):
+    _repo(name)
+    if request.method == "POST":
+        data = request.data if isinstance(request.data, dict) else {}
+        try:
+            t, secret = gittokens.create(request.user.id, name, str(data.get("label", "")),
+                                         str(data.get("scope", "read")), data.get("expires_days"))
+        except (ValueError, TypeError) as e:
+            return bad(str(e))
+        return Response(gittokens.brief(t) | {"token": secret}, status=201)
+    return Response(gittokens.list_for(request.user.id, name))
+
+
+@api_view(["DELETE"])
+@handle
+def repo_token(request, name, token_id):
+    _repo(name)
+    if not gittokens.revoke(request.user.id, name, token_id):
+        return bad("No such token.", 404)
+    return Response(status=204)
 
 
 @api_view(["GET"])
@@ -238,12 +267,12 @@ def git_config(request):
 # ------------------------------------------------------- smart HTTP protocol
 
 SERVICES = {"git-upload-pack", "git-receive-pack"}
-PROTO_RE = re.compile(r"^(?P<name>[^/]+)\.git/(?P<rest>info/refs|git-upload-pack|git-receive-pack|HEAD)$")
+# /git/<name>.git/... (sign in as the owner) or /git/<owner>/<name>.git/... (anonymous or token access)
+PROTO_RE = re.compile(r"^(?:(?P<owner>[^/]+)/)?(?P<name>[^/]+)\.git/(?P<rest>info/refs|git-upload-pack|git-receive-pack|HEAD)$")
 
 
-def _basic_user(request):
-    """The active user named by HTTP Basic credentials, or None. Their account password or their
-    separate git password both work. Failures are rate limited."""
+def _creds(request):
+    """(username, password) from HTTP Basic, or None."""
     h = request.META.get("HTTP_AUTHORIZATION", "")
     if not h.lower().startswith("basic "):
         return None
@@ -251,7 +280,16 @@ def _basic_user(request):
         name, _, pw = base64.b64decode(h[6:]).decode("utf-8").partition(":")
     except (ValueError, UnicodeDecodeError):
         return None
-    name = name.strip()[:150]
+    return name.strip()[:150], pw
+
+
+def _basic_user(request):
+    """The active user named by HTTP Basic credentials, or None. Their account password or their
+    separate git password both work. Failures are rate limited."""
+    creds = _creds(request)
+    if creds is None:
+        return None
+    name, pw = creds
     ukey, ikey = f"git:u:{name.lower()}", f"git:ip:{throttle.client_ip(request)}"
     if throttle.locked(ukey) or throttle.locked(ikey):
         return None
@@ -300,19 +338,85 @@ def _body_reader(request):
     return None
 
 
+def _challenge():
+    return _plain("Authentication required.", 401, **{"WWW-Authenticate": 'Basic realm="Kern git", charset="UTF-8"'})
+
+
+def _wants_write(request, rest):
+    return (request.GET.get("service") if rest == "info/refs" else rest) == "git-receive-pack"
+
+
 def git_http(request, name, rest):
+    """The original form, /git/<name>.git: always signs in as the repository's owner."""
     if not site.get_all()["allow_git"]:
         return _plain("Git hosting is turned off on this server.", 403)
     user = _basic_user(request)
     if user is None:
-        return _plain("Authentication required.", 401, **{"WWW-Authenticate": 'Basic realm="Kern git", charset="UTF-8"'})
+        return _challenge()
     with tenancy.use(user.id):
-        return _git_http(request, name, rest, user)
+        return _git_http(request, name, rest, user.id, user.username, user.username)
 
 
-def _git_http(request, name, rest, user):
-    """Hand the request to `git http-backend` (CGI) and stream its response back."""
-    uid = user.id
+def _is_public(owner_id, name):
+    with tenancy.use(owner_id):
+        try:
+            return bool(g.read_meta(g.repo_path(name)).get("public"))
+        except g.GitError:
+            return False
+
+
+def git_http_owner(request, owner_name, name, rest):
+    """/git/<owner>/<name>.git: the owner signs in with a password, anyone holding one of the
+    repository's tokens uses it as the password, and public repositories may be read anonymously.
+    Everything runs inside the owner's tenant."""
+    if not site.get_all()["allow_git"]:
+        return _plain("Git hosting is turned off on this server.", 403)
+    owner = User.objects.filter(username__iexact=owner_name[:150], is_active=True).first()
+    write = _wants_write(request, rest)
+    creds = _creds(request)
+
+    def serve(remote_user, pusher):
+        with tenancy.use(owner.id):
+            return _git_http(request, name, rest, owner.id, remote_user, pusher)
+
+    if creds is None:
+        # Anonymous: only reads of a public repository. Everything else gets the same challenge,
+        # whether or not the owner or repository exists.
+        if owner and not write and _is_public(owner.id, name):
+            return serve(None, None)
+        return _challenge()
+
+    tok = gittokens.parse(creds[1])
+    if tok is None:
+        user = _basic_user(request)
+        if user is None:
+            return _challenge()
+        if owner and user.id == owner.id:
+            return serve(user.username, user.username)
+        # Someone else's account is no better than anonymous here.
+        if owner and not write and _is_public(owner.id, name):
+            return serve(None, None)
+        return _plain("Repository not found.", 404)
+
+    tid, secret = tok
+    tkey, ikey = f"git:t:{tid}", f"git:ip:{throttle.client_ip(request)}"
+    if throttle.locked(tkey) or throttle.locked(ikey):
+        return _challenge()
+    row = gittokens.lookup(tid, secret, owner.id, name) if owner else None
+    if row is None:
+        throttle.fail(tkey, 10)
+        throttle.fail(ikey, 80)
+        return _challenge()
+    throttle.clear(tkey)
+    if write and row.scope != "write":
+        return _plain("This access token is read-only; it cannot push. Create a token with write access.", 403)
+    label = re.sub(r"[^\w .@-]", "_", row.label)
+    return serve(f"token:{label}", f"token:{label}")
+
+
+def _git_http(request, name, rest, uid, remote_user, pusher):
+    """Hand the request to `git http-backend` (CGI) and stream its response back.
+    `pusher` names who is pushing (the username, or `token:<label>`)."""
     try:
         path = g.repo_path(name)
     except g.GitError:
@@ -343,7 +447,7 @@ def _git_http(request, name, rest, user):
         "QUERY_STRING": request.META.get("QUERY_STRING", ""),
         "CONTENT_TYPE": request.META.get("CONTENT_TYPE", ""),
         "REMOTE_ADDR": request.META.get("REMOTE_ADDR", ""),
-        "REMOTE_USER": user.username,
+        **({"REMOTE_USER": remote_user} if remote_user else {}),
         "GIT_HTTP_MAX_REQUEST_BUFFER": str(100 * 1024 * 1024),
     })
     if request.META.get("CONTENT_LENGTH"):
@@ -410,7 +514,7 @@ def _git_http(request, name, rest, user):
             rc = proc.wait()
             if pushing and rc == 0:
                 with tenancy.use(uid):
-                    gitevents.after_push(uid, name, path, before, pusher=user.username, via="http")
+                    gitevents.after_push(uid, name, path, before, pusher=pusher, via="http")
 
     resp = StreamingHttpResponse(body(), status=status,
                                  content_type=headers.pop("Content-Type", "application/octet-stream"))
@@ -425,6 +529,8 @@ def git_entry(request, subpath):
     m = PROTO_RE.match(subpath)
     if not m:
         return _plain("Not found.", 404)
+    if m.group("owner"):
+        return git_http_owner(request, m.group("owner"), m.group("name"), m.group("rest"))
     return git_http(request, m.group("name"), m.group("rest"))
 
 

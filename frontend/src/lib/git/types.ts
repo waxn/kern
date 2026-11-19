@@ -8,13 +8,14 @@ export interface Repo {
 	default_branch: string | null;
 	branches: number;
 	last_push: string | null;
+	public: boolean;
 	created: string | null;
 	last_commit: CommitBrief | null;
 }
 
 export interface Ref { name: string; sha: string; date: string; subject: string; author?: string }
 export interface ProtectedRule { pattern: string; allow_force: boolean; allow_delete: boolean }
-export interface RepoDetail extends Repo { branch_list: Ref[]; tag_list: Ref[]; protected?: ProtectedRule[] }
+export interface RepoDetail extends Repo { owner: string; branch_list: Ref[]; tag_list: Ref[]; protected?: ProtectedRule[] }
 
 export interface Commit {
 	sha: string;
@@ -77,7 +78,19 @@ export interface Stats {
 	languages: Language[];
 }
 
-export const cloneUrl = (name: string) => `${location.origin}/git/${name}.git`;
+/** The classic URL (sign in as the owner), or the owner-qualified one that tokens and anonymous clones use. */
+export const cloneUrl = (name: string, owner?: string) =>
+	`${location.origin}/git/${owner ? encodeURIComponent(owner) + '/' : ''}${name}.git`;
+
+export interface GitToken {
+	id: number;
+	label: string;
+	scope: 'read' | 'write';
+	created: string;
+	expires: string | null;
+	expired: boolean;
+	last_used: string | null;
+}
 export const short = (sha: string) => sha.slice(0, 7);
 
 export interface ReleaseAsset { id: number; filename: string; size: number; sha256: string; content_type: string; downloads: number; created: string; url: string }

@@ -20,6 +20,7 @@ from kern import tenancy
 
 from . import site, throttle, totp
 from .auth import IsAdmin
+from .models import GitToken
 
 BACKEND = "django.contrib.auth.backends.ModelBackend"
 USERNAME_RE = re.compile(r"^[A-Za-z0-9][A-Za-z0-9_.-]{2,31}$")
@@ -220,6 +221,7 @@ def setup_restore(request):
             # Leave the server as it was so setup can be tried again.
             tenancy.forget_db(user.id)
             shutil.rmtree(tenancy.user_dir(user.id), ignore_errors=True)
+            GitToken.objects.filter(owner=user.id).delete()
             user.delete()
             from .models import SiteSetting
             SiteSetting.objects.filter(key="setup_complete").delete()
@@ -418,6 +420,7 @@ def admin_user_detail(request, user_id):
             return bad("There must be at least one administrator.")
         tenancy.forget_db(u.id)
         shutil.rmtree(tenancy.user_dir(u.id), ignore_errors=True)
+        GitToken.objects.filter(owner=u.id).delete()
         u.delete()
         return Response(status=204)
     data = request.data if isinstance(request.data, dict) else {}

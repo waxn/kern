@@ -4,6 +4,7 @@
 	import { api } from '#lib/api.ts';
 	import CloneBox from '#lib/git/CloneBox.svelte';
 	import { cloneUrl, type Repo } from '#lib/git/types.ts';
+	import { session } from '#lib/state/session.svelte.ts';
 	import { open } from '#lib/state/tabs.ts';
 	import { ui } from '#lib/state/ui.svelte.ts';
 	import { fileSize, relTime } from '#lib/util.ts';
@@ -164,7 +165,7 @@
 							</div>
 						</div>
 						<div class="side">
-							<CloneBox name={r.name} compact />
+							<CloneBox name={r.name} compact owner={session.user?.username} isPublic={r.public} />
 							<button class="icon-btn" title="Delete repository" onclick={(e) => remove(r, e)}><Trash2 size={14} /></button>
 						</div>
 					</div>

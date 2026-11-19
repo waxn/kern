@@ -212,7 +212,7 @@
 					</button>
 				</div>
 				<div class="hact">
-					<div class="cb"><CloneBox name={repo.name} /></div>
+					<div class="cb"><CloneBox name={repo.name} owner={repo.owner} isPublic={repo.public} /></div>
 					<button class="icon-btn" title="Delete repository" onclick={remove}><Trash2 size={15} /></button>
 				</div>
 			</div>
