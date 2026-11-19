@@ -207,11 +207,8 @@
 				</div>
 			</div>
 
-			{#if view.kind === 'settings'}
-				<nav class="tabs">
-					{#if !repo.empty}<a href={href('')} onclick={(e) => go(e, href(''))}><Code size={14} />Code</a>{/if}
-					<a class="on" href={href('settings', '', '')}><Settings size={14} />Settings</a>
-				</nav>
+			{#if repo.empty && view.kind === 'settings'}
+				<nav class="tabs"><a class="on" href={href('settings', '', '')}><Settings size={14} />Settings</a></nav>
 				<RepoSettings {repo} onchange={(r) => (repo = r)} />
 			{:else if repo.empty}
 				<div class="setup">
@@ -236,12 +233,7 @@ git push -u origin main</code></pre>
 					<a class:on={tab === 'stats'} href={href('stats')} onclick={(e) => go(e, href('stats'))}><ChartColumn size={14} />Stats</a>
 					<a class:on={tab === 'settings'} href={href('settings', '', '')} onclick={(e) => go(e, href('settings', '', ''))}><Settings size={14} />Settings</a>
 					<span class="grow"></span>
-					{#if tab === 'tree'}
-						<span class="dl" title="Download this {refParam ? 'ref' : 'branch'}">
-							<Download size={13} /><a href={archiveUrl('zip')}>zip</a><a href={archiveUrl('tar.gz')}>tar.gz</a>
-						</span>
-					{/if}
-					{#if tab !== 'branches' && view.kind !== 'commit'}
+					{#if tab !== 'branches' && tab !== 'settings' && view.kind !== 'commit'}
 						<label class="refsel">
 							{#if repo.tag_list.some((t) => t.name === ref) && !repo.branch_list.some((b) => b.name === ref)}<Tag size={13} />{:else}<GitBranch size={13} />{/if}
 							<select value={ref} onchange={(e) => setRef(e.currentTarget.value)}>
@@ -250,6 +242,11 @@ git push -u origin main</code></pre>
 								{#if ref && !repo.branch_list.some((b) => b.name === ref) && !repo.tag_list.some((t) => t.name === ref)}<option value={ref}>{short(ref)}</option>{/if}
 							</select>
 						</label>
+					{/if}
+					{#if tab === 'tree'}
+						<span class="dl" title="Download this {refParam ? 'ref' : 'branch'}">
+							<Download size={13} /><a href={archiveUrl('zip')}>zip</a><a href={archiveUrl('tar.gz')}>tar.gz</a>
+						</span>
 					{/if}
 				</nav>
 
@@ -400,6 +397,8 @@ git push -u origin main</code></pre>
 					{:else}
 						<div class="empty"><b>No tags</b>Create one with <code>git tag v1.0 &amp;&amp; git push --tags</code></div>
 					{/if}
+				{:else if view.kind === 'settings'}
+					<RepoSettings {repo} onchange={(r) => (repo = r)} />
 				{:else if view.kind === 'stats' && stats && !stats.empty}
 					<StatsView {stats} />
 				{:else if loading}
@@ -424,7 +423,7 @@ git push -u origin main</code></pre>
 	.hact { display: flex; align-items: center; gap: 4px; }
 	.cb { width: 360px; max-width: calc(100vw - 80px); }
 	.grow { flex: 1; }
-	.dl { display: inline-flex; align-items: center; gap: 6px; font-size: 12.5px; color: var(--text-3); margin-right: 8px; }
+	.dl { display: inline-flex; align-items: center; gap: 6px; font-size: 12.5px; color: var(--text-3); margin-left: 10px; }
 	.dl a { color: var(--text-2); }
 	.tabs { display: flex; align-items: center; gap: 2px; border-bottom: 1px solid var(--border); margin-bottom: 14px; flex-wrap: wrap; }
 	.tabs a { display: inline-flex; align-items: center; gap: 6px; padding: 7px 10px; margin-bottom: -1px; color: var(--text-2); text-decoration: none; border-bottom: 2px solid transparent; font-size: 13.5px; }
