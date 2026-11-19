@@ -256,3 +256,39 @@ class ReleaseBackupTests(ReleaseBase, TransactionTestCase):
                 self.assertEqual(b"".join(d.streaming_content), b"binary-data")
         finally:
             settings.MEDIA_ROOT = old_media
+
+
+class ReleaseWebhookTests(TestCase):
+    """Publishing a release is announced to webhooks subscribed to "release"."""
+
+    def setUp(self):
+        import tempfile
+        from django.test import override_settings
+        self.tmp = tempfile.mkdtemp(prefix="kern-relhook-")
+        self._o = override_settings(KERN_GIT_ROOT=self.tmp)
+        self._o.enable()
+        self.c = authed()
+        from notes import gitrepo as g
+        g.create("hooked")
+
+    def tearDown(self):
+        import shutil
+        self._o.disable()
+        shutil.rmtree(self.tmp, ignore_errors=True)
+
+    def test_publish_emits_release_event(self):
+        from unittest import mock
+        from notes import gitwebhooks, git_releases
+        self.assertIn("release", gitwebhooks.EVENTS)
+        with mock.patch.object(gitwebhooks, "emit") as emit, mock.patch.object(git_releases, "tag_exists", return_value=True):
+            r = self.c.post("/api/git/repos/hooked/releases", {"tag": "v1", "draft": True}, format="json")
+            self.assertEqual(r.status_code, 201, r.content)
+            emit.assert_not_called()  # drafts are not announced
+            self.c.patch(f"/api/git/repos/hooked/releases/{r.json()['id']}", {"draft": False}, format="json")
+            self.assertEqual(emit.call_count, 1)
+            _uid, repo, event, payload = emit.call_args.args
+            self.assertEqual((repo, event), ("hooked", "release"))
+            self.assertEqual(payload()["release"]["tag"], "v1")
+            # Publishing again does nothing new.
+            self.c.patch(f"/api/git/repos/hooked/releases/{r.json()['id']}", {"draft": False, "title": "T"}, format="json")
+            self.assertEqual(emit.call_count, 1)

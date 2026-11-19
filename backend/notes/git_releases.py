@@ -41,6 +41,23 @@ class ReleaseError(g.GitError):
     pass
 
 
+def _announce(release: Release) -> None:
+    """A release was just published: tell the repository's webhooks (event "release")."""
+    from . import gitwebhooks
+    uid = tenancy.current_uid()
+    if uid is None:
+        return
+    gitwebhooks.emit(uid, release.repo, "release", lambda: {
+        "action": "published",
+        "release": release_json(release, tag_names(release.repo)),
+    })
+
+
+def _register_events():
+    from . import gitwebhooks
+    gitwebhooks.register_event("release", "Release published")
+
+
 def max_file_size() -> int:
     try:
         return max(1, int(os.environ.get("KERN_RELEASE_MAX_BYTES", 2 * 1024**3)))
@@ -137,13 +154,16 @@ def create_release(repo: str, tag, *, target=None, title="", notes="", draft=Fal
         create_tag(path, tag, target)
         made = True
     try:
-        return Release.objects.create(
+        r = Release.objects.create(
             repo=repo, tag=tag, title=str(title or "")[:200], notes=str(notes or ""), draft=bool(draft),
             prerelease=bool(prerelease), published=None if draft else timezone.now())
     except IntegrityError:
         if made:
             delete_tag(path, tag)
         raise ReleaseError("There is already a release for that tag.", 409)
+    if not r.draft:
+        _announce(r)
+    return r
 
 
 def update_release(release: Release, data: dict) -> Release:
@@ -153,11 +173,15 @@ def update_release(release: Release, data: dict) -> Release:
         release.notes = str(data["notes"] or "")
     if "prerelease" in data:
         release.prerelease = bool(data["prerelease"])
+    newly = False
     if "draft" in data:
         release.draft = bool(data["draft"])
         if not release.draft and release.published is None:
             release.published = timezone.now()
+            newly = True
     release.save()
+    if newly:
+        _announce(release)
     return release
 
 
@@ -217,6 +241,7 @@ def delete_asset(asset: ReleaseAsset) -> None:
 def attach_file(repo: str, tag: str, filename: str, src_path, *, create=True, title=None, move=False) -> ReleaseAsset:
     """Add a file on disk to the release of ``tag`` (see the module docstring)."""
     release = Release.objects.filter(repo=repo, tag=tag).first()
+    created = False
     if release is None:
         if not create:
             raise ReleaseError("There is no release for that tag.", 404)
@@ -226,6 +251,7 @@ def attach_file(repo: str, tag: str, filename: str, src_path, *, create=True, ti
             raise ReleaseError("There is no such tag in the repository.", 404)
         try:
             release = Release.objects.create(repo=repo, tag=tag, title=title or tag, published=timezone.now())
+            created = True
         except IntegrityError:
             release = Release.objects.get(repo=repo, tag=tag)
     src = Path(src_path)
@@ -235,6 +261,8 @@ def attach_file(repo: str, tag: str, filename: str, src_path, *, create=True, ti
         asset = store_file(release, filename or src.name, iter(lambda: f.read(1024 * 1024), b""))
     if move:
         src.unlink(missing_ok=True)
+    if created:
+        _announce(release)
     return asset
 
 
@@ -261,3 +289,6 @@ def tag_names(repo: str) -> set[str] | None:
         return {t["name"] for t in g.tags(g.repo_path(repo))}
     except g.GitError:
         return None
+
+
+_register_events()
