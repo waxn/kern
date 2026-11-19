@@ -3,9 +3,10 @@
 	   documents in a themed sheet; audio and video hand off to the app-wide player. */
 	import { Download, FileText, X } from '@lucide/svelte';
 	import DocxViewer from '#lib/files/DocxViewer.svelte';
+	import HtmlView from '#lib/files/HtmlView.svelte';
 	import PdfViewer from '#lib/files/PdfViewer.svelte';
 	import TextEditor from '#lib/files/TextEditor.svelte';
-	import { fileKind, type FileRef } from '#lib/files/kind.ts';
+	import { extOf, fileKind, type FileRef } from '#lib/files/kind.ts';
 	import { player } from '#lib/files/player.svelte.ts';
 	import { ui } from '#lib/state/ui.svelte.ts';
 	import { fileSize } from '#lib/util.ts';
@@ -14,6 +15,10 @@
 	let kind = $derived(fileKind(file));
 	let dirty = $state(false);
 	let sheet = $derived(['pdf', 'markdown', 'text', 'docx', 'office'].includes(kind));
+	// HTML files open rendered, with their source a click away (edits there refresh the page view).
+	let isHtml = $derived(kind === 'text' && ['html', 'htm', 'xhtml'].includes(extOf(file.name)));
+	let htmlMode = $state<'page' | 'source'>('page');
+	let saves = $state(0);
 
 	// Media plays in the persistent player instead of this overlay.
 	$effect(() => {
@@ -45,11 +50,20 @@
 					<span class="truncate name">{file.name}</span>
 					{#if file.size}<span class="faint size">{fileSize(file.size)}</span>{/if}
 					<span class="grow"></span>
+					{#if isHtml}
+						<div class="seg" role="radiogroup" aria-label="Show">
+							<button role="radio" aria-checked={htmlMode === 'page'} class:on={htmlMode === 'page'} onclick={() => (htmlMode = 'page')}>Page</button>
+							<button role="radio" aria-checked={htmlMode === 'source'} class:on={htmlMode === 'source'} onclick={() => (htmlMode = 'source')}>Source</button>
+						</div>
+					{/if}
 					<a class="icon-btn" href={file.url} download={file.name} title="Download"><Download size={15} /></a>
 					<button class="icon-btn" title="Close (Esc)" onclick={close}><X size={16} /></button>
 				</div>
 				<div class="body">
 					{#if kind === 'pdf'}<PdfViewer {file} onsaved={onchange} />
+					{:else if isHtml}
+						<div class="layer" class:hidden={htmlMode !== 'page'}><HtmlView {file} version={saves} /></div>
+						<div class="layer" class:hidden={htmlMode !== 'source'}><TextEditor {file} bind:dirty onsaved={() => (saves++, onchange?.())} /></div>
 					{:else if kind === 'markdown' || kind === 'text'}<TextEditor {file} bind:dirty onsaved={onchange} />
 					{:else if kind === 'docx'}<DocxViewer {file} />
 					{:else}
@@ -85,6 +99,12 @@
 	.size { font-size: 12px; white-space: nowrap; }
 	.grow { flex: 1; }
 	.body { flex: 1; min-height: 0; position: relative; }
+	.layer { position: absolute; inset: 0; }
+	.layer.hidden { display: none; }
+	.seg { display: flex; border: 1px solid var(--border); border-radius: 7px; overflow: hidden; margin-right: 4px; }
+	.seg button { border: 0; background: transparent; color: var(--text-2, inherit); padding: 3px 10px; font-size: 12.5px; cursor: pointer; }
+	.seg button + button { border-left: 1px solid var(--border); }
+	.seg button.on { background: var(--text); color: var(--bg); }
 	.bar { display: flex; align-items: center; gap: 6px; height: 44px; padding: 0 12px; color: #eee; }
 	.bar span { flex: 1; }
 	.bar :global(.icon-btn) { color: #ddd; }

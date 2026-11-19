@@ -1,16 +1,17 @@
 <script>
   // @ts-nocheck: plain JavaScript (ported from Manifest).
-  // Every attachment in your mail, newest first. Downloads go through the
-  // same endpoint as in a message: only plain raster images are ever shown
-  // inline; everything else (PDF, HTML, SVG, Office) is a download.
+  // Every attachment in your mail, newest first. Files open the same way as in
+  // a message (../preview.js): images, PDFs, HTML, text and Word files in the
+  // viewer, audio and video in Kern's player; the rest download.
   import { onMount } from 'svelte';
   import { api } from '../api.svelte.js';
   import { errorToast, ui } from '../state.svelte.js';
   import { navigate } from '../router.svelte.js';
   import { bytes, shortDate } from '../format.js';
   import Icon from '../components/Icon.svelte';
+  import { attUrl, isMedia, openAttachment } from '../preview.js';
 
-  const KINDS = [['', 'All'], ['image', 'Images'], ['pdf', 'PDFs'], ['doc', 'Documents'], ['archive', 'Archives'], ['other', 'Other']];
+  const KINDS = [['', 'All'], ['image', 'Images'], ['pdf', 'PDFs'], ['doc', 'Documents'], ['media', 'Audio & video'], ['archive', 'Archives'], ['other', 'Other']];
   let kind = $state('');
   let q = $state('');
   let files = $state([]);
@@ -19,7 +20,7 @@
   let seq = 0;
   let timer;
 
-  const url = (f, inline = false) => `/api/messages/${f.messageId}/attachments/${f.id}${inline ? '?inline=1' : ''}`;
+  const url = (f, inline = false) => attUrl(f.messageId, f.id, inline);
 
   async function load(more = false) {
     const mine = ++seq;
@@ -46,13 +47,9 @@
     timer = setTimeout(() => load(), 250);
   }
   function view(f) {
-    const imgs = files.filter((x) => x.previewable);
-    ui.viewer = {
-      items: imgs.map((x) => ({ name: x.filename, src: url(x, true), href: url(x) })),
-      index: Math.max(0, imgs.indexOf(f)),
-    };
+    openAttachment(files, f);
   }
-  const ICON = { image: 'image', pdf: 'file', doc: 'file', archive: 'archive', other: 'clip' };
+  const ICON = { image: 'image', pdf: 'file', doc: 'file', media: 'play', archive: 'archive', other: 'clip' };
 </script>
 
 <div class="page scroll">
@@ -78,15 +75,20 @@
       <ul>
         {#each files as f (f.id)}
           <li>
-            {#if f.previewable}
-              <button class="thumb" onclick={() => view(f)} aria-label={`View ${f.filename}`}>
-                <img src={url(f, true)} alt="" loading="lazy" />
+            {#if f.preview}
+              <button class="thumb kind-{f.kind}" onclick={() => view(f)} aria-label={`${isMedia(f) ? 'Play' : 'Preview'} ${f.filename}`} title={isMedia(f) ? 'Play' : 'Preview'}>
+                {#if f.previewable}<img src={url(f, true)} alt="" loading="lazy" />
+                {:else}<Icon name={isMedia(f) ? 'play' : ICON[f.kind]} size={20} fill={isMedia(f) ? 'currentColor' : 'none'} />{/if}
               </button>
             {:else}
               <span class="thumb kind-{f.kind}"><Icon name={ICON[f.kind]} size={20} /></span>
             {/if}
             <div class="meta">
-              <div class="name" title={f.filename}>{f.filename}</div>
+              {#if f.preview}
+                <button class="name link" title={f.filename} onclick={() => view(f)}>{f.filename}</button>
+              {:else}
+                <div class="name" title={f.filename}>{f.filename}</div>
+              {/if}
               <div class="sub2 faint">
                 <span class="num">{bytes(f.size)}</span> · {f.from.name || f.from.addr} · <span class="num">{shortDate(f.date)}</span>
               </div>
@@ -136,9 +138,12 @@
     background: var(--bg-sunken); color: var(--text-3); border: 0; padding: 0;
   }
   button.thumb { cursor: zoom-in; }
+  button.thumb:hover { outline: 2px solid var(--line-strong); }
+  .name.link { display: block; max-width: 100%; border: 0; background: none; padding: 0; color: inherit; font: inherit; font-weight: 600; text-align: left; cursor: pointer; }
+  .name.link:hover { text-decoration: underline; }
   .thumb img { width: 100%; height: 100%; object-fit: cover; }
   .kind-pdf { color: var(--danger); }
-  .kind-doc { color: var(--accent-ink); }
+  .kind-doc, .kind-media { color: var(--accent-ink); }
   .meta { flex: 1; min-width: 0; }
   .name { font-weight: 600; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
   .sub2, .subj { font-size: 12px; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }

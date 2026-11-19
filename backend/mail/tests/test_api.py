@@ -58,7 +58,7 @@ def test_body_is_sanitized_and_images_blocked(loaded, api):
     assert "<script" not in b["html"] and "tracker.example" not in b["html"]
     assert b["remoteImages"] > 0 and not b["imagesLoaded"]
     b2 = api.get(f"/api/messages/{m.pk}/body", images="1").json()
-    assert "/api/img?u=" in b2["html"] and b2["imagesLoaded"]
+    assert "/api/mail/img?u=" in b2["html"] and b2["imagesLoaded"]
 
 
 def test_message_headers(loaded, api):
@@ -196,3 +196,42 @@ def test_mark_folder_read(loaded, api, server):
     assert not Message.objects.filter(folder=inbox, seen=False).exists()
     Executor(server).run_pending()
     assert all("\\Seen" in m.flags for m in server.boxes["INBOX"].msgs.values())
+
+
+def test_attachment_previews(loaded, api):
+    m = Message.objects.get(subject="Trip files")
+    t = api.get(f"/api/threads/{m.thread_id}").json()
+    msg = next(x for x in t["messages"] if x["id"] == m.pk)
+    kinds = {a["filename"]: a["preview"] for a in msg["attachments"]}
+    assert kinds == {"itinerary.pdf": "pdf", "itinerary.html": "html", "budget.csv": "text", "voice note.wav": "audio"}
+    atts = {a.filename: a for a in m.attachments.all()}
+
+    # Audio is played inline, with its real type (from the name: it came as octet-stream) and seeking.
+    wav = atts["voice note.wav"]
+    r = api.get(f"/api/messages/{m.pk}/attachments/{wav.pk}", inline="1")
+    assert r["Content-Type"] == "audio/wav" and r["Content-Disposition"].startswith("inline")
+    assert r["Accept-Ranges"] == "bytes" and r["X-Content-Type-Options"] == "nosniff"
+    part = api.c.get(f"/api/mail/messages/{m.pk}/attachments/{wav.pk}?inline=1", HTTP_RANGE="bytes=8-15")
+    assert part.status_code == 206 and part.content == b"WAVEfmt " and part["Content-Range"].startswith("bytes 8-15/")
+
+    # PDFs and HTML are still never rendered by the browser on our origin.
+    for name in ("itinerary.pdf", "itinerary.html"):
+        r = api.get(f"/api/messages/{m.pk}/attachments/{atts[name].pk}", inline="1")
+        assert r["Content-Type"] == "application/octet-stream" and r["Content-Disposition"].startswith("attachment")
+
+    # HTML goes through the email sanitizer: no script, head styles kept, remote images blocked until asked.
+    h = api.get(f"/api/messages/{m.pk}/attachments/{atts['itinerary.html'].pk}/html").json()
+    assert "Lisbon itinerary" in h["html"] and "color:#2f4ad0" in h["html"]
+    assert "script" not in h["html"] and "pwned" not in h["html"] and "img.example" not in h["html"]
+    assert h["remoteImages"] == 1 and not h["imagesLoaded"]
+    h2 = api.get(f"/api/messages/{m.pk}/attachments/{atts['itinerary.html'].pk}/html", images="1").json()
+    assert "/api/mail/img?u=" in h2["html"] and h2["imagesLoaded"]
+    assert api.get(f"/api/messages/{m.pk}/attachments/{atts['budget.csv'].pk}/html").status_code == 400
+
+
+def test_files_page_media_kind(loaded, api):
+    r = api.get("/api/attachments", kind="media").json()
+    assert [f["filename"] for f in r["files"]] == ["voice note.wav"]
+    assert r["files"][0]["kind"] == "media" and r["files"][0]["preview"] == "audio"
+    other = api.get("/api/attachments", kind="other").json()
+    assert "voice note.wav" not in [f["filename"] for f in other["files"]]

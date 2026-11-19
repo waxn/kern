@@ -95,7 +95,7 @@ class _Ctx:
         att = self.cid_map.get(cid.strip("<>").lower())
         if att is None:
             return None
-        return f"/api/messages/{self.message_pk}/attachments/{att}?inline=1"
+        return f"/api/mail/messages/{self.message_pk}/attachments/{att}?inline=1"
 
     def css(self, css: str) -> str:
         css = _CSS_DANGER.sub("", css)
@@ -155,7 +155,7 @@ def sanitize_html(markup: str, *, message_pk: int = 0, load_images: bool = False
         url_schemes=URL_SCHEMES,
         # Relative URLs from the email are already dropped by attribute_filter;
         # only our own rewritten proxy/attachment URLs may be relative.
-        url_relative=lambda u: u if u.startswith(("/api/img?", "/api/messages/")) else None,
+        url_relative=lambda u: u if u.startswith(("/api/mail/img?", "/api/mail/messages/")) else None,
         set_tag_attribute_values={"a": {"target": "_blank"}},
         id_prefix="m-",
     )

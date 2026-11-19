@@ -8,6 +8,7 @@
   import { ago } from '../when.js';
   import RiskPanel from './RiskPanel.svelte';
   import Icon from './Icon.svelte';
+  import { attUrl, isMedia, openAttachment } from '../preview.js';
 
   let { m, open, onToggle, last } = $props();
   let showDetails = $state(false);
@@ -23,17 +24,11 @@
   const files = $derived(m.attachments.filter((a) => !a.inline));
   const showRisk = $derived(m.risk.level === 'medium' || m.risk.level === 'high');
 
-  function openViewer(a) {
-    const imgs = files.filter((x) => x.previewable);
-    ui.viewer = {
-      index: Math.max(0, imgs.findIndex((x) => x.id === a.id)),
-      items: imgs.map((x) => ({
-        src: `/api/messages/${m.id}/attachments/${x.id}?inline=1`,
-        href: `/api/messages/${m.id}/attachments/${x.id}`,
-        name: x.filename,
-        size: x.size,
-      })),
-    };
+  const fileItems = $derived(files.map((a) => ({ ...a, messageId: m.id, risk: m.risk.level })));
+  function preview(e, a) {
+    if (!a.preview) return;
+    e.preventDefault();
+    openAttachment(fileItems, fileItems.find((x) => x.id === a.id));
   }
 
   async function trustImages() {
@@ -133,7 +128,7 @@
               {/if}
               <button role="menuitem" onclick={() => { menu = false; setTimeout(() => print(), 50); }}><Icon name="file" size={15} /> Print conversation</button>
               <button role="menuitem" onclick={() => { menu = false; ui.dialog = { type: 'headers', messageId: m.id, subject: m.subject }; }}><Icon name="code" size={15} /> View headers</button>
-              <a role="menuitem" href={`/api/messages/${m.id}/raw`} download onclick={() => (menu = false)}><Icon name="download" size={15} /> Download original (.eml)</a>
+              <a role="menuitem" href={`/api/mail/messages/${m.id}/raw`} download onclick={() => (menu = false)}><Icon name="download" size={15} /> Download original (.eml)</a>
               <button role="menuitem" onclick={() => { menu = false; messageAction([m.id], 'trash'); }}><Icon name="trash" size={15} /> Delete this message</button>
             </div>
           {/if}
@@ -182,17 +177,21 @@
     {#if files.length}
       <div class="files">
         {#each files as a (a.id)}
-          <a class="file" href={`/api/messages/${m.id}/attachments/${a.id}`} download={a.filename} title={a.filename}
-             onclick={(e) => { if (a.previewable) { e.preventDefault(); openViewer(a); } }}>
-            {#if a.previewable}
-              <img src={`/api/messages/${m.id}/attachments/${a.id}?inline=1`} alt="" loading="lazy" />
-            {:else}
-              <span class="ext">{(a.filename.split('.').pop() || 'file').slice(0, 4).toUpperCase()}</span>
-            {/if}
-            <span class="fname">{a.filename}</span>
-            <span class="fsize">{bytes(a.size)}</span>
-            <span class="dl"><Icon name="download" size={15} /></span>
-          </a>
+          <div class="file" class:can={a.preview}>
+            <a class="fmain" href={attUrl(m.id, a.id)} download={a.preview ? undefined : a.filename} title={a.preview ? `${isMedia(a) ? 'Play' : 'Preview'} ${a.filename}` : a.filename}
+               onclick={(e) => preview(e, a)}>
+              {#if a.previewable}
+                <img src={attUrl(m.id, a.id, true)} alt="" loading="lazy" />
+              {:else if isMedia(a)}
+                <span class="ext play"><Icon name="play" size={16} fill="currentColor" /></span>
+              {:else}
+                <span class="ext">{(a.filename.split('.').pop() || 'file').slice(0, 4).toUpperCase()}</span>
+              {/if}
+              <span class="fname">{a.filename}</span>
+              <span class="fsize">{bytes(a.size)}{#if a.preview && !a.previewable} · {isMedia(a) ? 'play' : 'preview'}{/if}</span>
+            </a>
+            <a class="dl" href={attUrl(m.id, a.id)} download={a.filename} title={`Download ${a.filename}`} aria-label={`Download ${a.filename}`}><Icon name="download" size={15} /></a>
+          </div>
         {/each}
       </div>
     {/if}
@@ -279,18 +278,24 @@
   .note.warn { background: var(--warn-soft); color: var(--warn); }
   .files { display: flex; flex-wrap: wrap; gap: 8px; margin: 4px 14px 12px 62px; }
   .file {
-    display: grid; grid-template-columns: 40px 1fr auto; grid-template-rows: auto auto; column-gap: 10px; align-items: center;
-    width: 240px; padding: 8px 10px; border: 1px solid var(--line); border-radius: var(--radius-sm);
-    text-decoration: none; color: var(--text); background: var(--bg);
+    display: flex; align-items: center; width: 240px; border: 1px solid var(--line); border-radius: var(--radius-sm);
+    background: var(--bg); color: var(--text);
   }
   .file:hover { border-color: var(--line-strong); background: var(--bg-hover); }
+  .fmain {
+    flex: 1; min-width: 0; display: grid; grid-template-columns: 40px 1fr; grid-template-rows: auto auto; column-gap: 10px;
+    align-items: center; padding: 8px 4px 8px 10px; text-decoration: none; color: inherit;
+  }
+  .can .fmain { cursor: zoom-in; }
   .file img, .file .ext {
     grid-row: span 2; width: 40px; height: 40px; border-radius: 6px; object-fit: cover; background: var(--bg-sunken);
     display: grid; place-items: center; font: 600 10px var(--mono); color: var(--text-2); letter-spacing: .03em;
   }
+  .ext.play { color: var(--accent-ink); }
   .fname { font-size: 12.5px; font-weight: 600; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
   .fsize { font-size: 11.5px; color: var(--text-3); grid-column: 2; }
-  .dl { grid-row: 1 / span 2; grid-column: 3; color: var(--text-3); }
+  .dl { flex: none; display: grid; place-items: center; align-self: stretch; padding: 0 10px; color: var(--text-3); border-radius: 0 var(--radius-sm) var(--radius-sm) 0; }
+  .dl:hover { color: var(--text); background: var(--bg-sunken); }
   .foot { display: flex; flex-wrap: wrap; gap: 4px; padding: 0 10px 10px 56px; }
   .foot:empty { display: none; }
   @media (max-width: 640px) {

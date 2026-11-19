@@ -28,6 +28,7 @@ urlpatterns = [
     path("messages/<int:pk>/headers", views.message_headers),
     path("messages/<int:pk>/draft", views.draft_for_message),
     path("messages/<int:pk>/attachments/<int:aid>", views.attachment),
+    path("messages/<int:pk>/attachments/<int:aid>/html", views.attachment_html),
     path("img", views.image_proxy),
     path("snoozes", views.snoozes),
     path("packages", views.packages_list),

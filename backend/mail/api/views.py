@@ -3,6 +3,7 @@ session (enforced by accounts.middleware.ApiLoginRequiredMiddleware)."""
 
 from __future__ import annotations
 
+import re
 from datetime import datetime, timedelta
 from urllib.parse import urlsplit
 
@@ -93,7 +94,8 @@ def message_json(m: Message, drafts_by_key: dict[str, int]) -> dict:
         "labels": [lb.id for lb in m.labels.all()],
         "attachments": [
             {"id": a.id, "filename": a.filename, "contentType": a.content_type, "size": a.size,
-             "inline": a.inline, "previewable": _previewable(a.content_type)}
+             "inline": a.inline, "previewable": _previewable(a.content_type),
+             "preview": _preview(a.content_type, a.filename, a.size)}
             for a in m.attachments.all()
         ],
         "risk": {"level": m.risk_level, "score": m.risk_score, "findings": m.risk_findings},
@@ -117,9 +119,83 @@ def _unsub_json(m: Message):
 
 INLINE_SAFE = {"image/png", "image/jpeg", "image/gif", "image/webp", "image/avif", "image/bmp"}
 
+# Audio and video the browser plays itself. A media type with nosniff can't run
+# script, so these are served inline (with Range, so players can seek). Senders
+# often label them application/octet-stream, so the file name is checked too.
+MEDIA_EXT = {
+    "mp3": "audio/mpeg", "m4a": "audio/mp4", "aac": "audio/aac", "ogg": "audio/ogg", "oga": "audio/ogg",
+    "opus": "audio/ogg", "wav": "audio/wav", "flac": "audio/flac", "weba": "audio/webm",
+    "mp4": "video/mp4", "m4v": "video/mp4", "webm": "video/webm", "ogv": "video/ogg", "mov": "video/quicktime",
+}
+MEDIA_SAFE = set(MEDIA_EXT.values()) | {"audio/mp3", "audio/x-m4a", "audio/x-wav", "audio/wave", "audio/x-flac"}
+TEXT_EXT = {"txt", "text", "log", "csv", "tsv", "json", "xml", "yaml", "yml", "toml", "ini", "md", "markdown", "ics", "vcf"}
+TEXT_MAX = 2 * 1024 * 1024
+HTML_MAX = 5 * 1024 * 1024
+
 
 def _previewable(ctype: str) -> bool:
     return ctype.lower() in INLINE_SAFE
+
+
+def _ext(filename: str) -> str:
+    name = (filename or "").lower()
+    return name.rsplit(".", 1)[-1] if "." in name else ""
+
+
+def _media_type(ctype: str, filename: str) -> str | None:
+    ct = (ctype or "").lower().split(";")[0].strip()
+    if ct in MEDIA_SAFE:
+        return ct
+    if ct in ("", "application/octet-stream") or ct.startswith(("audio/", "video/")):
+        return MEDIA_EXT.get(_ext(filename))
+    return None
+
+
+def _preview(ctype: str, filename: str, size: int) -> str | None:
+    """How the web app can show this attachment, or None (download only). Only
+    images and media are ever rendered by the browser from our origin; PDFs
+    and Word files are drawn by pdf.js / mammoth from bytes, HTML goes through
+    the email sanitizer, text is shown as text."""
+    ct, ext = (ctype or "").lower(), _ext(filename)
+    if ct in INLINE_SAFE:
+        return "image"
+    media = _media_type(ct, filename)
+    if media:
+        return media.split("/")[0]
+    if ct == "application/pdf" or ext == "pdf":
+        return "pdf"
+    if ct in ("text/html", "application/xhtml+xml") or ext in ("html", "htm", "xhtml"):
+        return "html" if size <= HTML_MAX else None
+    if ext == "docx" or ct == "application/vnd.openxmlformats-officedocument.wordprocessingml.document":
+        return "docx"
+    if ext in TEXT_EXT or ct in ("text/plain", "text/csv", "application/json", "text/calendar", "text/vcard"):
+        return "text" if size <= TEXT_MAX else None
+    return None
+
+
+def _ranged(request, data: bytes, ctype: str) -> HttpResponse:
+    size = len(data)
+    m = _RANGE_RE.match(request.headers.get("Range", "").strip())
+    if m and (m.group(1) or m.group(2)):
+        if m.group(1):
+            start, end = int(m.group(1)), int(m.group(2)) if m.group(2) else size - 1
+        else:
+            start, end = max(0, size - int(m.group(2))), size - 1
+        end = min(end, size - 1)
+        if start >= size or start > end:
+            resp = HttpResponse(status=416)
+            resp["Content-Range"] = f"bytes */{size}"
+            return resp
+        resp = HttpResponse(data[start:end + 1], status=206, content_type=ctype)
+        resp["Content-Range"] = f"bytes {start}-{end}/{size}"
+    else:
+        resp = HttpResponse(data, content_type=ctype)
+    resp["Accept-Ranges"] = "bytes"
+    resp["Cache-Control"] = "private, max-age=3600"
+    return resp
+
+
+_RANGE_RE = re.compile(r"^bytes=(\d*)-(\d*)$")
 
 
 # --- info / folders / labels -------------------------------------------------
@@ -550,24 +626,65 @@ def message_raw(request, pk: int):
     return resp
 
 
-@api()
-def attachment(request, pk: int, aid: int):
+def _attachment(pk: int, aid: int):
     m = _message(pk)
     att = Attachment.objects.get(pk=aid, message=m)
     part = parsing.find_part(store.get(m.blob_id), att.part_index)
     if part is None:
         raise ApiError("Attachment not found.", 404, "not_found")
+    return m, att, part
+
+
+@api()
+def attachment(request, pk: int, aid: int):
+    m, att, part = _attachment(pk, aid)
     data = part.payload()
-    inline = request.GET.get("inline") == "1" and _previewable(att.content_type)
-    # SECURITY: anything not a known-safe raster image is served as a download
-    # with a generic type, so the browser never renders attacker content
-    # (HTML, SVG, PDF) on our origin.
-    ctype = att.content_type.lower() if inline else "application/octet-stream"
-    resp = HttpResponse(data, content_type=ctype)
+    want_inline = request.GET.get("inline") == "1"
+    media = _media_type(att.content_type, att.filename) if want_inline else None
+    inline = want_inline and (_previewable(att.content_type) or media is not None)
+    # SECURITY: only known-safe raster images and audio/video are ever served
+    # with their own type; anything else is a download with a generic type, so
+    # the browser never renders attacker content (HTML, SVG, PDF) on our origin.
+    ctype = (media or att.content_type.lower()) if inline else "application/octet-stream"
+    resp = _ranged(request, data, ctype) if media else HttpResponse(data, content_type=ctype)
     resp["Content-Disposition"] = content_disposition_header(not inline, att.filename)
     resp["Content-Security-Policy"] = "sandbox; default-src 'none'"
     resp["X-Content-Type-Options"] = "nosniff"
     return resp
+
+
+_HEAD = re.compile(r"<head\b[^>]*>(.*?)</head\s*>", re.IGNORECASE | re.DOTALL)
+_STYLE_TAG = re.compile(r"<style\b[^>]*>.*?</style\s*>", re.IGNORECASE | re.DOTALL)
+_META_CHARSET = re.compile(rb"""<meta[^>]+charset=["']?([\w-]+)""", re.IGNORECASE)
+
+
+@api()
+def attachment_html(request, pk: int, aid: int):
+    """An HTML attachment, cleaned by the same sanitizer as email bodies, for
+    the viewer's script-less sandboxed frame. Remote images stay blocked
+    unless asked for (and always for high-risk mail unless asked)."""
+    m, att, part = _attachment(pk, aid)
+    if _preview(att.content_type, att.filename, att.size) != "html":
+        raise ApiError("This attachment is not an HTML file.", 400, "not_html")
+    data = part.payload()[:HTML_MAX]
+    charset = part.charset
+    if not charset:
+        hit = _META_CHARSET.search(data[:4096])
+        charset = hit.group(1).decode("ascii", "ignore") if hit else "utf-8"
+    try:
+        markup = data.decode(charset, "replace")
+    except LookupError:
+        markup = data.decode("utf-8", "replace")
+    # A standalone page keeps its look in <head><style>, which the email
+    # sanitizer drops with the rest of <head>: move those styles into the body.
+    head = _HEAD.search(markup)
+    if head:
+        styles = "".join(_STYLE_TAG.findall(head.group(1)))
+        markup = markup[:head.start()] + markup[head.end():]
+        markup = styles + markup
+    load = request.GET.get("images") == "1"
+    res = sanitize.sanitize_html(markup, message_pk=m.pk, load_images=load)
+    return {"html": res.html, "remoteImages": res.remote_images, "imagesLoaded": load and res.remote_images > 0}
 
 
 @api()
@@ -802,6 +919,8 @@ FILE_KINDS = {
             | Q(content_type__icontains="presentation") | Q(content_type__icontains="opendocument")
             | Q(content_type__icontains="excel") | Q(content_type__icontains="powerpoint")
             | Q(content_type__iexact="text/csv") | Q(content_type__iexact="text/plain")),
+    "media": (Q(content_type__istartswith="audio/") | Q(content_type__istartswith="video/")
+              | Q(filename__iregex=r"\.(" + "|".join(MEDIA_EXT) + r")$")),
     "archive": (Q(content_type__icontains="zip") | Q(content_type__icontains="compressed")
                 | Q(content_type__icontains="tar") | Q(content_type__icontains="7z")),
 }
@@ -813,6 +932,8 @@ def _file_kind(a) -> str:
         return "image"
     if ct == "application/pdf" or fn.endswith(".pdf"):
         return "pdf"
+    if ct.startswith(("audio/", "video/")) or _ext(fn) in MEDIA_EXT:
+        return "media"
     if any(w in ct for w in ("zip", "compressed", "tar", "7z")):
         return "archive"
     if any(w in ct for w in ("word", "spreadsheet", "presentation", "opendocument", "excel", "powerpoint")) or ct in ("text/csv", "text/plain"):
@@ -823,7 +944,7 @@ def _file_kind(a) -> str:
 @api()
 def attachments_list(request):
     """Every real (non-inline) attachment, newest first. Trash and Junk are
-    left out. ?kind=image|pdf|doc|archive|other  ?q=filename or sender  ?before=<id>"""
+    left out. ?kind=image|pdf|doc|media|archive|other  ?q=filename or sender  ?before=<id>"""
     qs = (Attachment.objects.filter(inline=False)
           .exclude(message__folder__role__in=[FolderRole.TRASH, FolderRole.JUNK])
           .exclude(content_type__iexact="message/rfc822")
@@ -853,6 +974,7 @@ def attachments_list(request):
         out.append({
             "id": a.id, "messageId": m.id, "threadId": m.thread_id, "filename": a.filename, "size": a.size,
             "contentType": a.content_type, "kind": _file_kind(a), "previewable": _previewable(a.content_type),
+            "preview": _preview(a.content_type, a.filename, a.size),
             "from": {"name": m.from_name, "addr": m.from_addr}, "subject": m.subject, "date": iso(m.sort_date),
             "risk": m.risk_level,
         })

@@ -16,7 +16,7 @@
   import Composer from './Composer.svelte';
   import Dialogs from './Dialogs.svelte';
   import SenderCard from './SenderCard.svelte';
-  import ImageViewer from './ImageViewer.svelte';
+  import AttachmentViewer from './AttachmentViewer.svelte';
   import BlocklistPage from '../pages/BlocklistPage.svelte';
   import PackagesPage from '../pages/PackagesPage.svelte';
   import ScheduledPage from '../pages/ScheduledPage.svelte';
@@ -292,7 +292,7 @@
 </div>
 <Dialogs />
 <SenderCard />
-<ImageViewer />
+<AttachmentViewer />
 
 <style>
   .shell {

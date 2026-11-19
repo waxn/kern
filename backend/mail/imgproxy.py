@@ -56,7 +56,7 @@ def verify(url: str, sig: str) -> bool:
 
 
 def signed_path(url: str) -> str:
-    return f"/api/img?u={quote(url, safe='')}&s={sign(url)}"
+    return f"/api/mail/img?u={quote(url, safe='')}&s={sign(url)}"
 
 
 def is_public_ip(ip: str) -> bool:

@@ -58,13 +58,13 @@ def test_images_blocked_then_proxied():
     assert "img.example" not in blocked.html
     assert blocked.remote_images == 2
     loaded = clean(html, load_images=True)
-    assert loaded.html.count("/api/img?u=https%3A%2F%2Fimg.example") == 2
+    assert loaded.html.count("/api/mail/img?u=https%3A%2F%2Fimg.example") == 2
     assert "&s=" in loaded.html or "&amp;s=" in loaded.html
 
 
 def test_cid_images_point_at_attachment_endpoint():
     out = clean('<img src="cid:logo@x">', cid_map={"logo@x": 42}).html
-    assert "/api/messages/1/attachments/42?inline=1" in out
+    assert "/api/mail/messages/1/attachments/42?inline=1" in out
     unknown = clean('<img src="cid:nope@x">').html
     assert "cid:" not in unknown
 
@@ -109,6 +109,6 @@ def test_linkify_text_escapes():
 
 
 def test_email_cannot_smuggle_our_own_relative_urls():
-    out = clean('<img src="/api/messages/9/attachments/1?inline=1"><a href="/api/img?u=x&s=y">a</a>'
-                '<img src="//api/img?u=x">').html
+    out = clean('<img src="/api/mail/messages/9/attachments/1?inline=1"><a href="/api/mail/img?u=x&s=y">a</a>'
+                '<img src="//api/mail/img?u=x"><img src="/api/messages/9/attachments/1">').html
     assert "/api/" not in out

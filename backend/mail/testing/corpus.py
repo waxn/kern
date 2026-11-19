@@ -270,6 +270,53 @@ def build() -> list[Item]:
         "--ph\r\nContent-Type: text/plain; charset=utf-8\r\n\r\nTwo from the trip!\r\n" + photos + "--ph--\r\n",
         ctype="multipart/mixed; boundary=\"ph\"", cte="7bit"), date=_d(21.5)))
 
+    # 18c. Files the web app previews: a PDF, an HTML page (with a script that
+    # must never run), a CSV and a short audio clip.
+    def tiny_pdf(text):
+        objs = [b"<< /Type /Catalog /Pages 2 0 R >>",
+                b"<< /Type /Pages /Kids [3 0 R] /Count 1 >>",
+                b"<< /Type /Page /Parent 2 0 R /MediaBox [0 0 420 200] /Contents 4 0 R "
+                b"/Resources << /Font << /F1 5 0 R >> >> >>",
+                None,
+                b"<< /Type /Font /Subtype /Type1 /BaseFont /Helvetica >>"]
+        stream = f"BT /F1 22 Tf 30 110 Td ({text}) Tj ET".encode()
+        objs[3] = b"<< /Length " + str(len(stream)).encode() + b" >>\nstream\n" + stream + b"\nendstream"
+        out, offsets = bytearray(b"%PDF-1.4\n"), []
+        for i, body in enumerate(objs, 1):
+            offsets.append(len(out))
+            out += f"{i} 0 obj\n".encode() + body + b"\nendobj\n"
+        xref = len(out)
+        out += f"xref\n0 {len(objs) + 1}\n0000000000 65535 f \n".encode()
+        out += b"".join(f"{o:010d} 00000 n \n".encode() for o in offsets)
+        out += f"trailer\n<< /Size {len(objs) + 1} /Root 1 0 R >>\nstartxref\n{xref}\n%%EOF\n".encode()
+        return bytes(out)
+
+    def tone_wav(seconds=0.6, rate=8000, hz=440):
+        import math
+        import struct
+        n = int(seconds * rate)
+        pcm = bytes(int(128 + 90 * math.sin(2 * math.pi * hz * i / rate)) for i in range(n))
+        return (b"RIFF" + struct.pack("<I", 36 + n) + b"WAVEfmt " + struct.pack("<IHHIIHH", 16, 1, 1, rate, rate, 1, 8)
+                + b"data" + struct.pack("<I", n) + pcm)
+
+    page = ("<!doctype html><html><head><title>Itinerary</title><style>h1{color:#2f4ad0}</style></head><body>"
+            "<h1>Lisbon itinerary</h1><p>Day 1: Alfama walk.</p><img src=\"https://img.example/map.png\" alt=\"map\">"
+            "<script>parent.document.title='pwned'</script></body></html>")
+    files = [("itinerary.pdf", "application/pdf", tiny_pdf("Lisbon itinerary, day 1")),
+             ("itinerary.html", "text/html; charset=utf-8", page.encode()),
+             ("budget.csv", "text/csv", b"item,eur\nhotel,420\nfood,180\n"),
+             ("voice note.wav", "application/octet-stream", tone_wav())]
+    parts = "".join(
+        f"--tf\r\nContent-Type: {ct}\r\nContent-Disposition: attachment; filename=\"{name}\"\r\n"
+        f"Content-Transfer-Encoding: base64\r\n\r\n{base64.b64encode(data).decode()}\r\n"
+        for name, ct, data in files
+    )
+    add(Item("trip-files", msg(
+        [("From", "Alice Example <alice@friends.test>"), ("To", ME), ("Subject", "Trip files"),
+         ("Date", _hdr(_d(21.7))), ("Message-ID", "<tripfiles@friends.test>")],
+        "--tf\r\nContent-Type: text/plain; charset=utf-8\r\n\r\nPlan, budget and a voice note.\r\n" + parts + "--tf--\r\n",
+        ctype="multipart/mixed; boundary=\"tf\"", cte="7bit"), date=_d(21.7)))
+
     # 19. Pathologically nested multipart.
     depth = 60
     nested = "".join(f"--b{i}\r\nContent-Type: multipart/mixed; boundary=\"b{i + 1}\"\r\n\r\n" for i in range(depth))
