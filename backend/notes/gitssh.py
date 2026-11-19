@@ -185,6 +185,7 @@ class Job:
     service: str
     before: dict | None
     pusher: str
+    env: dict  # g.env() of the owner's tenant (it needs the tenant, which the event loop doesn't have)
 
 
 def _prepare(ident: Ident, service: str, arg: str) -> Job:
@@ -201,8 +202,9 @@ def _prepare(ident: Ident, service: str, arg: str) -> Job:
         if pushing and ident.read_only:
             raise Refuse("This deploy key is read-only: it can fetch but not push.")
         before = gitevents.snapshot(path) if pushing else None
+        env = g.env()
     SSHKey.objects.filter(pk=ident.key_id).update(last_used=timezone.now())
-    return Job(ident.uid, name, path, service, before, f"key:{ident.title}")
+    return Job(ident.uid, name, path, service, before, f"key:{ident.title}", env)
 
 
 prepare = _in_thread(_prepare)
@@ -329,7 +331,7 @@ async def run_git(process, job: Job) -> int:
     proc = await asyncio.create_subprocess_exec(
         "git", job.service[len("git-"):], str(job.path),
         stdin=asyncio.subprocess.PIPE, stdout=asyncio.subprocess.PIPE, stderr=asyncio.subprocess.PIPE,
-        env=g.env(extra), limit=1 << 20)
+        env={**job.env, **extra}, limit=1 << 20)
 
     async def feed():  # client -> git
         try:

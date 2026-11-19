@@ -258,6 +258,25 @@ class SSHServerTests(GitLive):
         summary = self.c.get("/api/git/repos").json()[0]
         self.assertTrue(summary["last_push"])
 
+    def test_git_runs_with_the_owners_environment(self):
+        """Outside tests g.env() needs the owner's tenant, which the event loop never has: the
+        environment must be built while the tenant is active (regression: every SSH clone failed)."""
+        from unittest import mock
+        from kern import tenancy
+        from notes import gitssh
+        real = gitssh.g.env
+
+        def env_needing_a_tenant(*a, **kw):
+            if tenancy.current_uid() is None:
+                raise tenancy.NoTenant("No user is active for this request.")
+            return real(*a, **kw)
+
+        self.make_repo("tenant")
+        work = self.workdir()
+        with mock.patch.object(gitssh.g, "env", env_needing_a_tenant):
+            self.run_git("push", "-q", self.ssh_url("tenant"), "main", cwd=work)
+            self.run_git("clone", "-q", self.ssh_url("tenant"), os.path.join(self.git_root, "tclone"))
+
     def test_path_forms(self):
         self.make_repo("proj")
         work = self.workdir()
