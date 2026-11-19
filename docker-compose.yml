@@ -43,6 +43,28 @@ services:
       # (also needs Settings → Server → "Mail servers on the local network").
       - "host.docker.internal:host-gateway"
 
+  # Runs the CI pipelines of the git server (.kern/ci.yml, see docs/git-ci.md). Each job runs in a
+  # sibling container started through the host's Docker socket, so mounting it gives this service
+  # (and the code you run in your pipelines) control of Docker on the host: only for your own repos.
+  # Don't need CI? Remove this service.
+  ci:
+    build: ./backend
+    command: ["ci-worker"]
+    restart: unless-stopped
+    depends_on:
+      backend:
+        condition: service_healthy
+    environment:
+      KERN_DATA_DIR: /data
+      KERN_CI_RUNNER: docker
+      # KERN_CI_CONCURRENCY: 1          # runs at the same time
+      # KERN_CI_DEFAULT_TIMEOUT_MIN: 30 # per job unless the pipeline says otherwise
+      # KERN_CI_MAX_TIMEOUT_MIN: 360    # upper limit for any timeout
+      # KERN_CI_KEEP_RUNS: 50           # runs (with logs and artifacts) kept per repository
+    volumes:
+      - kern_data:/data
+      - /var/run/docker.sock:/var/run/docker.sock
+
   web:
     build: ./frontend
     restart: unless-stopped

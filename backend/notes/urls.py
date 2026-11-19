@@ -4,6 +4,7 @@ from . import views as v
 from . import views_db as db
 from . import views_learn as learn
 from . import views_data as data
+from . import views_ci as civ
 from . import views_git as gitv
 from . import views_git_releases as gitrel
 from . import views_git_hooks as gith
@@ -115,6 +116,16 @@ urlpatterns = [
     path("git/repos/<str:name>/webhooks/<int:hid>/deliveries", gith.webhook_deliveries),
     path("git/repos/<str:name>/webhooks/<int:hid>/deliveries/<int:did>", gith.webhook_delivery),
     path("git/repos/<str:name>/webhooks/<int:hid>/deliveries/<int:did>/redeliver", gith.webhook_redeliver),
+    path("git/repos/<str:name>/ci/runs", civ.runs),
+    path("git/repos/<str:name>/ci/runs/<int:rid>", civ.run_detail),
+    path("git/repos/<str:name>/ci/runs/<int:rid>/cancel", civ.run_cancel),
+    path("git/repos/<str:name>/ci/runs/<int:rid>/rerun", civ.run_rerun),
+    path("git/repos/<str:name>/ci/runs/<int:rid>/jobs/<str:job>/log", civ.job_log),
+    path("git/repos/<str:name>/ci/runs/<int:rid>/artifacts/<str:job>/<path:rel>", civ.artifact_download),
+    path("git/repos/<str:name>/ci/secrets", civ.secrets),
+    path("git/repos/<str:name>/ci/secrets/<str:secret>", civ.secret_item),
+    path("git/repos/<str:name>/ci/status", civ.status),
+    path("git/repos/<str:name>/ci/pipeline", civ.pipeline),
     # Web archive endpoints
     path("web/list", web.web_list),
     path("web/archive", web.web_create),

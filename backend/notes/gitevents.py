@@ -23,6 +23,7 @@ ZERO = "0" * 40
 
 # Modules that register push listeners; imported lazily on the first push.
 LISTENER_MODULES: list[str] = [
+    "notes.ci",
     "notes.gitmirrors",
     "notes.gitwebhooks",
 ]

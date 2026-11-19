@@ -3,14 +3,17 @@
 	import { goto } from '$app/navigation';
 	import {
 		ChartColumn, ChevronLeft, Code, Copy, Download, File, FileCode, FileText, Folder, FolderGit2, GitBranch,
-		GitCommitHorizontal, History, Image, Pencil, Rocket, Settings, Tag, Trash2
+		GitCommitHorizontal, History, Image, Pencil, Play, Rocket, Settings, Tag, Trash2
 	} from '@lucide/svelte';
 	import { api, ApiError, qs } from '#lib/api.ts';
+	import CIDot from '#lib/git/CIDot.svelte';
+	import CIRuns from '#lib/git/CIRuns.svelte';
 	import CloneBox from '#lib/git/CloneBox.svelte';
 	import DiffView from '#lib/git/DiffView.svelte';
 	import ReleasesView from '#lib/git/ReleasesView.svelte';
 	import RepoSettings from '#lib/git/RepoSettings.svelte';
 	import StatsView from '#lib/git/StatsView.svelte';
+	import { loadStatuses, runUrl, type CiStatusMap } from '#lib/git/ci.ts';
 	import { highlightCode } from '#lib/git/highlight.ts';
 	import { renderReadme } from '#lib/git/markdown.ts';
 	import { cloneUrl, short, type Blob, type Commit, type CommitDetail, type Release, type RepoDetail, type Stats, type TreeResult } from '#lib/git/types.ts';
@@ -29,6 +32,8 @@
 		if (head === 'branches') return { kind: 'branches' as const, arg };
 		if (head === 'stats') return { kind: 'stats' as const, arg };
 		if (head === 'releases') return { kind: 'releases' as const, arg };
+		if (head === 'runs') return { kind: 'runs' as const, arg };
+		if (head === 'run') return { kind: 'run' as const, arg };
 		if (head === 'settings') return { kind: 'settings' as const, arg };
 		return { kind: 'tree' as const, arg: '' };
 	});
@@ -181,7 +186,25 @@
 	}
 
 	const copy = (s: string, what: string) => navigator.clipboard?.writeText(s).then(() => ui.toast(`${what} copied`));
-	let tab = $derived(view.kind === 'blob' ? 'tree' : view.kind === 'commit' ? 'commits' : view.kind);
+	let tab = $derived(view.kind === 'blob' ? 'tree' : view.kind === 'commit' ? 'commits' : view.kind === 'run' ? 'runs' : view.kind);
+
+	// CI status dots next to commits and branches: the latest run per commit.
+	let ci = $state<CiStatusMap>({});
+	$effect(() => {
+		const r = repo;
+		if (!r || r.empty || r.name !== name) return;
+		const shas = view.kind === 'commits' ? commits.map((c) => c.sha) : view.kind === 'branches' ? [...r.branch_list, ...r.tag_list].map((b) => b.sha) : [];
+		const todo = shas.filter((s) => !(s in asked));
+		if (!todo.length) return;
+		for (const s of todo) asked[s] = true;
+		loadStatuses(r.name, todo).then((m) => (ci = { ...ci, ...m }));
+	});
+	let asked: Record<string, boolean> = {};
+	$effect(() => {
+		void name;
+		ci = {};
+		asked = {};
+	});
 </script>
 
 {#snippet commitBar(c: Commit | null)}
@@ -241,10 +264,11 @@ git push -u origin main</code></pre>
 					<a class:on={tab === 'commits'} href={href('commits')} onclick={(e) => go(e, href('commits'))}><History size={14} />Commits</a>
 					<a class:on={tab === 'branches'} href={href('branches', '', '')} onclick={(e) => go(e, href('branches', '', ''))}><GitBranch size={14} />Branches <em>{repo.branch_list.length}</em> · Tags <em>{repo.tag_list.length}</em></a>
 					<a class:on={tab === 'releases'} href={href('releases', '', '')} onclick={(e) => go(e, href('releases', '', ''))}><Rocket size={14} />Releases</a>
+					<a class:on={tab === 'runs'} href={href('runs', '', '')} onclick={(e) => go(e, href('runs', '', ''))}><Play size={14} />Runs</a>
 					<a class:on={tab === 'stats'} href={href('stats')} onclick={(e) => go(e, href('stats'))}><ChartColumn size={14} />Stats</a>
 					<a class:on={tab === 'settings'} href={href('settings', '', '')} onclick={(e) => go(e, href('settings', '', ''))}><Settings size={14} />Settings</a>
 					<span class="grow"></span>
-					{#if tab !== 'branches' && tab !== 'settings' && tab !== 'releases' && view.kind !== 'commit'}
+					{#if tab !== 'branches' && tab !== 'settings' && tab !== 'releases' && tab !== 'runs' && view.kind !== 'commit'}
 						<label class="refsel">
 							{#if repo.tag_list.some((t) => t.name === ref) && !repo.branch_list.some((b) => b.name === ref)}<Tag size={13} />{:else}<GitBranch size={13} />{/if}
 							<select value={ref} onchange={(e) => setRef(e.currentTarget.value)}>
@@ -348,6 +372,7 @@ git push -u origin main</code></pre>
 										<a class="subj" href={href('commit', c.sha, '')} onclick={(e) => go(e, href('commit', c.sha, ''))}>{c.subject}</a>
 										<span class="faint sub"><b>{c.author}</b> committed {relTime(c.date)}{c.parents.length > 1 ? ' · merge' : ''}</span>
 									</div>
+									{#if ci[c.sha]}<CIDot status={ci[c.sha].status} href={runUrl(name, ci[c.sha].run)} />{/if}
 									<button class="sha" title="Copy full SHA" onclick={() => copy(c.sha, 'SHA')}>{short(c.sha)}</button>
 									<a class="icon-btn" title="Browse files at this commit" href={href('', '', c.sha)} onclick={(e) => go(e, href('', '', c.sha))}><Code size={14} /></a>
 								</div>
@@ -390,6 +415,7 @@ git push -u origin main</code></pre>
 								{#if b.name === repo.default_branch}<span class="chip">default</span>{/if}
 								<span class="faint truncate bs">{b.subject}</span>
 								<span class="grow"></span>
+								{#if ci[b.sha]}<CIDot status={ci[b.sha].status} href={runUrl(name, ci[b.sha].run)} />{/if}
 								<span class="faint">{relTime(b.date)}</span>
 								<a class="sha" href={href('commit', b.sha, '')} onclick={(e) => go(e, href('commit', b.sha, ''))}>{short(b.sha)}</a>
 								{#if b.name !== repo.default_branch}<button class="btn ghost sm" onclick={() => setDefault(b.name)}>Make default</button>{:else}<span class="sm-pad"></span>{/if}
@@ -405,6 +431,7 @@ git push -u origin main</code></pre>
 									<a class="bn" href={href('', '', t.name)} onclick={(e) => go(e, href('', '', t.name))}>{t.name}</a>
 									<span class="faint truncate bs">{t.subject}</span>
 									<span class="grow"></span>
+									{#if ci[t.sha]}<CIDot status={ci[t.sha].status} href={runUrl(name, ci[t.sha].run)} />{/if}
 									<span class="faint">{relTime(t.date)}</span>
 									<a class="sha" href={href('commit', t.sha, '')} onclick={(e) => go(e, href('commit', t.sha, ''))}>{short(t.sha)}</a>
 								</div>
@@ -415,6 +442,8 @@ git push -u origin main</code></pre>
 					{/if}
 				{:else if view.kind === 'settings'}
 					<RepoSettings {repo} onchange={(r) => (repo = r)} />
+				{:else if view.kind === 'runs' || view.kind === 'run'}
+					<CIRuns {repo} runId={view.kind === 'run' && /^\d+$/.test(view.arg) ? Number(view.arg) : null} />
 				{:else if view.kind === 'stats' && stats && !stats.empty}
 					<StatsView {stats} />
 				{:else if loading}

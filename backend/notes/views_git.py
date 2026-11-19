@@ -67,6 +67,8 @@ def repo_detail(request, name):
         gittokens.revoke_repo(request.user.id, name)
         from .views_git_hooks import forget_repo
         forget_repo(name)
+        from . import ci
+        ci.purge_repo(name)  # runs, logs, artifacts and secrets go with the repository
         return Response(status=204)
     if request.method == "PATCH":
         data = request.data if isinstance(request.data, dict) else {}

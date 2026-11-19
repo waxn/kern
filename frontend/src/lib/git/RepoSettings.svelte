@@ -7,6 +7,7 @@
 	import RepoAccess from './RepoAccess.svelte';
 	import MirrorsSettings from './MirrorsSettings.svelte';
 	import WebhooksSettings from './WebhooksSettings.svelte';
+	import CISecrets from './CISecrets.svelte';
 	import type { ProtectedRule, RepoDetail } from './types.ts';
 
 	let { repo, onchange }: { repo: RepoDetail; onchange: (r: RepoDetail) => void } = $props();
@@ -60,6 +61,7 @@
 <RepoAccess {repo} {onchange} />
 <MirrorsSettings {repo} />
 <WebhooksSettings {repo} />
+<CISecrets repo={repo.name} />
 
 <style>
 	.set { margin-bottom: 28px; }

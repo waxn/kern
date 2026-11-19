@@ -9,7 +9,13 @@ if [ "$(id -u)" = "0" ]; then
 		echo "kern: fixing ownership of ${KERN_DATA_DIR:-/data}"
 		chown -R kern:kern "${KERN_DATA_DIR:-/data}"
 	fi
-	exec setpriv --reuid=kern --regid=kern --init-groups "$0" "$@"
+	groups="--init-groups"
+	sock="${KERN_DOCKER_SOCKET:-/var/run/docker.sock}"
+	if [ "${1:-}" = "ci-worker" ] && [ -S "$sock" ]; then
+		# The CI worker needs the Docker socket, which belongs to the host's docker group.
+		groups="--groups=$(stat -c %g "$sock"),$(id -g kern)"
+	fi
+	exec setpriv --reuid=kern --regid=kern "$groups" "$0" "$@"
 fi
 
 if ! touch "${KERN_DATA_DIR:-/data}/.write-test" 2>/dev/null; then
@@ -21,6 +27,10 @@ rm -f "${KERN_DATA_DIR:-/data}/.write-test"
 if [ "${1:-}" = "mail-worker" ]; then
 	# The mail service (docker-compose.yml): the backend has already migrated everything.
 	exec python manage.py mail_worker
+fi
+if [ "${1:-}" = "ci-worker" ]; then
+	# The ci service (docker-compose.yml): runs queued CI pipelines of the git server.
+	exec python manage.py ci_worker
 fi
 if [ "$#" -gt 0 ]; then
 	# One-off commands: docker compose run --rm backend python manage.py …
