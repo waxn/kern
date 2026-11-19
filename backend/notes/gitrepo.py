@@ -4,6 +4,9 @@ Repositories live in ``DATA_DIR/git/<name>.git``. Every git command goes through
 :func:`git`, which ignores system/global config, disables hooks and never lets a
 user-supplied value be parsed as an option (refs are resolved to a SHA first,
 paths always come after ``--``).
+
+The only hooks git runs are Kern's own, from ``notes/githooks`` (never from a repository): its
+pre-receive enforces protected branches.
 """
 import json
 from kern import tenancy
@@ -23,11 +26,12 @@ META_FILE = "kern.json"  # Kern's own metadata (last push), next to git's files
 STATS_FILE = "kern-stats.json"  # cached stats, keyed by commit
 MAX_BLOB = 1024 * 1024  # bytes of a file shown in the viewer
 MAX_DIFF_LINES = 6000
+HOOKS_DIR = Path(__file__).resolve().parent / "githooks"
 
 # Applied to every git process, including `git http-backend` and the
-# receive-pack it spawns: no hooks, no config from outside the repository.
+# receive-pack it spawns: only Kern's own hooks, no config from outside the repository.
 SAFE_CONFIG = {
-    "core.hooksPath": os.devnull,
+    "core.hooksPath": str(HOOKS_DIR),
     "core.fsmonitor": "false",
     "receive.fsckObjects": "true",
     "receive.denyNonFastForwards": "false",
@@ -173,6 +177,48 @@ def delete(name: str) -> None:
     trash = path.with_name(f".{name}.deleting-{int(time.time())}")
     os.replace(path, trash)
     shutil.rmtree(trash, ignore_errors=True)
+
+
+# ------------------------------------------------------- protected branches
+
+
+def protected(path: Path) -> list[dict]:
+    """[{pattern, allow_force, allow_delete}] — enforced by githooks/pre-receive."""
+    rules = read_meta(path).get("protected") or []
+    return [r for r in rules if isinstance(r, dict) and r.get("pattern")]
+
+
+def set_protected(path: Path, rules) -> list[dict]:
+    if not isinstance(rules, list) or len(rules) > 50:
+        raise GitError("Protected branches must be a list (at most 50).")
+    clean, seen = [], set()
+    for r in rules:
+        if isinstance(r, str):
+            r = {"pattern": r}
+        if not isinstance(r, dict):
+            raise GitError("Invalid protected branch rule.")
+        pat = str(r.get("pattern") or "").strip()
+        if not pat or len(pat) > 200 or pat.startswith("-") or any(c in pat for c in "\0\n\r :~^\\"):
+            raise GitError("Invalid branch pattern.")
+        if pat in seen:
+            continue
+        seen.add(pat)
+        clean.append({"pattern": pat, "allow_force": bool(r.get("allow_force")), "allow_delete": bool(r.get("allow_delete"))})
+    write_meta(path, protected=clean)
+    return clean
+
+
+# ----------------------------------------------------------------- archives
+
+ARCHIVE_FORMATS = {"zip": ("zip", "application/zip"), "tar.gz": ("tar.gz", "application/gzip")}
+
+
+def archive_cmd(path: Path, sha: str, fmt: str, prefix: str) -> list[str]:
+    """argv for `git archive` of one commit; run it with :func:`env`."""
+    if fmt not in ARCHIVE_FORMATS or not SHA_RE.match(sha):
+        raise GitError("Unsupported archive format.")
+    return ["git", f"--git-dir={path}", "archive", f"--format={ARCHIVE_FORMATS[fmt][0]}", f"--prefix={prefix}/",
+            "--end-of-options", sha]
 
 
 def now_iso() -> str:

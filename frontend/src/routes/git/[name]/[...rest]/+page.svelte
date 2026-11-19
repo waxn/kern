@@ -3,11 +3,12 @@
 	import { goto } from '$app/navigation';
 	import {
 		ChartColumn, ChevronLeft, Code, Copy, Download, File, FileCode, FileText, Folder, FolderGit2, GitBranch,
-		GitCommitHorizontal, History, Image, Pencil, Tag, Trash2
+		GitCommitHorizontal, History, Image, Pencil, Settings, Tag, Trash2
 	} from '@lucide/svelte';
 	import { api, ApiError, qs } from '#lib/api.ts';
 	import CloneBox from '#lib/git/CloneBox.svelte';
 	import DiffView from '#lib/git/DiffView.svelte';
+	import RepoSettings from '#lib/git/RepoSettings.svelte';
 	import StatsView from '#lib/git/StatsView.svelte';
 	import { highlightCode } from '#lib/git/highlight.ts';
 	import { renderReadme } from '#lib/git/markdown.ts';
@@ -26,6 +27,7 @@
 		if (head === 'commit') return { kind: 'commit' as const, arg };
 		if (head === 'branches') return { kind: 'branches' as const, arg };
 		if (head === 'stats') return { kind: 'stats' as const, arg };
+		if (head === 'settings') return { kind: 'settings' as const, arg };
 		return { kind: 'tree' as const, arg: '' };
 	});
 	let refParam = $derived(page.url.searchParams.get('ref') ?? '');
@@ -111,6 +113,7 @@
 	let isMarkdown = $derived(!!blob && /\.(md|markdown|mdx)$/i.test(blob.path));
 	let isImage = $derived(!!blob && /\.(png|jpe?g|gif|webp|avif|ico|bmp)$/i.test(blob.path));
 	let codeLines = $derived(blob?.text != null ? highlightCode(blob.text.replace(/\n$/, ''), blob.path).split('\n') : []);
+	const archiveUrl = (fmt: 'zip' | 'tar.gz') => `/api/git/repos/${name}/archive` + qs({ ref: refParam || undefined, format: fmt });
 	const rawUrl = (p: string, inline = false) => `/api/git/repos/${name}/raw` + qs({ ref: refParam, path: p, inline: inline ? 1 : undefined });
 	const resolveImg = (base: string) => (u: string) => {
 		const clean = u.replace(/^\.\//, '');
@@ -204,7 +207,13 @@
 				</div>
 			</div>
 
-			{#if repo.empty}
+			{#if view.kind === 'settings'}
+				<nav class="tabs">
+					{#if !repo.empty}<a href={href('')} onclick={(e) => go(e, href(''))}><Code size={14} />Code</a>{/if}
+					<a class="on" href={href('settings', '', '')}><Settings size={14} />Settings</a>
+				</nav>
+				<RepoSettings {repo} onchange={(r) => (repo = r)} />
+			{:else if repo.empty}
 				<div class="setup">
 					<h3>This repository is empty</h3>
 					<p class="muted">Push an existing project to it:</p>
@@ -217,6 +226,7 @@ cd {repo.name}
 echo "# {repo.name}" &gt; README.md
 git add README.md &amp;&amp; git commit -m "First commit"
 git push -u origin main</code></pre>
+					<p class="muted"><a href={href('settings', '', '')} onclick={(e) => go(e, href('settings', '', ''))}><Settings size={13} /> Repository settings</a></p>
 				</div>
 			{:else}
 				<nav class="tabs">
@@ -224,7 +234,13 @@ git push -u origin main</code></pre>
 					<a class:on={tab === 'commits'} href={href('commits')} onclick={(e) => go(e, href('commits'))}><History size={14} />Commits</a>
 					<a class:on={tab === 'branches'} href={href('branches', '', '')} onclick={(e) => go(e, href('branches', '', ''))}><GitBranch size={14} />Branches <em>{repo.branch_list.length}</em> · Tags <em>{repo.tag_list.length}</em></a>
 					<a class:on={tab === 'stats'} href={href('stats')} onclick={(e) => go(e, href('stats'))}><ChartColumn size={14} />Stats</a>
+					<a class:on={tab === 'settings'} href={href('settings', '', '')} onclick={(e) => go(e, href('settings', '', ''))}><Settings size={14} />Settings</a>
 					<span class="grow"></span>
+					{#if tab === 'tree'}
+						<span class="dl" title="Download this {refParam ? 'ref' : 'branch'}">
+							<Download size={13} /><a href={archiveUrl('zip')}>zip</a><a href={archiveUrl('tar.gz')}>tar.gz</a>
+						</span>
+					{/if}
 					{#if tab !== 'branches' && view.kind !== 'commit'}
 						<label class="refsel">
 							{#if repo.tag_list.some((t) => t.name === ref) && !repo.branch_list.some((b) => b.name === ref)}<Tag size={13} />{:else}<GitBranch size={13} />{/if}
@@ -408,6 +424,8 @@ git push -u origin main</code></pre>
 	.hact { display: flex; align-items: center; gap: 4px; }
 	.cb { width: 360px; max-width: calc(100vw - 80px); }
 	.grow { flex: 1; }
+	.dl { display: inline-flex; align-items: center; gap: 6px; font-size: 12.5px; color: var(--text-3); margin-right: 8px; }
+	.dl a { color: var(--text-2); }
 	.tabs { display: flex; align-items: center; gap: 2px; border-bottom: 1px solid var(--border); margin-bottom: 14px; flex-wrap: wrap; }
 	.tabs a { display: inline-flex; align-items: center; gap: 6px; padding: 7px 10px; margin-bottom: -1px; color: var(--text-2); text-decoration: none; border-bottom: 2px solid transparent; font-size: 13.5px; }
 	.tabs a:hover { color: var(--text); }

@@ -13,7 +13,8 @@ export interface Repo {
 }
 
 export interface Ref { name: string; sha: string; date: string; subject: string; author?: string }
-export interface RepoDetail extends Repo { branch_list: Ref[]; tag_list: Ref[] }
+export interface ProtectedRule { pattern: string; allow_force: boolean; allow_delete: boolean }
+export interface RepoDetail extends Repo { branch_list: Ref[]; tag_list: Ref[]; protected?: ProtectedRule[] }
 
 export interface Commit {
 	sha: string;

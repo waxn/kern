@@ -16,6 +16,7 @@ from rest_framework.response import Response
 from accounts import site, throttle
 from kern import tenancy
 
+from . import gitevents
 from . import gitrepo as g
 from .models import Setting
 from .views import bad
@@ -72,9 +73,12 @@ def repo_detail(request, name):
             if b not in [x["name"] for x in g.branches(path)]:
                 return bad("No such branch.")
             g.git(path, "symbolic-ref", "HEAD", f"refs/heads/{b}")
+        if "protected" in data:
+            g.set_protected(path, data["protected"])
     out = g.summary(name, path)
     out["branch_list"] = g.branches(path)
     out["tag_list"] = g.tags(path)
+    out["protected"] = g.protected(path)
     return Response(out)
 
 
@@ -138,6 +142,39 @@ def _raw(request, name):
     disp = "inline" if mime else "attachment"
     r["Content-Disposition"] = f"{disp}; filename*=UTF-8''{quote(sub.rsplit('/', 1)[-1])}"
     r["Content-Security-Policy"] = "default-src 'none'; sandbox"
+    r["X-Content-Type-Options"] = "nosniff"
+    return r
+
+
+def repo_archive(request, name):
+    """The tree of a branch, tag or commit as a .zip or .tar.gz download, streamed from `git archive`."""
+    try:
+        if request.method != "GET":
+            return HttpResponse(status=405)
+        path = _repo(name)
+        ref = request.GET.get("ref") or None
+        sha = g.resolve(path, ref)
+        if not sha:
+            return _plain("Repository is empty.", 404)
+        fmt = request.GET.get("format", "zip")
+        label = re.sub(r"[^A-Za-z0-9._-]+", "-", ref or g.default_branch(path) or sha[:7]).strip("-") or sha[:7]
+        prefix = f"{name}-{label}"
+        cmd = g.archive_cmd(path, sha, fmt, prefix)
+    except g.GitError as e:
+        return _plain(str(e), e.status)
+    proc = subprocess.Popen(cmd, stdout=subprocess.PIPE, stderr=subprocess.DEVNULL, env=g.env())
+
+    def body():
+        try:
+            while chunk := proc.stdout.read(64 * 1024):
+                yield chunk
+        finally:
+            proc.stdout.close()
+            proc.kill()
+            proc.wait()
+
+    r = StreamingHttpResponse(body(), content_type=g.ARCHIVE_FORMATS[fmt][1])
+    r["Content-Disposition"] = f'attachment; filename="{prefix}.{fmt}"'
     r["X-Content-Type-Options"] = "nosniff"
     return r
 
@@ -286,6 +323,8 @@ def _git_http(request, name, rest, user):
         # The "dumb" protocol is not offered; modern git always asks for a service.
         return _plain("Only the smart HTTP protocol is supported.", 403)
     write = service == "git-receive-pack"
+    pushing = write and request.method == "POST"
+    before = gitevents.snapshot(path) if pushing else None
 
     if request.method == "POST":
         if rest not in SERVICES:
@@ -369,14 +408,9 @@ def _git_http(request, name, rest, user):
             writer.join(timeout=5)
             proc.stdout.close()
             rc = proc.wait()
-            if write and rc == 0 and request.method == "POST":
-                try:
-                    with tenancy.use(uid):
-                        g.fix_head(path)
-                        g.write_meta(path, last_push=g.now_iso())
-                        (path / g.STATS_FILE).unlink(missing_ok=True)
-                except (OSError, g.GitError):
-                    pass
+            if pushing and rc == 0:
+                with tenancy.use(uid):
+                    gitevents.after_push(uid, name, path, before, pusher=user.username, via="http")
 
     resp = StreamingHttpResponse(body(), status=status,
                                  content_type=headers.pop("Content-Type", "application/octet-stream"))

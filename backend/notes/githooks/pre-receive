@@ -1,0 +1,54 @@
+#!/usr/bin/env python3
+"""Kern's pre-receive hook: the only hook git ever runs for a Kern repository (core.hooksPath points
+here, never into the repository). Enforces the repository's protected branches from kern.json.
+
+Standard library only, so it starts fast; git runs it with the same locked-down environment
+(GIT_CONFIG_* from notes/gitrepo.py) as every other git process."""
+import fnmatch
+import json
+import os
+import subprocess
+import sys
+
+ZERO = "0" * 40
+
+
+def main():
+    git_dir = os.environ.get("GIT_DIR", ".")
+    try:
+        with open(os.path.join(git_dir, "kern.json")) as f:
+            meta = json.load(f)
+    except (OSError, ValueError):
+        meta = {}
+    rules = [r for r in meta.get("protected") or [] if isinstance(r, dict) and r.get("pattern")]
+    if not rules:
+        return 0
+    bad = []
+    for line in sys.stdin:
+        parts = line.split()
+        if len(parts) != 3:
+            continue
+        old, new, ref = parts
+        if not ref.startswith("refs/heads/"):
+            continue
+        branch = ref[len("refs/heads/"):]
+        rule = next((r for r in rules if fnmatch.fnmatchcase(branch, r["pattern"])), None)
+        if rule is None:
+            continue
+        if new == ZERO:
+            if not rule.get("allow_delete"):
+                bad.append(f"{branch}: protected branches cannot be deleted")
+            continue
+        if old == ZERO:
+            continue
+        if not rule.get("allow_force"):
+            ff = subprocess.run(["git", "merge-base", "--is-ancestor", old, new], capture_output=True).returncode == 0
+            if not ff:
+                bad.append(f"{branch}: protected branches cannot be force-pushed")
+    for msg in bad:
+        print(f"kern: {msg}", file=sys.stderr)
+    return 1 if bad else 0
+
+
+if __name__ == "__main__":
+    sys.exit(main())

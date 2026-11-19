@@ -92,6 +92,7 @@ urlpatterns = [
     path("git/repos/<str:name>/tree", gitv.repo_tree),
     path("git/repos/<str:name>/blob", gitv.repo_blob),
     path("git/repos/<str:name>/raw", gitv.repo_raw),
+    path("git/repos/<str:name>/archive", gitv.repo_archive),
     path("git/repos/<str:name>/commits", gitv.repo_commits),
     path("git/repos/<str:name>/commits/<str:sha>", gitv.repo_commit),
     path("git/repos/<str:name>/stats", gitv.repo_stats),
