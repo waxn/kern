@@ -475,7 +475,46 @@ def _finish(run: Run, status: str, error: str, jobs: dict | None) -> Run:
                 row.save(update_fields=["status", "finished", "note"])
     Run.objects.filter(pk=run.pk).update(status=status, error=error, finished=now)
     run.refresh_from_db()
+    try:
+        _publish(run)
+    except Exception:  # noqa: BLE001  (a failed hand-off never changes the run's result)
+        log.exception("publishing CI run %s failed", run.id)
     return run
+
+
+def _publish(run: Run) -> None:
+    """After a run: attach `release: true` jobs' artifacts to the tag's release (successful tag
+    runs only), then tell the repository's webhooks (event "ci_run")."""
+    if run.status == Run.SUCCESS and run.tag and run.pipeline:
+        wanted = {j["name"] for j in run.pipeline.get("jobs", []) if j.get("release")}
+        ok = {j.name for j in run.jobs.all() if j.status == Job.SUCCESS}
+        files = [f for f in run_artifacts(run) if f.job in wanted & ok]
+        if files:
+            from . import git_releases
+            for f in files:
+                git_releases.attach_file(run.repo, run.tag, f.name.rsplit("/", 1)[-1], f.path, create=True)
+            for job in wanted & ok:
+                with open(log_path(run.id, job), "a") as lf:
+                    n = sum(1 for f in files if f.job == job)
+                    lf.write(f"[kern-ci] attached {n} file(s) to the release of {run.tag}\n")
+    uid = tenancy.current_uid()
+    if uid is not None:
+        from . import gitwebhooks
+        gitwebhooks.emit(uid, run.repo, "ci_run", lambda: {
+            "run": {"id": run.id, "status": run.status, "ref": run.ref, "sha": run.sha, "trigger": run.trigger,
+                    "pusher": run.pusher, "error": run.error,
+                    "started": run.started.isoformat() if run.started else None,
+                    "finished": run.finished.isoformat() if run.finished else None,
+                    "jobs": [{"name": j.name, "status": j.status} for j in run.jobs.all()]},
+        })
+
+
+def _register_events():
+    from . import gitwebhooks
+    gitwebhooks.register_event("ci_run", "CI run finished")
+
+
+_register_events()
 
 
 def drain(runner_factory=None) -> int:

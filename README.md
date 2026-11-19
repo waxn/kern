@@ -109,8 +109,28 @@ contributors, totals).
   git password you set under **Git → Sign-in** (so your account password never ends up
   in a git credential helper). Administrators can turn git hosting off for the whole
   server in Settings → Server.
-- Repository names: letters, digits, `.`, `-`, `_`, up to 64 characters. Server-side
-  hooks are disabled and pushed objects are checked (`receive.fsckObjects`).
+- Repository names: letters, digits, `.`, `-`, `_`, up to 64 characters. Repositories
+  never run their own hooks (only Kern's, which enforce protected branches) and pushed
+  objects are checked (`receive.fsckObjects`).
+
+Each repository's **Settings** tab and the extra tabs cover the rest:
+
+| Feature | Where | Docs |
+| --- | --- | --- |
+| Protected branches (no force-push or delete), zip/tar.gz downloads | Settings, Code tab | below |
+| Access tokens per repository, public repositories, `/git/<user>/<repo>.git` URLs | Settings → Access | [docs/git-access.md](docs/git-access.md) |
+| Git over SSH with account and deploy keys (`ssh` service, port 2222) | Git → SSH keys, Settings → Deploy keys | [docs/git-ssh.md](docs/git-ssh.md) |
+| CI/CD pipelines in `.kern/ci.yml`, run in Docker by the `ci` service | Runs tab, Settings → CI secrets | [docs/git-ci.md](docs/git-ci.md) |
+| Releases with attached files (CI can publish to them) | Releases tab | [docs/git-releases.md](docs/git-releases.md) |
+| Push mirrors (e.g. to GitHub) and signed webhooks | Settings → Push mirrors, Webhooks | [docs/git-mirrors-webhooks.md](docs/git-mirrors-webhooks.md) |
+
+**Protected branches:** add a branch name or pattern (`main`, `release/*`) under Settings →
+Protected branches. Pushes that would rewrite (force-push) or delete it are refused over
+HTTP and SSH alike; each rule can allow either one again.
+
+The `ci` service mounts the host's Docker socket, which gives the pipelines you push control
+of Docker on the host; remove the service from `docker-compose.yml` if you don't want CI,
+and the `ssh` service if you don't want an SSH port.
 
 ### Mail
 

@@ -35,8 +35,9 @@ mirrors also pin git to the checked addresses.
 ## Webhooks
 
 Kern sends a `POST` with a JSON body when an event happens. URL (http or https, no credentials),
-optional secret (stored encrypted) and the events to send are set per hook. Events today: `push`
-(one delivery per push, with all ref updates). **Send test** sends a `ping`.
+optional secret (stored encrypted) and the events to send are set per hook. Events: `push`
+(one delivery per push, with all ref updates), `release` (a release was published: `{action,
+release}`) and `ci_run` (a CI run finished: `{run}`). **Send test** sends a `ping`.
 
 Request headers:
 

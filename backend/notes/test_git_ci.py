@@ -825,3 +825,46 @@ jobs:
         self.assertEqual(n, 0)  # startup() already removed it
         self.assertTrue(self.fd.containers["abc"]["removed"])
         self.assertFalse(self.fd.containers["other"]["removed"])
+
+
+class CIPublishTests(CIBase):
+    """A successful tag run attaches `release: true` jobs' artifacts to the tag's release, and every
+    finished run is announced to webhooks as "ci_run"."""
+
+    YML = """
+on: {push: {branches: [main], tags: ['v*']}}
+jobs:
+  build:
+    release: true
+    artifacts: [dist/*]
+    steps:
+      - run: mkdir -p dist && echo apk > dist/app.apk
+  notes:
+    artifacts: [notes.txt]
+    steps: ['echo n > notes.txt']
+"""
+
+    def test_tag_run_publishes_artifacts_and_emits(self):
+        from notes import git_releases, gitwebhooks
+        work = self.setup_repo("pub", self.YML)
+        self.run_git("tag", "v1.0", cwd=work)
+        self.run_git("push", "-q", self.url("pub"), "v1.0", cwd=work)
+        from django.contrib.auth.models import User
+        from kern import tenancy
+        with mock.patch.object(gitwebhooks, "emit") as emit, tenancy.use(User.objects.get(username="tester").id):
+            self.run_all()  # the worker runs each user's queue inside their tenant
+        branch_run, tag_run = self.runs("pub")
+        self.assertEqual((branch_run.status, tag_run.status), ("success", "success"))
+        rel = git_releases.Release.objects.get(repo="pub", tag="v1.0")
+        self.assertEqual([a.filename for a in rel.assets.all()], ["app.apk"])  # only the release: true job
+        self.assertIn("attached 1 file(s) to the release of v1.0", self.log(tag_run, "build"))
+        self.assertFalse(git_releases.Release.objects.filter(repo="pub").exclude(tag="v1.0").exists())
+        events = [c.args[2] for c in emit.call_args_list]
+        self.assertEqual(events.count("ci_run"), 2)
+        payload = [c.args[3] for c in emit.call_args_list if c.args[2] == "ci_run"][-1]()
+        self.assertEqual(payload["run"]["ref"], "refs/tags/v1.0")
+        self.assertIn("ci_run", gitwebhooks.EVENTS)
+
+    def test_release_flag_must_be_boolean(self):
+        with self.assertRaises(pl.PipelineError):
+            pl.parse("jobs: {a: {steps: [x], release: yes please}}")

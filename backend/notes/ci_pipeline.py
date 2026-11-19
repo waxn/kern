@@ -22,7 +22,7 @@ ENV_RE = re.compile(r"^[A-Za-z_][A-Za-z0-9_]{0,63}$")
 IMAGE_RE = re.compile(r"^[A-Za-z0-9][A-Za-z0-9._/:@-]{0,254}$")
 
 TOP_KEYS = {"on", "image", "env", "timeout", "jobs"}
-JOB_KEYS = {"image", "env", "needs", "if", "secrets", "steps", "artifacts", "timeout", "name"}
+JOB_KEYS = {"image", "env", "needs", "if", "secrets", "steps", "artifacts", "timeout", "name", "release"}
 STEP_KEYS = {"name", "run", "env", "timeout"}
 
 
@@ -289,9 +289,19 @@ def parse(text: str | bytes) -> dict:
             "steps": [_parse_step(s, where, i) for i, s in enumerate(steps_raw)],
             "artifacts": _str_list(j.get("artifacts"), f"{where}.artifacts"),
             "timeout": _timeout(j.get("timeout"), f"{where}.timeout") or top_timeout,
+            "release": _release_flag(j.get("release"), f"{where}.release"),
         })
     _check_cycles(jobs)
     return {"on": _parse_on(raw.get("on")), "jobs": jobs}
+
+
+def _release_flag(v, where) -> bool:
+    """``release: true``: on a tag run, attach this job's artifacts to the tag's release."""
+    if v is None:
+        return False
+    if not isinstance(v, bool):
+        raise PipelineError(f"{where}: use true or false.")
+    return v
 
 
 def _check_cycles(jobs: list[dict]):

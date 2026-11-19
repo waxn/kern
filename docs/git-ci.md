@@ -30,6 +30,7 @@ jobs:
     needs: [test]                          # runs after test; skipped if test did not succeed
     image: node:22                         # per job image
     artifacts: [dist/*.apk, reports]       # files kept after the job (globs, relative to the checkout)
+    release: true                          # on a tag run that passes: attach the artifacts to the tag's release
     steps:
       - run: ./build.sh
   deploy:
@@ -100,6 +101,15 @@ Under `/api/git/repos/<name>/ci/`: `GET runs?ref=&page=`, `POST runs {ref}`, `GE
 `text`, next `offset`, `done`), `GET runs/<id>/artifacts/<job>/<path>`, `GET secrets`,
 `PUT|DELETE secrets/<NAME>`, `GET status?shas=a,b` (latest run per commit), `GET pipeline?ref=`.
 Other features can call `notes.ci.run_artifacts(run)` for the files of a finished run.
+
+### Publishing releases and webhooks
+
+- A job with `release: true` publishes its artifacts when a **tag** run succeeds: each file is attached
+  (by its file name) to the release of that tag, which is created if there isn't one yet
+  (see [git-releases.md](git-releases.md)). Branch runs never publish.
+- Every finished run is sent to the repository's webhooks that subscribe to **CI run finished**
+  (event `ci_run`, payload `{run: {id, status, ref, sha, trigger, pusher, error, started, finished, jobs}}`;
+  see [git-mirrors-webhooks.md](git-mirrors-webhooks.md)).
 
 ## Example
 
