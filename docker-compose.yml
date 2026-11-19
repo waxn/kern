@@ -38,6 +38,10 @@ services:
       KERN_DATA_DIR: /data
     volumes:
       - kern_data:/data
+    extra_hosts:
+      # Lets a test mail server on this machine be reached as host.docker.internal
+      # (also needs Settings → Server → "Mail servers on the local network").
+      - "host.docker.internal:host-gateway"
 
   web:
     build: ./frontend
