@@ -177,6 +177,8 @@ def delete(name: str) -> None:
     trash = path.with_name(f".{name}.deleting-{int(time.time())}")
     os.replace(path, trash)
     shutil.rmtree(trash, ignore_errors=True)
+    from . import git_releases  # releases (and their files) belong to the repository
+    git_releases.purge_repo(name)
 
 
 # ------------------------------------------------------- protected branches

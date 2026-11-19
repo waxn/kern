@@ -187,6 +187,10 @@ def create(kind: str = "manual", downloads: bool | None = None) -> dict:
                         if rel.endswith(".lock"):  # a push in progress; its result is not final yet
                             continue
                         z.write(full, f"git/{repo}/{rel}")
+                from .git_releases import DIR as RELEASES, base_dir
+                for full, rel in _walk(base_dir()):
+                    if not os.path.basename(rel).startswith(".upload-"):  # an upload in progress
+                        z.write(full, f"{RELEASES}/{rel}", compress_type=zipfile.ZIP_STORED)
                 if account is not None:
                     z.writestr("account.json", json.dumps(account, indent=2))
                 z.writestr("manifest.json", json.dumps(manifest, indent=2))
@@ -272,6 +276,9 @@ def restore(zip_path, safety: bool = True) -> dict:
     with _lock:
         tmpdir = tempfile.mkdtemp(dir=tenancy.data_dir())
         git_tmp = tempfile.mkdtemp(dir=git.parent, prefix=".git-restore-") if contents["git"] else None
+        from .git_releases import DIR as RELEASES, base_dir
+        rel_live = str(base_dir())
+        rel_tmp = tempfile.mkdtemp(dir=tenancy.data_dir(), prefix=".releases-restore-")
         try:
             def extract(z, prefix, dest):
                 os.makedirs(dest, exist_ok=True)
@@ -290,6 +297,7 @@ def restore(zip_path, safety: bool = True) -> dict:
                 extract(z, "media/", media_tmp)
                 if git_tmp:
                     extract(z, "git/", git_tmp)
+                extract(z, RELEASES + "/", rel_tmp)
             db_file = os.path.join(tmpdir, "kern.sqlite3")
             check = sqlite3.connect(db_file)
             ok = check.execute("PRAGMA integrity_check").fetchone()[0]
@@ -313,10 +321,15 @@ def restore(zip_path, safety: bool = True) -> dict:
             if git_tmp:
                 _swap(git_tmp, str(git))
                 git_tmp = None
+            # The restored database has the releases of the backup; their files come with it.
+            _swap(rel_tmp, rel_live)
+            rel_tmp = None
         finally:
             shutil.rmtree(tmpdir, ignore_errors=True)
             if git_tmp:
                 shutil.rmtree(git_tmp, ignore_errors=True)
+            if rel_tmp:
+                shutil.rmtree(rel_tmp, ignore_errors=True)
     call_command("migrate", "notes", database=tenancy.current_alias(), interactive=False, verbosity=0)  # backups from older versions
     call_command("migrate", "mail", database=tenancy.current_alias(), interactive=False, verbosity=0)
     from mail import lifecycle as mail_lifecycle

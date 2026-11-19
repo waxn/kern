@@ -3,16 +3,17 @@
 	import { goto } from '$app/navigation';
 	import {
 		ChartColumn, ChevronLeft, Code, Copy, Download, File, FileCode, FileText, Folder, FolderGit2, GitBranch,
-		GitCommitHorizontal, History, Image, Pencil, Settings, Tag, Trash2
+		GitCommitHorizontal, History, Image, Pencil, Rocket, Settings, Tag, Trash2
 	} from '@lucide/svelte';
 	import { api, ApiError, qs } from '#lib/api.ts';
 	import CloneBox from '#lib/git/CloneBox.svelte';
 	import DiffView from '#lib/git/DiffView.svelte';
+	import ReleasesView from '#lib/git/ReleasesView.svelte';
 	import RepoSettings from '#lib/git/RepoSettings.svelte';
 	import StatsView from '#lib/git/StatsView.svelte';
 	import { highlightCode } from '#lib/git/highlight.ts';
 	import { renderReadme } from '#lib/git/markdown.ts';
-	import { cloneUrl, short, type Blob, type Commit, type CommitDetail, type RepoDetail, type Stats, type TreeResult } from '#lib/git/types.ts';
+	import { cloneUrl, short, type Blob, type Commit, type CommitDetail, type Release, type RepoDetail, type Stats, type TreeResult } from '#lib/git/types.ts';
 	import { ui } from '#lib/state/ui.svelte.ts';
 	import { fileSize, fullDate, relTime } from '#lib/util.ts';
 
@@ -27,6 +28,7 @@
 		if (head === 'commit') return { kind: 'commit' as const, arg };
 		if (head === 'branches') return { kind: 'branches' as const, arg };
 		if (head === 'stats') return { kind: 'stats' as const, arg };
+		if (head === 'releases') return { kind: 'releases' as const, arg };
 		if (head === 'settings') return { kind: 'settings' as const, arg };
 		return { kind: 'tree' as const, arg: '' };
 	});
@@ -46,6 +48,14 @@
 	let loading = $state(false);
 	let error = $state('');
 	let mdMode = $state<'preview' | 'code'>('preview');
+	let latest = $state<Release | null>(null);
+
+	// A quiet pointer to the newest release on the Code tab.
+	$effect(() => {
+		const n = name;
+		latest = null;
+		api.get<Release>(`/git/repos/${n}/releases/latest`).then((r) => n === name && (latest = r)).catch(() => {});
+	});
 
 	async function loadRepo() {
 		try {
@@ -230,10 +240,11 @@ git push -u origin main</code></pre>
 					<a class:on={tab === 'tree'} href={href('')} onclick={(e) => go(e, href(''))}><Code size={14} />Code</a>
 					<a class:on={tab === 'commits'} href={href('commits')} onclick={(e) => go(e, href('commits'))}><History size={14} />Commits</a>
 					<a class:on={tab === 'branches'} href={href('branches', '', '')} onclick={(e) => go(e, href('branches', '', ''))}><GitBranch size={14} />Branches <em>{repo.branch_list.length}</em> · Tags <em>{repo.tag_list.length}</em></a>
+					<a class:on={tab === 'releases'} href={href('releases', '', '')} onclick={(e) => go(e, href('releases', '', ''))}><Rocket size={14} />Releases</a>
 					<a class:on={tab === 'stats'} href={href('stats')} onclick={(e) => go(e, href('stats'))}><ChartColumn size={14} />Stats</a>
 					<a class:on={tab === 'settings'} href={href('settings', '', '')} onclick={(e) => go(e, href('settings', '', ''))}><Settings size={14} />Settings</a>
 					<span class="grow"></span>
-					{#if tab !== 'branches' && tab !== 'settings' && view.kind !== 'commit'}
+					{#if tab !== 'branches' && tab !== 'settings' && tab !== 'releases' && view.kind !== 'commit'}
 						<label class="refsel">
 							{#if repo.tag_list.some((t) => t.name === ref) && !repo.branch_list.some((b) => b.name === ref)}<Tag size={13} />{:else}<GitBranch size={13} />{/if}
 							<select value={ref} onchange={(e) => setRef(e.currentTarget.value)}>
@@ -250,9 +261,14 @@ git push -u origin main</code></pre>
 					{/if}
 				</nav>
 
-				{#if error}
+				{#if view.kind === 'releases'}
+					<ReleasesView {repo} onchange={loadRepo} />
+				{:else if error}
 					<div class="empty"><b>Could not load this</b>{error}</div>
 				{:else if view.kind === 'tree' && treeData}
+					{#if latest && !view.arg}
+						<a class="latest" href={href('releases', '', '')} onclick={(e) => go(e, href('releases', '', ''))}><Rocket size={13} />Latest release <b>{latest.title || latest.tag}</b><span class="faint">{latest.tag} · {relTime(latest.published ?? latest.created)}</span></a>
+					{/if}
 					{#if crumbs.length}
 						<div class="path">
 							<a href={href('')} onclick={(e) => go(e, href(''))}>{repo.name}</a>
@@ -411,6 +427,10 @@ git push -u origin main</code></pre>
 
 <style>
 	.wide { max-width: 1060px; }
+	.latest { display: inline-flex; align-items: center; gap: 7px; margin-bottom: 10px; font-size: 12.5px; color: var(--text-2); text-decoration: none; }
+	.latest:hover { color: var(--accent); }
+	.latest b { font-weight: 550; color: var(--text); }
+	.latest :global(svg) { color: var(--text-3); }
 	.crumb a { display: inline-flex; align-items: center; gap: 2px; font-size: 12.5px; color: var(--text-3); text-decoration: none; margin-bottom: 6px; }
 	.crumb a:hover { color: var(--text); }
 	.head { display: flex; align-items: flex-start; gap: 16px; flex-wrap: wrap; margin-bottom: 16px; }

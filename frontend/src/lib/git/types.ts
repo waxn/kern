@@ -79,3 +79,20 @@ export interface Stats {
 
 export const cloneUrl = (name: string) => `${location.origin}/git/${name}.git`;
 export const short = (sha: string) => sha.slice(0, 7);
+
+export interface ReleaseAsset { id: number; filename: string; size: number; sha256: string; content_type: string; downloads: number; created: string; url: string }
+export interface Release {
+	id: number;
+	repo: string;
+	tag: string;
+	title: string;
+	notes: string;
+	draft: boolean;
+	prerelease: boolean;
+	created: string;
+	published: string | null;
+	tag_missing: boolean;
+	assets: ReleaseAsset[];
+}
+export const archiveUrl = (name: string, tag: string, format: 'zip' | 'tar.gz') =>
+	`/api/git/repos/${name}/archive?ref=${encodeURIComponent(tag)}&format=${format}`;

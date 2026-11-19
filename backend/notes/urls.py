@@ -5,6 +5,7 @@ from . import views_db as db
 from . import views_learn as learn
 from . import views_data as data
 from . import views_git as gitv
+from . import views_git_releases as gitrel
 from . import views_files as files
 from . import views_web as web
 
@@ -96,6 +97,12 @@ urlpatterns = [
     path("git/repos/<str:name>/commits", gitv.repo_commits),
     path("git/repos/<str:name>/commits/<str:sha>", gitv.repo_commit),
     path("git/repos/<str:name>/stats", gitv.repo_stats),
+    path("git/repos/<str:name>/releases", gitrel.releases),
+    path("git/repos/<str:name>/releases/latest", gitrel.release_latest),
+    path("git/repos/<str:name>/releases/<int:rid>", gitrel.release_detail),
+    path("git/repos/<str:name>/releases/<int:rid>/assets", gitrel.release_assets),
+    path("git/repos/<str:name>/releases/<int:rid>/assets/<int:aid>", gitrel.release_asset),
+    path("git/repos/<str:name>/releases/<int:rid>/assets/<int:aid>/download", gitrel.asset_download),
     # Web archive endpoints
     path("web/list", web.web_list),
     path("web/archive", web.web_create),
