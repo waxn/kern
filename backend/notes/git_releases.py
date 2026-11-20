@@ -95,6 +95,15 @@ def asset_path(asset: ReleaseAsset) -> Path:
     return release_dir(r.repo, r.id) / asset.filename
 
 
+def rename_repo(old: str, new: str) -> None:
+    """The repository was renamed: its releases and their files follow."""
+    Release.objects.filter(repo=old).update(repo=new)
+    src, dst = base_dir() / old, base_dir() / new
+    if src.is_dir():
+        shutil.rmtree(dst, ignore_errors=True)  # leftovers of an earlier repository with that name
+        os.rename(src, dst)
+
+
 def purge_repo(repo: str) -> None:
     """Delete every release of a repository, with its files."""
     Release.objects.filter(repo=repo).delete()

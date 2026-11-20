@@ -9,6 +9,7 @@ export interface Repo {
 	branches: number;
 	last_push: string | null;
 	public: boolean;
+	has_pull_password?: boolean;
 	created: string | null;
 	last_commit: CommitBrief | null;
 }

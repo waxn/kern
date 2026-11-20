@@ -219,6 +219,109 @@ class GitPublicTests(_Live):
         self.assertEqual(APIClient().get("/git/tester/site.git/info/refs?service=git-upload-pack").status_code, 401)
 
 
+@override_settings(STATIC_URL="/static/")
+class GitPullPasswordTests(_Live):
+    def setUp(self):
+        super().setUp()
+        self.mkrepo("site")
+        self.work = self.make_work()
+        self.git("push", "-q", self.url("site.git", f"tester:{TEST_PASSWORD}"), "main", cwd=self.work)
+
+    def test_set_clone_fetch_no_push_remove(self):
+        self.assertFalse(self.c.get("/api/git/repos/site").json()["has_pull_password"])
+        self.assertEqual(self.c.patch("/api/git/repos/site", {"pull_password": "short"}, format="json").status_code, 400)
+        r = self.c.patch("/api/git/repos/site", {"pull_password": "friends-only-1"}, format="json")
+        self.assertTrue(r.json()["has_pull_password"])
+        self.assertNotIn("pull_password", r.json())
+        self.assertFalse(r.json()["public"])
+        clone = os.path.join(self.git_root, "c")
+        self.git("clone", "-q", self.url("tester/site.git", "anyone:friends-only-1"), clone)
+        self.assertTrue(os.path.isfile(os.path.join(clone, "a.txt")))
+        self.git("fetch", "-q", cwd=clone)
+        c = APIClient()
+        refs = "/git/tester/site.git/info/refs?service="
+        r = c.get(refs + "git-receive-pack", HTTP_AUTHORIZATION=basic("anyone", "friends-only-1"))
+        self.assertEqual(r.status_code, 403)
+        self.assertIn(b"cannot push", r.content)
+        self.assertEqual(c.get(refs + "git-upload-pack", HTTP_AUTHORIZATION=basic("x", "wrong-password")).status_code, 401)
+        # Not on the legacy URL, and not for another repository of the same owner.
+        self.assertEqual(c.get("/git/site.git/info/refs?service=git-upload-pack",
+                               HTTP_AUTHORIZATION=basic("tester", "friends-only-1")).status_code, 401)
+        self.mkrepo("other")
+        self.assertEqual(c.get("/git/tester/other.git/info/refs?service=git-upload-pack",
+                               HTTP_AUTHORIZATION=basic("x", "friends-only-1")).status_code, 401)
+        # The owner's own password still pushes.
+        self.assertEqual(c.get(refs + "git-receive-pack", HTTP_AUTHORIZATION=basic()).status_code, 200)
+        self.c.patch("/api/git/repos/site", {"pull_password": ""}, format="json")
+        self.assertFalse(self.c.get("/api/git/repos/site").json()["has_pull_password"])
+        self.assertEqual(c.get(refs + "git-upload-pack", HTTP_AUTHORIZATION=basic("x", "friends-only-1")).status_code, 401)
+
+    def test_wrong_guesses_are_throttled(self):
+        self.c.patch("/api/git/repos/site", {"pull_password": "friends-only-1"}, format="json")
+        c = APIClient()
+        url = "/git/tester/site.git/info/refs?service=git-upload-pack"
+        for i in range(30):
+            c.get(url, HTTP_AUTHORIZATION=basic(f"guess{i}", f"wrong-{i}"), REMOTE_ADDR=f"10.0.0.{i + 1}")
+        self.assertEqual(c.get(url, HTTP_AUTHORIZATION=basic("x", "friends-only-1"), REMOTE_ADDR="10.0.1.1").status_code, 401)
+
+
+@override_settings(STATIC_URL="/static/")
+class GitRenameTests(_Live):
+    def setUp(self):
+        super().setUp()
+        self.mkrepo("site")
+        self.work = self.make_work()
+        self.git("push", "-q", self.url("site.git", f"tester:{TEST_PASSWORD}"), "main", cwd=self.work)
+
+    def test_rename_moves_everything(self):
+        from accounts import site
+        site.update({"allow_local_git_remotes": True})
+        tok = self.token("site", scope="write")["token"]
+        self.c.patch("/api/git/repos/site", {"pull_password": "friends-only-1", "public": False,
+                                             "protected": [{"pattern": "main"}]}, format="json")
+        self.assertEqual(self.c.post("/api/git/repos/site/releases", {"tag": "v1", "target": "main"},
+                                     format="json").status_code, 201)
+        self.assertEqual(self.c.put("/api/git/repos/site/ci/secrets/KEY", {"value": "v"}, format="json").status_code, 200)
+        self.assertEqual(self.c.post("/api/git/repos/site/webhooks", {"url": "http://127.0.0.1:9/x", "events": ["push"]},
+                                     format="json").status_code, 201)
+
+        r = self.c.patch("/api/git/repos/site", {"name": "web-site"}, format="json")
+        self.assertEqual(r.status_code, 200, r.content)
+        self.assertEqual(r.json()["name"], "web-site")
+        self.assertTrue(r.json()["has_pull_password"])
+        self.assertEqual([x["pattern"] for x in r.json()["protected"]], ["main"])
+        self.assertEqual(self.c.get("/api/git/repos/site").status_code, 404)
+        self.assertEqual([x["name"] for x in self.c.get("/api/git/repos").json()], ["web-site"])
+        self.assertEqual(len(self.c.get("/api/git/repos/web-site/tokens").json()), 1)
+        self.assertEqual([x["tag"] for x in self.c.get("/api/git/repos/web-site/releases").json()], ["v1"])
+        self.assertEqual(len(self.c.get("/api/git/repos/web-site/webhooks").json()["webhooks"]), 1)
+        self.assertEqual([x["name"] for x in self.c.get("/api/git/repos/web-site/ci/secrets").json()["secrets"]], ["KEY"])
+
+        # The token and the pull password work on the new URL; the old one is gone.
+        clone = os.path.join(self.git_root, "c")
+        self.git("clone", "-q", self.url("tester/web-site.git", f"x:{tok}"), clone)
+        self.git("clone", "-q", self.url("tester/web-site.git", "x:friends-only-1"), os.path.join(self.git_root, "d"))
+        self.git("clone", "-q", self.url("tester/site.git", f"x:{tok}"), os.path.join(self.git_root, "e"), ok=False)
+        with open(os.path.join(clone, "b.txt"), "w") as f:
+            f.write("b\n")
+        self.git("add", "-A", cwd=clone)
+        self.git("commit", "-qm", "Second", cwd=clone)
+        self.git("push", "-q", "origin", "main", cwd=clone)
+
+        # The old name is free again.
+        self.mkrepo("site")
+        self.assertEqual(self.c.get("/api/git/repos/site/tokens").json(), [])
+
+    def test_rename_validation(self):
+        self.mkrepo("other")
+        r = self.c.patch("/api/git/repos/site", {"name": "other"}, format="json")
+        self.assertEqual(r.status_code, 409)
+        for bad_name in ("../x", "x.git", "-x", "a b"):
+            self.assertEqual(self.c.patch("/api/git/repos/site", {"name": bad_name}, format="json").status_code, 400, bad_name)
+        self.assertEqual(self.c.patch("/api/git/repos/nope", {"name": "new"}, format="json").status_code, 404)
+        self.assertEqual(self.c.patch("/api/git/repos/site", {"name": "site"}, format="json").status_code, 200)
+
+
 class GitCaddyTests(TestCase):
     def test_caddy_routes_owner_form(self):
         import re

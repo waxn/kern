@@ -117,6 +117,16 @@ def purge_run_files(run_id: int):
     shutil.rmtree(run_dir(run_id), ignore_errors=True)
 
 
+def is_running(repo: str) -> bool:
+    return Run.objects.filter(repo=repo, status=Run.RUNNING).exists()
+
+
+def rename_repo(old: str, new: str):
+    """The repository was renamed: its runs (queued ones too) and secrets follow."""
+    Run.objects.filter(repo=old).update(repo=new)
+    CISecret.objects.filter(repo=old).update(repo=new)
+
+
 def purge_repo(repo: str):
     """Forget everything CI knows about a repository (it is being deleted)."""
     ids = list(Run.objects.filter(repo=repo).values_list("id", flat=True))

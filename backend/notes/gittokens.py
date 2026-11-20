@@ -60,6 +60,11 @@ def revoke(owner: int, repo: str, token_id: int) -> bool:
     return bool(GitToken.objects.filter(owner=owner, repo=repo, id=token_id).delete()[0])
 
 
+def rename_repo(owner: int, old: str, new: str) -> None:
+    """A renamed repository keeps its tokens."""
+    GitToken.objects.filter(owner=owner, repo=old).update(repo=new)
+
+
 def revoke_repo(owner: int, repo: str) -> None:
     GitToken.objects.filter(owner=owner, repo=repo).delete()
 

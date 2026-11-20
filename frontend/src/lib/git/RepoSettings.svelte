@@ -1,7 +1,8 @@
 <script lang="ts">
 	// The repository's Settings tab. Each feature (protected branches, access tokens, CI, mirrors…)
 	// is its own <section class="set"> here, usually its own component.
-	import { Plus, ShieldCheck, Trash2 } from '@lucide/svelte';
+	import { PencilLine, Plus, ShieldCheck, Trash2 } from '@lucide/svelte';
+	import { goto } from '$app/navigation';
 	import { api } from '#lib/api.ts';
 	import { ui } from '#lib/state/ui.svelte.ts';
 	import RepoAccess from './RepoAccess.svelte';
@@ -12,6 +13,34 @@
 	import type { ProtectedRule, RepoDetail } from './types.ts';
 
 	let { repo, onchange }: { repo: RepoDetail; onchange: (r: RepoDetail) => void } = $props();
+
+	let newName = $state('');
+	let renaming = $state(false);
+	$effect(() => {
+		newName = repo.name;
+	});
+
+	async function rename(e: SubmitEvent) {
+		e.preventDefault();
+		const to = newName.trim();
+		if (renaming || !to || to === repo.name) return;
+		const ok = await ui.confirm({
+			title: `Rename “${repo.name}” to “${to}”?`,
+			message: 'Its clone URL changes, so existing clones need their remote updated (git remote set-url origin <new URL>). Tokens, keys, releases, webhooks, mirrors and CI come along.',
+			confirmLabel: 'Rename repository'
+		});
+		if (!ok) return;
+		renaming = true;
+		try {
+			const r = await api.patch<RepoDetail>(`/git/repos/${repo.name}`, { name: to });
+			ui.toast(`Renamed to ${r.name}`);
+			await goto(`/git/${r.name}/settings`, { replaceState: true });
+		} catch (err) {
+			ui.error(err);
+		} finally {
+			renaming = false;
+		}
+	}
 
 	let rules = $state<ProtectedRule[]>([]);
 	let pattern = $state('');
@@ -36,6 +65,15 @@
 		saveRules([...rules, { pattern: p, allow_force: false, allow_delete: false }]);
 	}
 </script>
+
+<section class="set">
+	<h3><PencilLine size={15} />Repository name</h3>
+	<p class="muted">Renaming changes the clone URL; existing clones need their remote updated.</p>
+	<form class="add" onsubmit={rename}>
+		<input class="input" maxlength="64" spellcheck="false" autocomplete="off" bind:value={newName} aria-label="Repository name" />
+		<button class="btn" disabled={renaming || !newName.trim() || newName.trim() === repo.name}>{renaming ? 'Renaming…' : 'Rename'}</button>
+	</form>
+</section>
 
 <section class="set">
 	<h3><ShieldCheck size={15} />Protected branches</h3>

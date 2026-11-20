@@ -65,6 +65,11 @@ def as_json(k: SSHKey) -> dict:
     }
 
 
+def rename_repo(user_id: int, old: str, new: str) -> None:
+    """A renamed repository keeps its deploy keys."""
+    SSHKey.objects.filter(user_id=user_id, repo=old).update(repo=new)
+
+
 def delete_for_repo(user_id: int, repo: str) -> None:
     """A deleted repository takes its deploy keys with it."""
     SSHKey.objects.filter(user_id=user_id, repo=repo).delete()

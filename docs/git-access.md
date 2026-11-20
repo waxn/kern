@@ -1,4 +1,12 @@
-# Git access: tokens and public repositories
+# Git access: tokens, passwords and public repositories
+
+## Renaming a repository
+
+**Settings → Repository name** renames it. The clone URLs change with it, so point existing
+clones at the new one (`git remote set-url origin <new URL>`); the old URL stops working and the
+old name is free for a new repository. Everything keyed by the name moves along: access tokens,
+the repository password, deploy keys, protected branches, releases and their files, webhooks,
+push mirrors, CI runs and secrets. A rename is refused while a CI job is running.
 
 ## Owner URLs
 
@@ -14,6 +22,26 @@ its owner URL without signing in. Pushing always needs credentials. Turning it o
 git hosting off for the server, closes it again. The repository's clone box shows the owner URL
 while it is public. Private repositories answer anonymous requests with a sign-in challenge,
 whether or not they exist.
+
+## Repository password
+
+**Settings → Access → Password** sets a password of your choosing for one repository. Anyone who
+knows it can clone and fetch at the owner URL with any user name; git asks for it like any
+other password:
+
+```bash
+git clone http://<server>/git/alice/my-project.git
+```
+
+- Read-only: a push with it gets `403`. Push with your account or a write token.
+- It works for that one repository only, and never on the legacy `/git/<name>.git` URL.
+- Minimum 8 characters. Changing it locks out anyone using the old one; **Remove** turns it off.
+- It is stored as a salted hash (Django's password hasher) in the repository's `kern.json`, and
+  the API only reports `has_pull_password`.
+- Wrong guesses are rate limited per repository (30) and per address, like token attempts.
+
+This is separate from the account-wide git password on the Git page, which signs in as you
+(read and write, every repository).
 
 ## Access tokens
 
@@ -36,4 +64,4 @@ git clone http://x:kern_12_abc...@<server>/git/alice/my-project.git
   not part of backups.
 
 API: `GET/POST /api/git/repos/<name>/tokens`, `DELETE /api/git/repos/<name>/tokens/<id>`;
-`PATCH /api/git/repos/<name>` accepts `public`.
+`PATCH /api/git/repos/<name>` accepts `name` (rename), `public` and `pull_password` (empty to remove).

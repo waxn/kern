@@ -222,6 +222,12 @@ def webhook_redeliver(request, name, hid, did):
     return Response(delivery_json(gitwebhooks.redeliver(d), full=True), status=201)
 
 
+def rename_repo(old: str, new: str) -> None:
+    """The repository was renamed: its mirrors and webhooks follow."""
+    GitMirror.objects.filter(repo=old).update(repo=new)
+    GitWebhook.objects.filter(repo=old).update(repo=new)
+
+
 def forget_repo(name: str) -> None:
     """A repository was deleted: its mirrors, webhooks and delivery log go with it."""
     GitMirror.objects.filter(repo=name).delete()

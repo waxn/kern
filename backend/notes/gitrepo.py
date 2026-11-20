@@ -172,6 +172,21 @@ def create(name: str, desc: str = "") -> Path:
     return path
 
 
+def rename(old: str, new: str) -> Path:
+    """Move the repository directory to a new name and return its new path. Only the directory:
+    callers move whatever else is keyed by the name (see views_git._rename_repo)."""
+    src = repo_path(old)
+    if not valid_name(new):
+        raise GitError("Use 1–64 letters, digits, dots, dashes or underscores, starting with a letter or digit (no “.git” suffix).")
+    dst = repo_path(new, must_exist=False)
+    if dst == src:
+        return src
+    if dst.exists():
+        raise GitError("A repository with that name already exists.", 409)
+    os.rename(src, dst)
+    return dst
+
+
 def delete(name: str) -> None:
     path = repo_path(name)
     trash = path.with_name(f".{name}.deleting-{int(time.time())}")
@@ -317,6 +332,7 @@ def summary(name: str, path: Path) -> dict:
         "branches": len(heads),
         "last_push": meta.get("last_push"),
         "public": bool(meta.get("public")),
+        "has_pull_password": bool(meta.get("pull_password")),
         "created": meta.get("created"),
         "last_commit": last and {"sha": last["sha"], "date": last["date"], "subject": last["subject"], "author": last["author"]},
     }

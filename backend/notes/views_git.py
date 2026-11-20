@@ -74,8 +74,19 @@ def repo_detail(request, name):
         return Response(status=204)
     if request.method == "PATCH":
         data = request.data if isinstance(request.data, dict) else {}
+        new = str(data.get("name") or "").strip()
+        if new and new != name:
+            path = _rename_repo(request.user.id, name, new)
+            name = new
         if "public" in data:
             g.write_meta(path, public=bool(data["public"]))
+        if "pull_password" in data:
+            pw = str(data["pull_password"] or "")
+            if pw and len(pw) < 8:
+                return bad("Use at least 8 characters.")
+            if len(pw) > 200:
+                return bad("That password is too long.")
+            g.write_meta(path, pull_password=make_password(pw) if pw else None)
         if "description" in data:
             g.set_description(path, str(data["description"] or ""))
         if data.get("default_branch"):
@@ -91,6 +102,25 @@ def repo_detail(request, name):
     out["tag_list"] = g.tags(path)
     out["protected"] = g.protected(path)
     return Response(out)
+
+
+def _rename_repo(uid: int, old: str, new: str):
+    """Rename the repository and move everything keyed by its name with it: tokens, deploy
+    keys, mirrors, webhooks, releases (and their files), CI runs and secrets. Refused while a CI
+    job is running, since the runner has the old path. Clones elsewhere keep working once their
+    remote URL is updated."""
+    from . import ci, git_releases
+    from .views_git_hooks import rename_repo as hooks_rename
+
+    if ci.is_running(old):
+        raise g.GitError("A CI run is in progress; rename the repository when it has finished.", 409)
+    path = g.rename(old, new)
+    gittokens.rename_repo(uid, old, new)
+    sshkeys.rename_repo(uid, old, new)
+    hooks_rename(old, new)
+    git_releases.rename_repo(old, new)
+    ci.rename_repo(old, new)
+    return path
 
 
 @api_view(["GET", "POST"])
@@ -388,9 +418,20 @@ def _is_public(owner_id, name):
             return False
 
 
+def _pull_password(owner_id, name):
+    """The hash of the repository's pull password, or None when it has none."""
+    with tenancy.use(owner_id):
+        try:
+            h = g.read_meta(g.repo_path(name)).get("pull_password")
+        except g.GitError:
+            return None
+    return h if isinstance(h, str) and h else None
+
+
 def git_http_owner(request, owner_name, name, rest):
     """/git/<owner>/<name>.git: the owner signs in with a password, anyone holding one of the
-    repository's tokens uses it as the password, and public repositories may be read anonymously.
+    repository's tokens uses it as the password, anyone who knows the repository's pull password
+    may clone and fetch with it (any user name), and public repositories may be read anonymously.
     Everything runs inside the owner's tenant."""
     if not site.get_all()["allow_git"]:
         return _plain("Git hosting is turned off on this server.", 403)
@@ -411,8 +452,23 @@ def git_http_owner(request, owner_name, name, rest):
 
     tok = gittokens.parse(creds[1])
     if tok is None:
+        # The repository's pull password: read-only, any user name. Reads try it before the
+        # account password so cloning with it never counts as a failed account sign-in.
+        pull = _pull_password(owner.id, name) if owner else None
+        rkey, ikey = f"git:r:{owner.id}:{name.lower()}" if owner else "", f"git:ip:{throttle.client_ip(request)}"
+        if pull and not write:
+            if throttle.locked(rkey) or throttle.locked(ikey):
+                return _challenge()
+            if check_password(creds[1], pull):
+                throttle.clear(rkey)
+                return serve("password", None)
         user = _basic_user(request)
         if user is None:
+            if pull:
+                if write and not throttle.locked(rkey) and check_password(creds[1], pull):
+                    return _plain("This repository's password only allows cloning and fetching; it cannot push. "
+                                  "Use your account or an access token with write access.", 403)
+                throttle.fail(rkey, 30)
             return _challenge()
         if owner and user.id == owner.id:
             return serve(user.username, user.username)

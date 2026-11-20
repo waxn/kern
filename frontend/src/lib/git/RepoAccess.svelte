@@ -14,6 +14,8 @@
 	let busy = $state(false);
 	let fresh = $state<{ token: string; scope: string; label: string } | null>(null);
 	let copied = $state('');
+	let pullPw = $state('');
+	let pullBusy = $state(false);
 
 	let publicUrl = $derived(cloneUrl(repo.name, repo.owner));
 	// Ready to paste: the token is the password, the user name can be anything.
@@ -39,6 +41,22 @@
 			ui.toast(r.public ? 'Anyone can now clone this repository' : 'Repository is private again');
 		} catch (e) {
 			ui.error(e);
+		}
+	}
+
+	async function savePull(e: Event | null, remove = false) {
+		e?.preventDefault();
+		if (pullBusy || (!remove && pullPw.length < 8)) return;
+		pullBusy = true;
+		try {
+			const r = await api.patch<RepoDetail>(`/git/repos/${repo.name}`, { pull_password: remove ? '' : pullPw });
+			onchange(r);
+			pullPw = '';
+			ui.toast(remove ? 'Password removed' : 'Password saved');
+		} catch (err) {
+			ui.error(err);
+		} finally {
+			pullBusy = false;
 		}
 	}
 
@@ -102,7 +120,7 @@
 		<div class="txt">
 			<b>{#if repo.public}<Globe size={14} /> Public{:else}<Lock size={14} /> Private{/if}</b>
 			<span>
-				{#if repo.public}Anyone with the link can clone and fetch without signing in. Pushing always needs credentials.{:else}Only you, and holders of an access token, can clone.{/if}
+				{#if repo.public}Anyone with the link can clone and fetch without signing in. Pushing always needs credentials.{:else}Only you{#if repo.has_pull_password}, holders of an access token and anyone with the repository's password{:else} and holders of an access token{/if} can clone.{/if}
 			</span>
 		</div>
 		<label class="switch">
@@ -112,6 +130,16 @@
 	</div>
 	{#if repo.public}
 		<div class="sub"><span class="faint">Anonymous clone URL</span>{@render copyBox(publicUrl, 'public', 'Anonymous clone URL')}</div>
+	{/if}
+
+	<div class="row head"><div class="txt"><b><Lock size={14} /> Password</b><span>{#if repo.has_pull_password}Anyone who knows this repository's password can clone and fetch it (any user name) at the owner URL. It never allows pushing.{:else}Set a password of your own to let others clone and fetch this repository. It is read-only and works for this repository only.{/if}</span></div></div>
+	<form class="new" onsubmit={(e) => savePull(e)}>
+		<input class="input" type="password" autocomplete="new-password" minlength="8" maxlength="200" placeholder={repo.has_pull_password ? 'Change password…' : 'Set a password (8+ characters)…'} bind:value={pullPw} aria-label="Repository password" />
+		<button class="btn primary" disabled={pullBusy || pullPw.length < 8}>{repo.has_pull_password ? 'Change' : 'Set password'}</button>
+		{#if repo.has_pull_password}<button type="button" class="btn ghost" disabled={pullBusy} onclick={() => savePull(null, true)}>Remove</button>{/if}
+	</form>
+	{#if repo.has_pull_password}
+		<div class="sub"><span class="faint">Clone URL (git asks for the password)</span>{@render copyBox(publicUrl, 'pull', 'Clone URL for password access')}</div>
 	{/if}
 
 	<div class="row head"><div class="txt"><b><KeyRound size={14} /> Access tokens</b><span>Let a script, CI job or another machine use this repository only, without your password. Use the token as the password (any user name) with the owner URL.</span></div></div>
