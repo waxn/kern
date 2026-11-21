@@ -332,6 +332,10 @@ class Chat(models.Model):
     history = models.JSONField(default=list)
     # What the chat screen shows: [{role, text, actions}]
     transcript = models.JSONField(default=list)
+    # A turn waiting for the user to allow or refuse tool calls (notes/agent_access.py), or null.
+    pending = models.JSONField(null=True, blank=True, default=None)
+    # {"granted": [scopes allowed for the rest of this chat], "mail_seen": bool}
+    permissions = models.JSONField(default=dict, blank=True)
     created_at = models.DateTimeField(auto_now_add=True)
     updated_at = models.DateTimeField(auto_now=True)
 

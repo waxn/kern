@@ -5,7 +5,7 @@
 	import { onMount, tick } from 'svelte';
 	import { api, ApiError } from '#lib/api.ts';
 	import { ai } from '#lib/ai/ai.svelte.ts';
-	import { sendChat, type Chat, type ChatSummary } from '#lib/ai/chat.ts';
+	import { answerPermission, revokeGrant, sendChat, type Chat, type ChatScope, type ChatSummary, type PermissionAnswer } from '#lib/ai/chat.ts';
 	import ChatThread from '#lib/ai/ChatThread.svelte';
 	import Sparkle from '#lib/ai/Sparkle.svelte';
 	import { ui } from '#lib/state/ui.svelte.ts';
@@ -15,6 +15,7 @@
 	let draft = $state('');
 	let sending = $state(false);
 	let pendingText = $state('');
+	let answering = $state<PermissionAnswer | null>(null);
 	let listOpen = $state(true);
 	let input = $state<HTMLTextAreaElement>();
 	let scroller = $state<HTMLDivElement>();
@@ -76,7 +77,7 @@
 
 	async function send(text = draft) {
 		text = text.trim();
-		if (!text || sending) return;
+		if (!text || sending || answering) return;
 		if (!(await ai.ready())) return;
 		sending = true;
 		pendingText = text;
@@ -110,6 +111,35 @@
 		await api.del(`/chats/${c.id}`).catch((err) => ui.error(err));
 		if (chat?.id === c.id) newChat();
 		loadList();
+	}
+
+	async function answer(a: PermissionAnswer) {
+		const c = chat;
+		if (!c?.pending || answering) return;
+		answering = a;
+		scrollDown();
+		try {
+			const updated = await answerPermission(c, a);
+			if (chat?.id === c.id) chat = updated;
+		} catch (e) {
+			ui.error(e);
+			// The request may have gone stale (answered in another tab): show what the server has.
+			api.get<Chat>(`/chats/${c.id}`).then((fresh) => { if (chat?.id === c.id) chat = fresh; }).catch(() => {});
+		} finally {
+			answering = null;
+			scrollDown();
+		}
+	}
+
+	async function revoke(scope: ChatScope) {
+		const c = chat;
+		if (!c) return;
+		try {
+			const updated = await revokeGrant(c, scope);
+			if (chat?.id === c.id) chat = updated;
+		} catch (e) {
+			ui.error(e);
+		}
 	}
 
 	function keydown(e: KeyboardEvent) {
@@ -186,7 +216,7 @@
 					{/if}
 				</div>
 			{:else}
-				<div class="thread-wrap"><ChatThread messages={chat?.messages ?? []} {sending} {pendingText} /></div>
+				<div class="thread-wrap"><ChatThread messages={chat?.messages ?? []} {sending} {pendingText} pending={chat?.pending} granted={chat?.granted} {answering} onanswer={answer} onrevoke={revoke} /></div>
 			{/if}
 		</div>
 
@@ -199,7 +229,7 @@
 					placeholder={chat ? 'Reply…' : 'Ask Intelligence to find or change anything…'}
 					onkeydown={keydown}
 				></textarea>
-				<button class="send" title="Send (Enter)" disabled={!draft.trim() || sending} onclick={() => send()}>
+				<button class="send" title="Send (Enter)" disabled={!draft.trim() || sending || !!answering} onclick={() => send()}>
 					<ArrowUp size={16} strokeWidth={2.25} />
 				</button>
 			</div>

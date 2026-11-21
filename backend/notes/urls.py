@@ -66,6 +66,8 @@ urlpatterns = [
     path("chats", data.chats),
     path("chats/<str:chat_id>", data.chat_detail),
     path("chats/<str:chat_id>/message", data.chat_message),
+    path("chats/<str:chat_id>/permission", data.chat_permission),
+    path("chats/<str:chat_id>/grants/<str:scope>", data.chat_grant),
     path("databases", db.databases),
     path("databases/<str:db_id>", db.database_detail),
     path("databases/<str:db_id>/entries", db.db_entries),

@@ -9,7 +9,7 @@
 	import { ui } from '../state/ui.svelte.ts';
 	import { ws } from '../state/workspace.svelte.ts';
 	import { ai } from './ai.svelte.ts';
-	import { sendChat, type Chat } from './chat.ts';
+	import { answerPermission, revokeGrant, sendChat, type Chat, type ChatScope, type PermissionAnswer } from './chat.ts';
 	import ChatThread from './ChatThread.svelte';
 	import Sparkle from './Sparkle.svelte';
 
@@ -18,6 +18,7 @@
 	let draft = $state('');
 	let sending = $state(false);
 	let pendingText = $state('');
+	let answering = $state<PermissionAnswer | null>(null);
 	let input = $state<HTMLTextAreaElement>();
 	let scroller = $state<HTMLDivElement>();
 
@@ -89,7 +90,7 @@
 
 	async function send(text = draft) {
 		text = text.trim();
-		if (!text || sending) return;
+		if (!text || sending || answering) return;
 		if (!(await ai.ready())) return;
 		const key = scopeKey;
 		sending = true;
@@ -130,6 +131,35 @@
 		goto(chat ? `/intelligence?c=${chat.id}` : '/intelligence');
 	}
 
+	async function answer(a: PermissionAnswer) {
+		const c = chat;
+		if (!c?.pending || answering) return;
+		answering = a;
+		scrollDown();
+		try {
+			const updated = await answerPermission(c, a);
+			if (chat?.id === c.id) chat = updated;
+		} catch (e) {
+			ui.error(e);
+			// The request may have gone stale (answered in another tab): show what the server has.
+			api.get<Chat>(`/chats/${c.id}`).then((fresh) => { if (chat?.id === c.id) chat = fresh; }).catch(() => {});
+		} finally {
+			answering = null;
+			scrollDown();
+		}
+	}
+
+	async function revoke(scope: ChatScope) {
+		const c = chat;
+		if (!c) return;
+		try {
+			const updated = await revokeGrant(c, scope);
+			if (chat?.id === c.id) chat = updated;
+		} catch (e) {
+			ui.error(e);
+		}
+	}
+
 	function keydown(e: KeyboardEvent) {
 		if (e.key === 'Enter' && !e.shiftKey && !e.isComposing) {
 			e.preventDefault();
@@ -163,7 +193,7 @@
 
 	<div class="scroll" bind:this={scroller}>
 		{#if chat?.messages.length || sending}
-			<ChatThread messages={chat?.messages ?? []} {sending} {pendingText} compact />
+			<ChatThread messages={chat?.messages ?? []} {sending} {pendingText} compact pending={chat?.pending} granted={chat?.granted} {answering} onanswer={answer} onrevoke={revoke} />
 		{:else}
 			<div class="hello">
 				<p class="muted">{pageId ? 'Ask about this page, have it edit it, quiz you, or look things up.' : 'Ask about your notes or have it change them.'}</p>
@@ -186,7 +216,7 @@
 	<div class="composer">
 		<textarea bind:this={input} bind:value={draft} rows="1" onkeydown={keydown}
 			placeholder={pageId ? 'Ask about this page, or tell it what to change…' : 'Ask Intelligence…'}></textarea>
-		<button class="send" title="Send (Enter)" disabled={!draft.trim() || sending} onclick={() => send()}><ArrowUp size={15} strokeWidth={2.25} /></button>
+		<button class="send" title="Send (Enter)" disabled={!draft.trim() || sending || !!answering} onclick={() => send()}><ArrowUp size={15} strokeWidth={2.25} /></button>
 	</div>
 	<p class="foot faint">
 		{ai.config && !web ? 'No web search with this provider (needs Claude) · ' : ''}{pretty(shortcut('intelligence'))} to toggle

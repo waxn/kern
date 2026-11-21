@@ -332,6 +332,13 @@ Settings → Reminders), home-screen widgets and a share target. Build it with `
   at a time, with a score and the missed questions offered as flashcards), or
   have it look things up. Each page keeps its own conversation, which also
   appears on the Intelligence page.
+- Bookmarks and mail: it can always read your bookmarks. Before it saves or changes a bookmark,
+  or searches or reads your email, the chat shows what it wants to do with Allow once, Allow in
+  this chat, or Don't allow (an "allow in this chat" can be taken back from the chip under the
+  conversation). Mail is read only: there is no tool to send, change, move or delete email, and
+  it needs the same two-factor sign-in as the Mail screen. These rules are enforced on the server
+  (`notes/agent_access.py`), not just in the chat screen. Once a chat has read email its web tools
+  are switched off, so text inside an email cannot make it send your data to a website.
 - It can search the web and read web pages, and lists the sources under its
   answer. Claude uses its built-in search; other providers (OpenRouter, OpenAI,
   Ollama, ...) get `web_search` and `web_fetch` tools that Kern runs itself
