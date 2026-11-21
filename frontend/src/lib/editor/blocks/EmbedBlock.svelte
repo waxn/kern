@@ -1,7 +1,3 @@
-<script lang="ts" module>
-	const CHAIN = Symbol('kern-embed-chain');
-</script>
-
 <script lang="ts">
 	import { ArrowUpRight, FileSymlink, FileText, TextQuote, TriangleAlert } from '@lucide/svelte';
 	import { getContext, setContext, tick } from 'svelte';
@@ -9,9 +5,10 @@
 	import { open } from '#lib/state/tabs.ts';
 	import { ws } from '#lib/state/workspace.svelte.ts';
 	import type { Block, Suggestion } from '#lib/types.ts';
-	import { getEditor } from '../context.ts';
+	import { EMBED_CHAIN as CHAIN, getEditor } from '../context.ts';
 	import { getDoc, type EditorDoc } from '../doc.svelte.ts';
 	import Editor from '../Editor.svelte';
+	import RangeEmbed from './RangeEmbed.svelte';
 
 	let { block }: { block: Block } = $props();
 	const ed = getEditor();
@@ -59,7 +56,7 @@
 	});
 
 	$effect(() => {
-		if (target) return;
+		if (target || block.props.kind === 'range') return;
 		const query = q.trim();
 		const mine = ++seq;
 		if (kind === 'doc') {
@@ -84,6 +81,9 @@
 	let srcMeta = $derived(sourceId ? ws.docs[sourceId] : null);
 </script>
 
+{#if block.props.kind === 'range'}
+	<RangeEmbed {block} />
+{:else}
 <!-- svelte-ignore a11y_no_static_element_interactions -->
 <div class="embed" data-editor-skip={!target ? '' : undefined}>
 	{#if !target}
@@ -122,6 +122,7 @@
 		<div class="faint pad">Loading…</div>
 	{/if}
 </div>
+{/if}
 
 <style>
 	.embed { flex: 1; min-width: 0; margin: 3px 0; }

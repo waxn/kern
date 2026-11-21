@@ -41,6 +41,12 @@ export function sanitizeInline(node: Node, skip?: (el: Element) => boolean): str
 			else out += inner();
 		} else if (tag === 'SPAN' && child.dataset.math !== undefined) {
 			out += `<span class="math" data-math="${escapeHtml(child.dataset.math)}" contenteditable="false">${escapeHtml(child.dataset.math)}</span>`;
+		} else if (tag === 'MARK' && (child.dataset.bg !== undefined || child.dataset.note !== undefined)) {
+			// Kern's own highlights and notes keep their colour and text.
+			const body = inner();
+			const bg = child.dataset.bg !== undefined ? ` data-bg="${escapeHtml(child.dataset.bg)}"` : '';
+			const note = child.dataset.note !== undefined ? ` data-note="${escapeHtml(child.dataset.note)}"` : '';
+			if (body) out += `<mark${bg}${note}>${body}</mark>`;
 		} else if (INLINE.has(tag)) {
 			const t = tag === 'STRONG' ? 'b' : tag === 'EM' ? 'i' : tag.toLowerCase();
 			const body = inner();

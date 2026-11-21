@@ -116,6 +116,33 @@ class ApiTests(TestCase):
         md = self.c.get(f"/api/export/document/{source['id']}?as=md").content.decode()
         self.assertIn("[[Photosynthesis|this page]]", md)
 
+    def test_range_embed_links_blocks_and_cleans_its_copy(self):
+        src = self.make_doc(title="Source")
+        a, b = uid(), uid()
+        self.sync(src, [{"id": a, "parent": None, "position": 1, "type": "h2", "html": "Heading"},
+                        {"id": b, "parent": None, "position": 2, "type": "bullet", "html": "<b>point</b>"}])
+        host = self.make_doc(title="Host")
+        snap = [{"type": "h2", "html": "Heading", "props": {}, "collapsed": False, "children": []},
+                {"type": "bullet", "html": '<b>point</b><img src=x onerror="alert(1)">', "props": {}, "collapsed": False,
+                 "children": [{"type": "nonsense", "html": "x", "props": {}, "children": []}]}]
+        e = uid()
+        self.sync(host, [{"id": e, "parent": None, "position": 1, "type": "embed", "html": "",
+                          "props": {"kind": "range", "doc": src["id"], "targets": [a, b, "not-an-id"], "snapshot": snap}}])
+        props = self.c.get(f"/api/documents/{host['id']}").json()["blocks"][0]["props"]
+        self.assertEqual(props["targets"], [a, b])
+        self.assertEqual(props["snapshot"][1]["html"], "<b>point</b>")
+        self.assertEqual(props["snapshot"][1]["children"], [])
+        refs = self.c.get(f"/api/documents/{host['id']}").json()["refs"]
+        self.assertEqual({refs[f"block:{a}"]["doc"], refs[f"block:{b}"]["doc"]}, {src["id"]})
+        self.assertEqual(self.c.get(f"/api/blocks/{a}/backlinks").status_code, 200)
+        md = self.c.get(f"/api/export/document/{host['id']}?as=md").content.decode()
+        self.assertIn("![[Source]]", md)
+        # Too big to keep a copy: the embed still works, without one.
+        huge = [{"type": "paragraph", "html": "x", "props": {}, "children": []}] * 401
+        self.sync(host, [{"id": e, "parent": None, "position": 1, "type": "embed", "html": "",
+                          "props": {"kind": "range", "doc": src["id"], "targets": [a], "snapshot": huge}}])
+        self.assertIsNone(self.c.get(f"/api/documents/{host['id']}").json()["blocks"][0]["props"]["snapshot"])
+
     def test_search_and_trash(self):
         doc = self.make_doc(title="Quantum notes")
         self.sync(doc, [{"id": uid(), "parent": None, "position": 1, "type": "paragraph",

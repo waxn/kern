@@ -227,6 +227,12 @@ Settings → Reminders), home-screen widgets and a share target. Build it with `
   everywhere. Synced blocks can be mirrored by copying a synced reference from
   the block menu and pasting it into another page. Circular embeds are detected
   and not rendered.
+- Copy blocks on one page and paste them on another: they arrive as a live embed in a box
+  that names the original page (with a link to it), keeping headings, lists and formatting.
+  Edits go both ways, and new lines written inside it stay part of it. "Keep a copy" turns
+  it into ordinary blocks; the toast after pasting offers "Paste a copy instead". The embed
+  keeps its last saved content, so if the original page is deleted or trashed it shows that
+  copy and offers to keep it. Pasting on the same page still makes a copy, and a cut always does.
 - Knowledge graph: hierarchy, references, tags and database relations; zoom,
   pan, drag, search, per-type filters, focus mode (1–3 steps) and a
   connection panel.

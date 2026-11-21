@@ -945,7 +945,7 @@ class Exporter:
                 elif t == "bookmark":
                     lines.append(f"{pad}[{p.get('title') or p.get('url', '')}]({p.get('url', '')})")
                 elif t == "embed":
-                    target = p.get("doc") if p.get("kind") == "block" else p.get("target")
+                    target = p.get("doc") if p.get("kind") in ("block", "range") else p.get("target")
                     lines.append(f"{pad}![[{self.titles.get(str(target), 'Untitled')}]]")
                 elif t == "database":
                     db = Database.objects.filter(id=p.get("database")).select_related("page").first()
@@ -1071,7 +1071,7 @@ class Exporter:
                 elif t in ("embed", "database"):
                     title = "Embedded page"
                     if t == "embed":
-                        target = p.get("doc") if p.get("kind") == "block" else p.get("target")
+                        target = p.get("doc") if p.get("kind") in ("block", "range") else p.get("target")
                         title = self.titles.get(str(target), title)
                     out.append(f'<p class="embed">↳ {esc(title)}</p>')
                 elif t == "synced":

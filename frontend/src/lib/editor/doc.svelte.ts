@@ -466,6 +466,15 @@ export class EditorDoc {
 		if (b) this.patch(id, { props: { ...$state.snapshot(b.props), ...props } });
 	}
 
+	/** Change props without an undo step: data the page keeps for itself, like an embed's offline copy. */
+	setPropsQuietly(id: string, props: Record<string, any>) {
+		const b = this.blocks[id];
+		if (!b) return;
+		b.props = { ...$state.snapshot(b.props), ...props };
+		this.dirty.add(id);
+		this.touch();
+	}
+
 	toggleCollapsed(id: string, value?: boolean) {
 		const b = this.blocks[id];
 		if (!b) return;

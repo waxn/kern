@@ -586,6 +586,9 @@ def reindex_blocks(doc: Document, blocks) -> None:
             p = b.props or {}
             if p.get("kind") in ("doc", "block") and p.get("target"):
                 refs.add((p["kind"], str(p["target"]).lower()))
+            elif p.get("kind") == "range" and isinstance(p.get("targets"), list):
+                # A live copy of several blocks from another page (cross-page paste).
+                refs |= {("block", str(t).lower()) for t in p["targets"][:500]}
         for kind, ref in refs:
             try:
                 ref = str(uuid.UUID(ref))
@@ -614,7 +617,51 @@ def clean_props(block_type: str, props) -> dict:
         props["rows"] = [
             [sanitize(str(c)) for c in row] for row in props["rows"] if isinstance(row, list)
         ]
+    if block_type == "embed" and props.get("kind") == "range":
+        props = dict(props)
+        targets = props.get("targets") if isinstance(props.get("targets"), list) else []
+        props["targets"] = [str(t) for t in targets if _is_uuid(t)][:500]
+        props["snapshot"] = clean_snapshot(props.get("snapshot"))
     return props
+
+
+SNAPSHOT_LIMIT = 400  # blocks; a bigger range keeps no offline copy
+
+
+def _is_uuid(v) -> bool:
+    try:
+        uuid.UUID(str(v))
+        return True
+    except ValueError:
+        return False
+
+
+def clean_snapshot(trees):
+    """The last known content of a range embed, shown if its source page is deleted.
+
+    The same rules as stored blocks: known types, sanitised HTML, cleaned props, bounded size.
+    """
+    count = 0
+
+    def walk(items, depth):
+        nonlocal count
+        out = []
+        for t in items if isinstance(items, list) else []:
+            if not isinstance(t, dict) or t.get("type") not in BLOCK_TYPES or depth > 30:
+                continue
+            count += 1
+            if count > SNAPSHOT_LIMIT:
+                raise BadRequest("snapshot too large")
+            kind = t["type"]
+            out.append({"type": kind, "html": sanitize(str(t.get("html", ""))),
+                        "props": clean_props(kind, t.get("props")) if kind != "embed" else {},
+                        "collapsed": bool(t.get("collapsed")), "children": walk(t.get("children"), depth + 1)})
+        return out
+
+    try:
+        return walk(trees, 0) or None
+    except BadRequest:
+        return None
 
 
 class Conflict(Exception):
