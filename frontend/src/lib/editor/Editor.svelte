@@ -18,6 +18,7 @@
 		mathHtml, notifyInput, onFirstLine, onLastLine, rangeForOffsets, readHtml, refHtml, renderMath,
 		selectionOffsets, setCaret, setCaretNearX, splitAtCaret, toggleWrap
 	} from './dom';
+	import DocPeek from './DocPeek.svelte';
 	import FormatToolbar from './FormatToolbar.svelte';
 	import AiInline from '#lib/ai/AiInline.svelte';
 	import { htmlToTrees, textToTrees, treesToText } from './paste';
@@ -35,6 +36,8 @@
 	let math = $state<{ x: number; y: number; tex: string; span: HTMLElement | null; id: string; range: Range | null } | null>(null);
 	let mathInput = $state<HTMLInputElement>();
 	let indicator = $state<{ top: number; left: number; width: number } | null>(null);
+	/** A linked page shown in a small read-only popup (click on text linked with "Link to page"). */
+	let peek = $state<{ id: string; rect: DOMRect } | null>(null);
 
 	let dragIds: string[] = [];
 	let dropTarget: { id: string; where: 'before' | 'after' | 'inside' } | null = null;
@@ -408,6 +411,7 @@
 			if (lk === 's' && e.shiftKey) return pd(), void document.execCommand('strikeThrough');
 			if (lk === 'e') return pd(), toggleWrap(el, 'code');
 			if (lk === 'h' && e.shiftKey) return pd(), applyWrap(el, 'mark', 'data-bg', 'yellow');
+			if (lk === 'k' && e.shiftKey && !collapsed()) return pd(), e.stopPropagation(), toolbar?.linkToPage();
 			if (lk === 'k' && !collapsed()) return pd(), e.stopPropagation(), toolbar?.link();
 			if (lk === 'c' && e.shiftKey && !collapsed()) return pd(), insertText(`{{${getSelection()!.toString()}}}`);
 			return;
@@ -629,6 +633,13 @@
 		if (a && a.closest('.rt')) {
 			e.preventDefault();
 			const href = a.getAttribute('href') ?? '';
+			if (a.dataset.doc) {
+				// Ctrl/⌘-click opens the page itself; a plain click peeks at it.
+				if (e.ctrlKey || e.metaKey) open(`/doc/${a.dataset.doc}`, e);
+				else if (!a.classList.contains('broken') || ws.docs[a.dataset.doc]) peek = { id: a.dataset.doc, rect: a.getBoundingClientRect() };
+				else ui.toast('The linked page was deleted.');
+				return;
+			}
 			if (a.dataset.ref) {
 				if (!a.classList.contains('broken') && href) open(href, e);
 			} else if (href) window.open(a.href, '_blank', 'noopener');
@@ -895,7 +906,11 @@
 		empty={menu.kind === 'blockref' ? (menu.query.trim() ? 'No matching blocks' : 'Type to search blocks…') : 'No matches'} />
 {/if}
 
-{#if root}<FormatToolbar {root} bind:this={toolbar} />{/if}
+{#if root}<FormatToolbar {root} docId={doc.id} bind:this={toolbar} />{/if}
+
+{#if peek}
+	{#key peek}<DocPeek id={peek.id} rect={peek.rect} onclose={() => (peek = null)} />{/key}
+{/if}
 
 {#if aiAt}
 	<AiInline docId={doc.id} selection={aiAt.selection} rect={aiAt.rect} oninsert={insertAi}

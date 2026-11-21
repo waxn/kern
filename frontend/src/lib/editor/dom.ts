@@ -363,6 +363,24 @@ export function refHtml(kind: 'doc' | 'block' | 'tag', id: string, title: string
 	return `<a class="${cls}" data-ref="${kind}:${id}" href="${esc(href)}" contenteditable="false"${c}>${esc(text)}</a>`;
 }
 
+/** Text that links to a page (select text → Link to page). Its words stay the user's own, unlike [[refs]]. */
+export function docLinkHtml(id: string, innerHtml: string): string {
+	return `<a class="doclink" data-doc="${id}" href="/doc/${id}">${innerHtml}</a>`;
+}
+
+/** Turn the plain links the browser just made for `href` into page links (createLink cannot set attributes). */
+export function markDocLinks(el: HTMLElement, id: string): number {
+	let n = 0;
+	el.querySelectorAll<HTMLAnchorElement>('a[href]').forEach((a) => {
+		if (a.getAttribute('href') !== `/doc/${id}` || a.dataset.ref) return;
+		a.className = 'doclink';
+		a.dataset.doc = id;
+		a.removeAttribute('target');
+		n++;
+	});
+	return n;
+}
+
 export function mathHtml(tex: string): string {
 	const esc = (s: string) => s.replace(/&/g, '&amp;').replace(/</g, '&lt;').replace(/>/g, '&gt;').replace(/"/g, '&quot;');
 	return `<span class="math" data-math="${esc(tex)}" contenteditable="false">${esc(tex)}</span>`;

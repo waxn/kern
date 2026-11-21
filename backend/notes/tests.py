@@ -100,6 +100,22 @@ class ApiTests(TestCase):
                             "html": "no link"}])
         self.assertEqual(self.c.get(f"/api/documents/{target['id']}/backlinks").json(), [])
 
+    def test_text_links_to_pages_are_references(self):
+        target = self.make_doc(title="Photosynthesis")
+        source = self.make_doc(title="Plants")
+        blk = uid()
+        html = (f'read <a class="doclink" data-doc="{target["id"]}" href="/doc/{target["id"]}" onclick="x()">'
+                f'<b>this page</b></a> first')
+        self.sync(source, [{"id": blk, "parent": None, "position": 1, "type": "paragraph", "html": html}])
+        stored = self.c.get(f"/api/documents/{source['id']}").json()
+        self.assertIn(f'data-doc="{target["id"]}"', stored["blocks"][0]["html"])
+        self.assertNotIn("onclick", stored["blocks"][0]["html"])
+        self.assertEqual(stored["refs"][f"doc:{target['id']}"]["title"], "Photosynthesis")
+        bl = self.c.get(f"/api/documents/{target['id']}/backlinks").json()
+        self.assertEqual(bl[0]["items"][0]["block"], blk)
+        md = self.c.get(f"/api/export/document/{source['id']}?as=md").content.decode()
+        self.assertIn("[[Photosynthesis|this page]]", md)
+
     def test_search_and_trash(self):
         doc = self.make_doc(title="Quantum notes")
         self.sync(doc, [{"id": uid(), "parent": None, "position": 1, "type": "paragraph",

@@ -871,6 +871,7 @@ class Exporter:
         s = re.sub(r'<a [^>]*data-ref="doc:([^"]*)"[^>]*>(.*?)</a>',
                    lambda m: f"[[{self.titles.get(m.group(1), to_text(m.group(2)))}]]", s)
         s = re.sub(r'<a [^>]*data-ref="block:[^"]*"[^>]*>(.*?)</a>', lambda m: to_text(m.group(1)), s)
+        s = re.sub(r'<a [^>]*data-doc="([^"]*)"[^>]*>(.*?)</a>', self._md_doc_link, s)
         s = re.sub(r'<span [^>]*data-math="([^"]*)"[^>]*>.*?</span>', lambda m: f"${html_lib.unescape(m.group(1))}$", s)
         s = re.sub(r"<(b|strong)>(.*?)</\1>", r"**\2**", s)
         s = re.sub(r"<(i|em)>(.*?)</\1>", r"*\2*", s)
@@ -881,6 +882,13 @@ class Exporter:
         s = s.replace("<br>", "  \n")
         s = re.sub(r"<[^>]+>", "", s)
         return html_lib.unescape(s)
+
+    def _md_doc_link(self, m) -> str:
+        """A text link to a page: [[Page]] when the text is the title, else [[Page|text]]."""
+        title, label = self.titles.get(m.group(1).lower(), ""), to_text(m.group(2))
+        if not title:
+            return label
+        return f"[[{title}]]" if title.strip().lower() == label.strip().lower() else f"[[{title}|{label}]]"
 
     def md_blocks(self, blocks, depth=0, file_depth=0) -> list[str]:
         kids: dict = {}
@@ -1008,6 +1016,7 @@ class Exporter:
 
         def inline(h):
             h = re.sub(r'<a [^>]*data-ref="doc:([^"]*)"[^>]*>(.*?)</a>', lambda m: f'<a class="ref" href="#">{m.group(2)}</a>', h or "")
+            h = re.sub(r'<a [^>]*data-doc="([^"]*)"[^>]*>(.*?)</a>', lambda m: f'<a class="ref" href="#">{m.group(2)}</a>', h)
             h = re.sub(r'<span [^>]*data-math="([^"]*)"[^>]*>.*?</span>', lambda m: f'<span class="math">\\({m.group(1)}\\)</span>', h)
             return h
 
@@ -1295,7 +1304,7 @@ def export_anki(notes) -> tuple[bytes, str, str]:
                 media[name] = os.path.join(tenancy.media_root(), url[len("/media/"):])
                 return f'src="{name}"'
             return m.group(0)
-        h = re.sub(r'<a [^>]*data-ref="[^"]*"[^>]*>(.*?)</a>', r"\1", h)
+        h = re.sub(r'<a [^>]*data-(?:ref|doc)="[^"]*"[^>]*>(.*?)</a>', r"\1", h)
         h = re.sub(r'<span [^>]*data-math="([^"]*)"[^>]*>.*?</span>', lambda m: f"\\({m.group(1)}\\)", h)
         return re.sub(r'src="([^"]+)"', repl, h)
 

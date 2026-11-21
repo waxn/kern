@@ -197,6 +197,10 @@ Settings → Reminders), home-screen widgets and a share target. Build it with `
 - Focus mode: the expand button in a page's top bar hides the sidebar, tabs
   and right panel for distraction-free writing; Esc brings them back.
 - `[[` page links, `((` block references, `#` tags, backlinks with context.
+- Link to a page from your own words: select text and press the page-link button in the
+  formatting bar (or `Ctrl/⌘ Shift K`), then pick a page. Clicking the link opens a small
+  read-only preview of that page with an Open button (`Ctrl/⌘`-click opens it straight away).
+  These links count as references (backlinks, graph) and show struck through if the page is deleted.
 - Tags as first-class objects with their own property definitions; per-page
   properties (text, number, checkbox, date, URL, select, multi-select,
   relation, rating).

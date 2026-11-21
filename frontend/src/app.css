@@ -179,6 +179,10 @@ kbd {
 .rt a.ref.tag { color: var(--chip, var(--text-2)); background: color-mix(in srgb, var(--chip, var(--text-2)) var(--tint), transparent); padding: 0 5px; border-radius: 9px; font-size: 0.92em; }
 .rt a.ref.blockref { color: var(--text); background: none; border-bottom: 1px solid color-mix(in srgb, var(--accent) 60%, transparent); border-radius: 0; padding: 0; }
 .rt a.ref.broken { color: var(--text-3); background: none; text-decoration: line-through; cursor: default; }
+/* Text linked to a page ("Link to page"): reads as prose, a dotted underline marks it; click to peek. */
+.rt a.doclink { color: inherit; text-decoration: underline dotted; text-decoration-color: color-mix(in srgb, var(--accent) 75%, transparent); text-decoration-thickness: 1.5px; text-underline-offset: 3px; }
+.rt a.doclink:hover { color: var(--accent); background: color-mix(in srgb, var(--accent) 8%, transparent); border-radius: 2px; }
+.rt a.doclink.broken { color: var(--text-3); text-decoration-style: solid; text-decoration-line: line-through; }
 .rt code { font: 0.88em var(--font-mono); padding: 1.5px 4px; border-radius: 4px; background: var(--code-bg); color: var(--c-red); }
 .rt strike, .rt s, .rt del { color: var(--text-2); }
 .rt .math { cursor: pointer; padding: 0 1px; border-radius: 3px; }
