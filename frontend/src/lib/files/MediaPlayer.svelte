@@ -2,7 +2,7 @@
 	/* The app-wide audio/video player. Mounted once in the root layout so playback survives
 	   navigation; "full" is the big viewer, "mini" a small dock in the corner. */
 	import {
-		Download, Gauge, Maximize, Minimize, Minimize2, Maximize2, Music, Pause, PictureInPicture2, Play,
+		Download, Gauge, Maximize, Minimize, Minimize2, Maximize2, AudioLines, Pause, PictureInPicture2, Play,
 		RotateCcw, RotateCw, Volume1, Volume2, VolumeX, X
 	} from '@lucide/svelte';
 	import { fileSize } from '#lib/util.ts';
@@ -327,7 +327,7 @@
 
 				{#if full && !video}
 					<div class="cover" style="--c1:{colors[0]};--c2:{colors[1]}">
-						<div class="art" class:spin={!paused}><Music size={44} strokeWidth={1.4} /></div>
+						<div class="art" class:spin={!paused}><AudioLines size={44} strokeWidth={1.6} /></div>
 						<div class="title">
 							<b class="truncate">{f.name.replace(/\.[^.]+$/, '')}</b>
 							<span>Audio{f.size ? ' · ' + fileSize(f.size) : ''}{duration ? ' · ' + fmtTime(duration) : ''}</span>
@@ -357,7 +357,7 @@
 					</div>
 				{:else}
 					<div class="minictl">
-						{#if !video}<div class="mini-art" style="--c1:{colors[0]};--c2:{colors[1]}"><Music size={16} /></div>{/if}
+						{#if !video}<div class="mini-art" style="--c1:{colors[0]};--c2:{colors[1]}"><AudioLines size={16} strokeWidth={1.9} /></div>{/if}
 						{#if !video}<button class="mini-name truncate" title="Open player" onclick={() => player.expand()}>{f.name}<span>{fmtTime(shown)} / {fmtTime(duration)}</span></button>{/if}
 						<button class="cbtn" title={paused ? 'Play' : 'Pause'} onclick={toggle}>{#if paused}<Play size={16} fill="currentColor" />{:else}<Pause size={16} fill="currentColor" />{/if}</button>
 						<button class="cbtn" title="Open player" onclick={() => player.expand()}><Maximize2 size={15} /></button>
@@ -431,9 +431,9 @@
 	.full.audio input[type='range'] { background: linear-gradient(to right, var(--accent) var(--v), color-mix(in srgb, var(--text) 18%, transparent) var(--v)); }
 	.full.audio input[type='range']::-webkit-slider-thumb { background: var(--text); }
 	.cover { display: flex; align-items: center; gap: 18px; }
-	.art { width: 104px; height: 104px; flex: none; display: grid; place-items: center; border-radius: 12px; color: rgba(255, 255, 255, 0.9); background: radial-gradient(circle at 30% 25%, var(--c1), var(--c2)); box-shadow: 0 10px 30px color-mix(in srgb, var(--c2) 50%, transparent); }
-	.art.spin :global(svg) { animation: bob 1.6s ease-in-out infinite; }
-	@keyframes bob { 50% { transform: translateY(-3px) rotate(-4deg); } }
+	.art { width: 104px; height: 104px; flex: none; display: grid; place-items: center; border-radius: 22px; color: rgba(255, 255, 255, 0.9); background: radial-gradient(circle at 30% 25%, var(--c1), var(--c2)); box-shadow: inset 0 1px 0 rgba(255, 255, 255, 0.25), 0 10px 30px color-mix(in srgb, var(--c2) 50%, transparent); }
+	.art.spin :global(svg) { animation: pulse 1.4s ease-in-out infinite; }
+	@keyframes pulse { 50% { transform: scaleY(0.85); opacity: 0.8; } }
 	.title { min-width: 0; display: flex; flex-direction: column; gap: 4px; }
 	.title b { font-size: 18px; font-weight: 620; }
 	.title span { color: var(--text-2); font-size: 13px; }
@@ -454,7 +454,7 @@
 	.mini.video:hover .minictl, .mini.video:focus-within .minictl { opacity: 1; }
 	.mini .cbtn { height: 30px; min-width: 30px; }
 	.mini.audio .cbtn:hover { background: var(--hover); }
-	.mini-art { width: 34px; height: 34px; flex: none; display: grid; place-items: center; border-radius: 6px; color: #fff; background: radial-gradient(circle at 30% 25%, var(--c1), var(--c2)); }
+	.mini-art { width: 34px; height: 34px; flex: none; display: grid; place-items: center; border-radius: 9px; color: #fff; background: radial-gradient(circle at 30% 25%, var(--c1), var(--c2)); }
 	.mini-name { flex: 1; display: flex; flex-direction: column; align-items: flex-start; padding: 0 6px; font-weight: 550; font-size: 13px; text-align: left; }
 	.mini-name span { font-weight: 400; font-size: 11.5px; color: var(--text-3); font-variant-numeric: tabular-nums; }
 	.mini-seek { position: absolute; left: 0; right: 0; bottom: 0; padding: 0 0; }

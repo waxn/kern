@@ -1,5 +1,5 @@
 <script lang="ts">
-	import { AudioLines, Copy, Download, Eye, FileText, Film, Image, Music, Pencil, Play, Search, Trash2, Upload } from '@lucide/svelte';
+	import { AudioLines, Copy, Download, Eye, FileText, Film, Image, Headphones, Pencil, Play, Search, Trash2, Upload } from '@lucide/svelte';
 	import { onMount } from 'svelte';
 	import { api, qs } from '#lib/api.ts';
 	import FilePreview from '#lib/components/FilePreview.svelte';
@@ -68,7 +68,7 @@
 		else preview = f;
 	}
 
-	const icon = (m: string) => (m.startsWith('image/') ? Image : m.startsWith('video/') ? Film : m.startsWith('audio/') ? Music : FileText);
+	const icon = (m: string) => (m.startsWith('image/') ? Image : m.startsWith('video/') ? Film : m.startsWith('audio/') ? Headphones : FileText);
 	const types: [string, string][] = [['', 'All'], ['image', 'Images'], ['pdf', 'PDFs'], ['video', 'Video'], ['audio', 'Audio'], ['other', 'Other']];
 </script>
 

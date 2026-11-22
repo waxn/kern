@@ -1,6 +1,6 @@
 import {
 	Bookmark, CircleDot, Heading1, Heading2, Heading3, Image, Lightbulb, List, ListCollapse,
-	ListOrdered, Minus, Music, Paperclip, Pilcrow, Quote, Sigma, SquareCheck, SquareCode, Table, Video,
+	ListOrdered, Minus, Headphones, Paperclip, Pilcrow, Quote, Sigma, SquareCheck, SquareCode, Table, Video,
 	Database, FileSymlink, Kanban, Repeat, Sparkles, TextQuote
 } from '@lucide/svelte';
 import type { Component } from 'svelte';
@@ -50,7 +50,7 @@ export const BLOCK_SPECS: BlockSpec[] = [
 	{ type: 'table', label: 'Table', hint: 'Simple grid of cells', icon: Table, keywords: 'table grid rows columns', group: 'Advanced' },
 	{ type: 'image', label: 'Image', hint: 'Upload or link an image', icon: Image, keywords: 'image picture photo img', group: 'Media' },
 	{ type: 'video', label: 'Video', hint: 'Upload or link a video', icon: Video, keywords: 'video movie mp4', group: 'Media' },
-	{ type: 'audio', label: 'Audio', hint: 'Upload or link audio', icon: Music, keywords: 'audio sound music mp3', group: 'Media' },
+	{ type: 'audio', label: 'Audio', hint: 'Upload or link audio', icon: Headphones, keywords: 'audio sound music mp3', group: 'Media' },
 	{ type: 'file', label: 'File', hint: 'Attach any file', icon: Paperclip, keywords: 'file attachment upload pdf document', group: 'Media' },
 	{ type: 'bookmark', label: 'Bookmark', hint: 'Saved web link', icon: Bookmark, keywords: 'bookmark link url web', group: 'Media' },
 	{ type: 'database', label: 'Database', hint: 'Table, board, calendar, gallery or list', icon: Database, keywords: 'database table board kanban calendar gallery list linked view', group: 'Advanced' },

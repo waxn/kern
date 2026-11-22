@@ -1,5 +1,5 @@
 <script lang="ts">
-	import { Download, Eye, EyeOff, FileText, FolderOpen, Image, Music, Paperclip, Upload, Video } from '@lucide/svelte';
+	import { Download, Eye, EyeOff, FileText, FolderOpen, Image, Headphones, Paperclip, Upload, Video } from '@lucide/svelte';
 	import LibraryPicker from '#lib/components/LibraryPicker.svelte';
 	import { tick } from 'svelte';
 	import { ui } from '#lib/state/ui.svelte.ts';
@@ -18,7 +18,7 @@
 	const meta = {
 		image: { icon: Image, accept: 'image/*', noun: 'image' },
 		video: { icon: Video, accept: 'video/*', noun: 'video' },
-		audio: { icon: Music, accept: 'audio/*', noun: 'audio file' },
+		audio: { icon: Headphones, accept: 'audio/*', noun: 'audio file' },
 		file: { icon: Paperclip, accept: '', noun: 'file' }
 	} as const;
 	let m = $derived(meta[block.type as keyof typeof meta]);
@@ -76,7 +76,7 @@
 	<figure><!-- svelte-ignore a11y_media_has_caption --><video src={p.url} controls preload="metadata"></video></figure>
 {:else if block.type === 'audio'}
 	<div class="audio">
-		<span class="name truncate"><Music size={14} strokeWidth={1.75} />{p.name}</span>
+		<span class="name truncate"><Headphones size={14} strokeWidth={1.75} />{p.name}</span>
 		<audio src={p.url} controls preload="metadata"></audio>
 	</div>
 {:else}
