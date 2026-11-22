@@ -48,7 +48,7 @@
 
 <div class="mail-page scroll">
   <div class="inner">
-    <h1 class="display">Blocked senders</h1>
+    <h1>Blocked senders</h1>
     <p class="muted">New mail from these addresses and domains goes straight to Junk, on your mail server too. “Not spam” on a
       message removes its block automatically.</p>
 
@@ -82,8 +82,9 @@
 
 <style>
   .mail-page { flex: 1; min-height: 0; width: 100%; }
-  .inner { max-width: 760px; margin: 0 auto; padding: 18px 20px 80px; }
-  h1 { font-size: 36px; margin: 6px 0 8px; }
+  .inner { max-width: 860px; margin: 0 auto; padding: 36px 40px 80px; }
+  @media (max-width: 760px) { .inner { padding: 48px 16px 80px; } }
+  h1 { font-size: 22px; font-weight: 650; letter-spacing: -0.01em; margin: 0 0 4px; }
   .add { display: flex; gap: 8px; margin: 18px 0 10px; }
   .add select { width: 120px; flex: none; }
   .error { color: var(--danger); background: var(--danger-soft); padding: 8px 10px; border-radius: 8px; font-size: 13px; }

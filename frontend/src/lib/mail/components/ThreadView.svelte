@@ -355,8 +355,8 @@
     display: flex;
     align-items: center;
     gap: 4px;
-    height: 46px;
-    padding: 0 10px;
+    height: 48px;
+    padding: 0 calc(var(--mail-pad) - 6px);
     border-bottom: 1px solid var(--line);
     flex: none;
   }
@@ -378,9 +378,9 @@
   .sep { width: 1px; height: 20px; background: var(--line); margin: 0 6px; flex: none; }
   .star.on { color: var(--star); }
   .body { flex: 1; }
-  .thread { max-width: 880px; margin: 0 auto; padding: 26px 24px 120px; }
+  .thread { max-width: 880px; margin: 0 auto; padding: 20px var(--mail-pad) 120px; }
   .subject-row { padding: 4px 4px 18px; }
-  h1 { font-size: 30px; line-height: 1.15; margin: 0; overflow-wrap: anywhere; }
+  h1 { font-size: 21px; line-height: 1.25; font-weight: 650; margin: 0; overflow-wrap: anywhere; }
   .summary { margin: 8px 0 0; display: flex; flex-wrap: wrap; gap: 0 7px; text-transform: none; letter-spacing: .02em; font-size: 11.5px; }
   .summary .sep2 { opacity: .5; }
   .labels { display: flex; flex-wrap: wrap; gap: 5px; margin-top: 8px; }
@@ -424,8 +424,8 @@
   .skel-lines { flex: 1; display: grid; gap: 8px; align-content: start; padding-top: 3px; }
   .error { color: var(--danger); }
   @media (max-width: 640px) {
-    .thread { padding: 12px 10px 120px; }
-    h1 { font-size: 23px; }
+    .thread { padding: 12px var(--mail-pad) 120px; }
+    h1 { font-size: 18px; }
   }
   .intel :global(.sparkle) { transition: transform .35s var(--ease); }
   .intel:hover :global(.sparkle), .intel.on :global(.sparkle) { transform: rotate(45deg) scale(1.08); }

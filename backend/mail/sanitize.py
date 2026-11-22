@@ -76,6 +76,7 @@ _STYLE_BLOCK = re.compile(r"(<style[^>]*>)(.*?)(</style>)", re.IGNORECASE | re.D
 class SanitizeResult:
     html: str
     remote_images: int  # how many remote resources were blocked (or proxied)
+    colors: str = "none"  # how colors were fitted to Kern's theme (mail/colors.py)
 
 
 class _Ctx:
@@ -139,7 +140,11 @@ class _Ctx:
 
 
 def sanitize_html(markup: str, *, message_pk: int = 0, load_images: bool = False,
-                  cid_map: dict[str, int] | None = None) -> SanitizeResult:
+                  cid_map: dict[str, int] | None = None, theme: str = "") -> SanitizeResult:
+    """theme "dark" or "light" fits the email's colors to Kern's page (mail/colors.py);
+    empty keeps them as sent."""
+    from . import colors as colors_mod
+
     ctx = _Ctx(message_pk, load_images, cid_map or {})
     attributes = {"*": set(GENERIC_ATTRS)}
     for tag, attrs in TAG_ATTRS.items():
@@ -167,7 +172,15 @@ def sanitize_html(markup: str, *, message_pk: int = 0, load_images: bool = False
         return m.group(1) + body + m.group(3)
 
     cleaned = _STYLE_BLOCK.sub(style_repl, cleaned)
-    return SanitizeResult(html=cleaned, remote_images=ctx.remote)
+    # <body> is dropped above; keep the colors it set (parsed, re-serialized: never raw text).
+    bg, fg = colors_mod.body_colors(markup)
+    if bg or fg:
+        css = (f"background-color:{bg};" if bg else "") + (f"color:{fg};" if fg else "")
+        cleaned = f'<div style="{css}">{cleaned}</div>'
+    how = "none"
+    if theme:
+        cleaned, how = colors_mod.adapt(cleaned, theme)
+    return SanitizeResult(html=cleaned, remote_images=ctx.remote, colors=how)
 
 
 _URL_IN_TEXT = re.compile(r"(https?://[^\s<>\"']+[^\s<>\"'.,;:!?)\]])", re.IGNORECASE)

@@ -1,12 +1,12 @@
 <script>
   // @ts-nocheck: plain JavaScript (ported from Manifest).
-  // One shipment: where it is, when it arrives, and a link to the carrier's
-  // own tracking page. Nothing is fetched from the carrier; the link only
-  // opens when you click it.
+  // One shipment: where it is, when it arrives, its latest scans (with live tracking on,
+  // Settings → Mail → Package tracking) and a link to the carrier's own tracking page.
   import { navigate } from '../router.svelte.js';
-  import { errorToast, packageAction, toast } from '../state.svelte.js';
+  import { errorToast, packageAction, parcels, toast } from '../state.svelte.js';
   import { STEPS, arrivalLabel, groupNumber, isLate } from '../packages.js';
   import Icon from './Icon.svelte';
+  import PackageMap from './PackageMap.svelte';
 
   let { p, compact = false, inThread = false } = $props();
 
@@ -20,6 +20,26 @@
     } catch {
       toast("Couldn't copy. Select the number and copy it by hand.", { kind: 'error' });
     }
+  }
+  let refreshing = $state(false);
+  let showScans = $state(false);
+  const scans = $derived(p.events || []);
+  const route = $derived(p.route?.points || []);
+  async function refresh() {
+    refreshing = true;
+    try {
+      await packageAction(p, 'refresh');
+    } catch (e) {
+      errorToast(e);
+    } finally {
+      refreshing = false;
+    }
+  }
+  function scanTime(iso) {
+    if (!iso) return '';
+    const d = new Date(iso);
+    const today = new Date().toDateString() === d.toDateString();
+    return today ? d.toLocaleTimeString([], { hour: '2-digit', minute: '2-digit' }) : d.toLocaleDateString([], { day: 'numeric', month: 'short' }) + ' ' + d.toLocaleTimeString([], { hour: '2-digit', minute: '2-digit' });
   }
   async function act(action) {
     try {
@@ -39,10 +59,16 @@
     <div class="what">
       <div class="ledger who">{p.carrierName}{#if p.merchant}<span class="sep">·</span>{p.merchant}{/if}</div>
       <div class="when display">{arrivalLabel(p)}</div>
-      {#if !compact && p.subject}<div class="subj faint">{p.subject}</div>{/if}
+      {#if scans[0]}
+        <div class="scan"><span class="live" title="Live from the carrier"></span>{scans[0].text}{#if scans[0].where}<span class="faint"> · {scans[0].where}</span>{/if}</div>
+      {:else if !compact && p.subject}<div class="subj faint">{p.subject}</div>{/if}
     </div>
     <span class="status">{late ? 'Running late' : p.statusLabel}</span>
   </div>
+
+  {#if route.length && !compact}
+    <PackageMap points={route} delivered={p.status === 'delivered'} height={inThread ? 140 : 170} map={parcels.map} />
+  {/if}
 
   <ol class="track" aria-label={`Progress: ${STEPS[p.step]}`}>
     {#each STEPS as s, i}
@@ -50,10 +76,24 @@
     {/each}
   </ol>
 
+  {#if showScans && scans.length > 1}
+    <ol class="scans" aria-label="Scans">
+      {#each scans as e, i (i)}
+        <li><time>{scanTime(e.at)}</time><span>{e.text}{#if e.where}<span class="faint"> · {e.where}</span>{/if}</span></li>
+      {/each}
+    </ol>
+  {/if}
+
   <div class="foot">
     <span class="num mono" title="Tracking number">{groupNumber(p.number)}</span>
     <button class="icon-btn small" title="Copy tracking number" aria-label="Copy tracking number" onclick={copy}><Icon name="copy" size={14} /></button>
     <span class="grow"></span>
+    {#if scans.length > 1}
+      <button class="btn small ghost" aria-expanded={showScans} onclick={() => (showScans = !showScans)}>{showScans ? 'Fewer' : `${scans.length} scans`}</button>
+    {/if}
+    {#if parcels.tracking?.hasKey && p.status !== 'delivered'}
+      <button class="icon-btn small" class:spin={refreshing} title="Check with the carrier now" aria-label="Check with the carrier now" disabled={refreshing} onclick={refresh}><Icon name="refresh" size={14} /></button>
+    {/if}
     {#if p.trackUrl}
       <a class="btn small" href={p.trackUrl} target="_blank" rel="noopener noreferrer" referrerpolicy="no-referrer"
          title={`Opens ${p.carrierName}'s tracking page in a new tab`}>Track <Icon name="external" size={13} /></a>
@@ -72,8 +112,8 @@
   .pkg {
     --tone: var(--accent-ink);
     position: relative;
-    background: var(--bg-elev);
-    border: 1px solid var(--card-border, var(--line));
+    background: var(--bg);
+    border: 1px solid var(--line);
     border-radius: var(--radius-lg, 12px);
     padding: 14px 16px 12px;
     display: grid;
@@ -109,6 +149,12 @@
   .foot { display: flex; align-items: center; gap: 6px; flex-wrap: wrap; }
   .mono { font-family: var(--mono); font-size: 12.5px; color: var(--text-2); letter-spacing: .02em; user-select: all; }
   .grow { flex: 1; }
+  .scan { font-size: 12.5px; margin-top: 3px; color: var(--text-2); white-space: nowrap; overflow: hidden; text-overflow: ellipsis; display: flex; align-items: center; gap: 6px; }
+  .live { flex: none; width: 6px; height: 6px; border-radius: 50%; background: var(--ok); box-shadow: 0 0 0 3px color-mix(in srgb, var(--ok) 20%, transparent); }
+  .scans { list-style: none; margin: 0; padding: 0 0 0 4px; display: grid; gap: 6px; border-left: 2px solid var(--line); }
+  .scans li { display: grid; grid-template-columns: 108px 1fr; gap: 10px; padding-left: 10px; font-size: 12.5px; color: var(--text-2); }
+  .scans time { color: var(--text-3); font-variant-numeric: tabular-nums; }
+  .spin :global(svg) { animation: mail-spin .8s linear infinite; }
   a.btn { text-decoration: none; display: inline-flex; align-items: center; gap: 4px; }
   @media (max-width: 560px) {
     .when { font-size: 19px; }

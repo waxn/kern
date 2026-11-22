@@ -55,25 +55,13 @@ describe('collapseQuotes', () => {
   });
 });
 
-import { looksDark, parseColor } from './emailFrame.js';
-
-describe('dark emails', () => {
-  it('marks the page for dark mode only when asked', () => {
-    expect(buildSrcdoc('<p>x</p>', 'https://m.example', { dark: true })).toContain('<html class="kern-dark">');
-    expect(buildSrcdoc('<p>x</p>', 'https://m.example')).toContain('<html>');
-  });
-  it('parses colors', () => {
-    expect(parseColor('#fff')).toEqual([255, 255, 255]);
-    expect(parseColor('#102030')).toEqual([16, 32, 48]);
-    expect(parseColor('rgb(1, 2, 3)')).toEqual([1, 2, 3]);
-    expect(parseColor('rgba(1, 2, 3, 0)')).toBeNull();
-    expect(parseColor('transparent')).toBeNull();
-  });
-  it('leaves already-dark emails alone', () => {
-    expect(looksDark('<table bgcolor="#111111"><tr><td>Hi</td></tr></table>')).toBe(true);
-    expect(looksDark('<div style="background-color: rgb(10, 10, 10)">Hi</div>')).toBe(true);
-    expect(looksDark('<style>body { background: #000; }</style><p>Hi</p>')).toBe(true);
-    expect(looksDark('<table bgcolor="#ffffff"><tr><td>Hi</td></tr></table>')).toBe(false);
-    expect(looksDark('<p>Plain</p>')).toBe(false);
+describe('page look', () => {
+  it('draws on Kern\'s page, or on white for original colors', () => {
+    const dark = buildSrcdoc('<p>x</p>', 'https://m.example', { look: 'dark' });
+    expect(dark).toContain('color-scheme:dark');
+    expect(dark).toContain('background: transparent');
+    const original = buildSrcdoc('<p>x</p>', 'https://m.example', { look: 'original' });
+    expect(original).toContain('color-scheme:light');
+    expect(original).toContain('background: #ffffff');
   });
 });

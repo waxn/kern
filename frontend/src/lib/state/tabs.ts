@@ -16,7 +16,7 @@ export function tabInfo(path: string): { title: string; icon: string } {
 	if (repo) return { title: repo[1], icon: '' };
 	if (path === '/mail' || path.startsWith('/mail/')) {
 		const view = path.split('/')[2] ?? 'inbox';
-		const pages: Record<string, string> = { packages: 'Packages', scheduled: 'Scheduled', files: 'Files', blocklist: 'Blocked senders', starred: 'Starred', all: 'All mail', search: 'Search', snoozed: 'Snoozed', drafts: 'Drafts', sent: 'Sent', archive: 'Archive', junk: 'Junk', trash: 'Trash' };
+		const pages: Record<string, string> = { packages: 'Packages', scheduled: 'Scheduled', files: 'Files', blocklist: 'Blocked senders', stats: 'Stats', starred: 'Starred', all: 'All mail', search: 'Search', snoozed: 'Snoozed', drafts: 'Drafts', sent: 'Sent', archive: 'Archive', junk: 'Junk', trash: 'Trash' };
 		return { title: 'Mail · ' + (pages[view] ?? (view === 'inbox' ? 'Inbox' : 'Folder')), icon: '' };
 	}
 	const names: Record<string, string> = {

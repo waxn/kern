@@ -235,3 +235,17 @@ def test_files_page_media_kind(loaded, api):
     assert r["files"][0]["kind"] == "media" and r["files"][0]["preview"] == "audio"
     other = api.get("/api/attachments", kind="other").json()
     assert "voice note.wav" not in [f["filename"] for f in other["files"]]
+
+
+def test_stats(api, loaded):
+    from django.utils import timezone
+
+    from mail.models import Message
+
+    Message.objects.update(sort_date=timezone.now())  # corpus dates are old; bring them into the window
+    s = api.get("/api/mail/stats", days=30).json()
+    assert s["days"] == 30 and len(s["series"]) == 30
+    assert s["received"] > 0 and sum(d["received"] for d in s["series"]) == s["received"]
+    assert len(s["hours"]) == 24 and sum(s["hours"]) == s["received"]
+    assert s["topSenders"] and s["topSenders"][0]["count"] >= s["topSenders"][-1]["count"]
+    assert s["totals"]["messages"] >= s["received"]

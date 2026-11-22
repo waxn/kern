@@ -180,7 +180,11 @@ class Kern(val api: Api) {
     suspend fun mailChanges(since: Long?, wait: Int? = null): MailChanges =
         api.get("/mail/changes" + qs("since" to since, "wait" to wait))
     suspend fun mailCheckNow(): JsonObject = api.post("/mail/check")
-    suspend fun mailBody(id: Long): MailBody = api.get("/mail/messages/$id/body")
+    /** colors: "dark" or "light" fits the email to the theme on the server; null shows it as sent. */
+    suspend fun mailBody(id: Long, colors: String? = null): MailBody = api.get("/mail/messages/$id/body" + qs("colors" to colors))
+    suspend fun mailPackages(): MailPackages = api.get("/mail/packages")
+    suspend fun mailPackageAction(id: Long, action: String): MailPackage = api.post("/mail/packages/$id", jsonOf("action" to action))
+    suspend fun mailInfo(): MailInfo = api.get("/mail/info")
     suspend fun mailAction(ids: List<Long>, action: String, vararg extra: Pair<String, Any?>): JsonObject =
         api.post("/mail/threads/actions", jsonOf("ids" to ids, "action" to action, *extra))
     suspend fun mailTask(thread: Long, title: String, due: String?): Task =
@@ -188,10 +192,10 @@ class Kern(val api: Api) {
     suspend fun mailOpen(key: String): MailOpen = api.get("/mail/open" + qs("key" to key))
     suspend fun mailPrefill(message: Long, mode: String): MailPrefill = api.get("/mail/compose/prefill" + qs("message" to message, "mode" to mode))
     /** New draft, then send it (the server's undo delay still applies). */
-    suspend fun mailSend(mode: String, inReplyTo: Long?, to: List<MailAddr>, cc: List<MailAddr>, subject: String, bodyHtml: String): MailDraft {
+    suspend fun mailSend(mode: String, inReplyTo: Long?, to: List<MailAddr>, cc: List<MailAddr>, subject: String, bodyHtml: String, from: String = ""): MailDraft {
         fun addrs(l: List<MailAddr>) = l.map { mapOf("name" to it.name, "addr" to it.addr) }
         val d: MailDraft = api.post("/mail/drafts", jsonOf("mode" to mode, "inReplyTo" to inReplyTo, "to" to addrs(to), "cc" to addrs(cc),
-            "subject" to subject, "bodyHtml" to bodyHtml))
+            "subject" to subject, "bodyHtml" to bodyHtml, "from" to from))
         return api.post("/mail/drafts/${d.id}/send")
     }
 

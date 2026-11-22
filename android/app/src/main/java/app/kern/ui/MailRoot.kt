@@ -68,6 +68,7 @@ import app.kern.ui.screens.LoginScreen
 import app.kern.ui.screens.MailComposeScreen
 import app.kern.ui.screens.MailScreen
 import app.kern.ui.screens.MailThreadScreen
+import app.kern.ui.screens.MailPackagesScreen
 import app.kern.ui.theme.kern
 import kotlinx.coroutines.flow.MutableStateFlow
 
@@ -157,6 +158,7 @@ private fun MailSignedIn(ws: Workspace, launch: MutableStateFlow<Launch?>, host:
             )) { MailScreen(ws, n, it.arguments?.getString("view"), standalone = true) }
             composable("mail") { MailScreen(ws, n, null, standalone = true) }
             composable("mail/thread/{id}") { MailThreadScreen(ws, n, it.arguments!!.getString("id")!!.toLong()) }
+            composable("mail/packages") { MailPackagesScreen(ws, n) }
             composable("mail/compose?msg={msg}&mode={mode}", arguments = listOf(
                 navArgument("msg") { type = NavType.StringType; nullable = true; defaultValue = null },
                 navArgument("mode") { type = NavType.StringType; nullable = true; defaultValue = null },

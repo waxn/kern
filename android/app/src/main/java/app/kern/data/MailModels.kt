@@ -7,8 +7,10 @@ import kotlinx.serialization.json.JsonObject
 // Mail (/api/mail/...): the same JSON the web app reads (backend/mail/api/views.py).
 
 @Serializable
-data class MailAddr(val name: String = "", val addr: String = "") {
+data class MailAddr(val name: String = "", val addr: String = "", val to: Boolean = false) {
     val label: String get() = name.ifBlank { addr }
+    /** The same rule as the web app and the server (mail/names.py): their name, else the part before the @. */
+    val display: String get() = name.trim().ifBlank { addr.substringBefore('@') }
 }
 
 @Serializable
@@ -27,6 +29,8 @@ data class MailFolders(val folders: List<MailFolder> = emptyList(), val starred:
 @Serializable
 data class MailThread(
     val id: Long,
+    /** "Alice", "Alice, Bob", "To: Dana": worked out by the server so every app names people alike. */
+    val who: String = "",
     val subject: String = "",
     val snippet: String = "",
     val lastDate: String? = null,
@@ -38,10 +42,65 @@ data class MailThread(
     val risk: String = "",
     val snoozeUntil: String? = null,
     val muted: Boolean = false,
+    val hit: String = "",
+    val `package`: MailPackageChip? = null,
 )
 
 @Serializable
-data class MailThreads(val threads: List<MailThread> = emptyList(), val next: String? = null)
+data class MailPackageChip(val status: String = "", val label: String = "")
+
+@Serializable
+data class MailScan(val at: String? = null, val text: String = "", val where: String = "")
+
+@Serializable
+data class MailPackage(
+    val id: Long,
+    val number: String = "",
+    val carrierName: String = "",
+    val status: String = "",
+    val statusLabel: String = "",
+    val statusAt: String? = null,
+    val step: Int = 1,
+    val expected: String? = null,
+    val merchant: String = "",
+    val subject: String = "",
+    val trackUrl: String = "",
+    val threadId: Long? = null,
+    val live: Boolean = false,
+    val location: String = "",
+    val events: List<MailScan> = emptyList(),
+    val assumed: Boolean = false,
+    val route: MailRoute = MailRoute(),
+)
+
+/** Where a package has been, oldest first: [lat, lon, place] (backend/mail/geo.py). */
+@Serializable
+data class MailRoute(val origin: String = "", val destination: String = "", val points: List<kotlinx.serialization.json.JsonArray> = emptyList()) {
+    val latLon: List<Pair<Double, Double>> get() = points.mapNotNull { p ->
+        val lat = p.getOrNull(0)?.let { (it as? kotlinx.serialization.json.JsonPrimitive)?.content?.toDoubleOrNull() }
+        val lon = p.getOrNull(1)?.let { (it as? kotlinx.serialization.json.JsonPrimitive)?.content?.toDoubleOrNull() }
+        if (lat != null && lon != null) lat to lon else null
+    }
+}
+
+@Serializable
+data class MailTracking(val provider: String = "", val hasKey: Boolean = false, val lastError: String = "")
+
+@Serializable
+data class MailPackages(val active: List<MailPackage> = emptyList(), val delivered: List<MailPackage> = emptyList(), val tracking: MailTracking? = null, val map: MailMapInfo = MailMapInfo())
+
+/** Whose map tiles the server hands out (backend/mail/geo.py) and the credit line to show. */
+@Serializable
+data class MailMapInfo(val provider: String = "osm", val attribution: String = "© OpenStreetMap contributors")
+
+@Serializable
+data class MailIdentity(val address: String = "", val name: String = "")
+
+@Serializable
+data class MailInfo(val address: String = "", val fromName: String = "", val identities: List<MailIdentity> = emptyList())
+
+@Serializable
+data class MailThreads(val threads: List<MailThread> = emptyList(), val next: String? = null, val total: Int? = null)
 
 @Serializable
 data class MailAttachment(val id: Long, val filename: String = "", val contentType: String = "", val size: Long = 0, val inline: Boolean = false)
@@ -82,6 +141,8 @@ data class MailBody(
     val text: String? = null,
     val textHtml: String? = null,
     val remoteImages: Int = 0,
+    /** How the server fitted its colors to the theme (backend/mail/colors.py). */
+    val colors: String = "none",
 )
 
 @Serializable
@@ -112,6 +173,7 @@ data class MailPrefill(
     val cc: List<MailAddr> = emptyList(),
     val subject: String = "",
     @SerialName("body_html") val bodyHtml: String = "",
+    val from: String = "",
 )
 
 @Serializable

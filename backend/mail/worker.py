@@ -146,6 +146,7 @@ class Worker:
         engine.sync_all()
         last_full = time.monotonic()
         last_prune = 0.0
+        last_tracking = 0.0
         while not self.stop.is_set():
             close_old_connections()
             # 1. Write-back queue.
@@ -168,6 +169,12 @@ class Worker:
             from . import followups
 
             followups.check_due()
+            # Live package tracking (opt-in; rate-limited per package inside).
+            if time.monotonic() - last_tracking > 120:
+                from . import tracking
+
+                tracking.refresh()
+                last_tracking = time.monotonic()
             # 3. Push from IDLE: sync INBOX quickly.
             self.sync_pushed(engine)
             # 4. Periodic full sweep (other folders, flags changed elsewhere).

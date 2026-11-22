@@ -235,6 +235,7 @@ private fun SignedIn(ws: Workspace, launch: MutableStateFlow<Launch?>, host: Sna
                 navArgument("view") { type = NavType.StringType; nullable = true; defaultValue = null },
             )) { app.kern.ui.screens.MailScreen(ws, n, it.arguments?.getString("view")) }
             composable("mail/thread/{id}") { app.kern.ui.screens.MailThreadScreen(ws, n, it.arguments!!.getString("id")!!.toLong()) }
+            composable("mail/packages") { app.kern.ui.screens.MailPackagesScreen(ws, n) }
             composable("mail/compose?msg={msg}&mode={mode}", arguments = listOf(
                 navArgument("msg") { type = NavType.StringType; nullable = true; defaultValue = null },
                 navArgument("mode") { type = NavType.StringType; nullable = true; defaultValue = null },

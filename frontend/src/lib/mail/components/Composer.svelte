@@ -237,6 +237,15 @@
     <div class="drop-overlay" aria-hidden="true"><Icon name="clip" size={22} /> Drop files to attach</div>
   {/if}
   <div class="body" hidden={c.minimized && !docked}>
+    {#if info.identities?.length}
+      <label class="from-row">
+        <span>From</span>
+        <select bind:value={c.from} onchange={changed} aria-label="Send from">
+          <option value="">{info.fromName ? `${info.fromName} <${info.address}>` : info.address}</option>
+          {#each info.identities as i (i.address)}<option value={i.address}>{i.name ? `${i.name} <${i.address}>` : i.address}</option>{/each}
+        </select>
+      </label>
+    {/if}
     <div class="rcpt-row">
       <RecipientInput label="To" bind:value={c.to} onchange={changed} autofocus={c.mode === 'new' || c.mode === 'forward'} />
       {#if !c.showCc}
@@ -402,6 +411,9 @@
   .body { flex: 1; min-height: 0; display: flex; flex-direction: column; }
   .body[hidden] { display: none; }
   .rcpt-row { position: relative; }
+  .from-row { display: flex; align-items: center; gap: 8px; padding: 0 14px; height: 38px; border-bottom: 1px solid var(--line); font-size: 13.5px; }
+  .from-row span { color: var(--text-3); width: 34px; flex: none; }
+  .from-row select { flex: 1; min-width: 0; border: 0; background: transparent; color: var(--text); outline: none; font: inherit; cursor: pointer; }
   .ccbtn { position: absolute; right: 10px; top: 9px; border: 0; background: none; color: var(--text-3); cursor: pointer; font-size: 12.5px; }
   .ccbtn:hover { color: var(--text); }
   .subject { border: 0; border-bottom: 1px solid var(--line); background: transparent; outline: none; padding: 10px 14px; font-size: 14px; font-weight: 550; }
@@ -453,5 +465,10 @@
       position: fixed; inset: 0; width: auto; height: 100%; border-radius: 0; border: 0;
     }
     .composer.min { width: calc(100vw - 32px); margin: 0 auto; }
+    /* Phones: a bigger send button with room around it, clear of the home indicator. */
+    footer { padding: 12px 16px calc(12px + env(safe-area-inset-bottom)); gap: 10px; }
+    .send { height: 42px; padding: 0 22px; }
+    .later, .send-archive { height: 42px; }
+    .later { width: 42px; }
   }
 </style>

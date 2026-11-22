@@ -56,6 +56,7 @@ KEPT_HEADERS = (
     "list-id", "list-unsubscribe", "list-unsubscribe-post", "list-post",
     "return-path", "sender", "precedence", "auto-submitted",
     "x-mailer", "user-agent", "received-spf",
+    "delivered-to", "x-forwarded-to", "x-original-to",
 )
 
 _CTRL = re.compile(r"[\x00-\x08\x0b\x0c\x0e-\x1f\x7f]")

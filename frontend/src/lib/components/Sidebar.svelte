@@ -1,12 +1,11 @@
 <script lang="ts">
 	import { page } from '$app/state';
-	import { Calendar, LayoutDashboard, Kanban, Archive, ChevronDown, ChevronRight, CircleCheck, Database, FolderOpen, GitBranch, Hash, House, Layers, LayoutTemplate, Mail, Network, PanelLeft, Plus, Search, Settings, Trash2, Globe, LogOut } from '@lucide/svelte';
+	import { Calendar, LayoutDashboard, Kanban, Archive, ChevronDown, ChevronRight, CircleCheck, Database, FolderOpen, GitBranch, Hash, House, Layers, LayoutTemplate, Mail, Network, Plus, Search, Settings, Trash2, Globe, LogOut } from '@lucide/svelte';
 	import { onMount } from 'svelte';
 	import { mailToday, watchMailToday } from '#lib/mail/badge.svelte.js';
 	import { logout, session } from '#lib/state/session.svelte.ts';
 	import { counts } from '#lib/learn/util.svelte.ts';
 	import { importFiles } from '#lib/data/download.ts';
-	import Logo from './Logo.svelte';
 	import Sparkle from '#lib/ai/Sparkle.svelte';
 	import { Bookmark, Upload } from '@lucide/svelte';
 	import { goto } from '$app/navigation';
@@ -19,7 +18,7 @@
 	import { ws } from '#lib/state/workspace.svelte.ts';
 	import { modKey } from '#lib/util.ts';
 	import TreeNode, { endTreeDrag, treeDragId } from './TreeNode.svelte';
-	import ModeSwitch from './ModeSwitch.svelte';
+	import SidebarHead from './SidebarHead.svelte';
 
 	let roots = $derived(ws.children(null).filter((d) => d.kind !== 'group'));
 	onMount(() => watchMailToday());
@@ -121,17 +120,7 @@
 	onchange={async (e) => { const f = [...(e.currentTarget.files ?? [])]; e.currentTarget.value = ''; if (f.length && (await importFiles(f))) ws.load(); }} />
 
 <aside class="sidebar" class:resizing style:width="{prefs.sidebarWidth}px">
-	<div class="head">
-		<a class="brand" href="/" onclick={(e) => nav(e, '/')}>
-			<Logo size={20} />
-			Kern
-		</a>
-		<span class="grow"></span>
-		<ModeSwitch mode="notes" />
-		<button class="icon-btn" title="Hide sidebar ({modKey}+\)" onclick={() => { prefs.sidebarOpen = false; ui.mobileNav = false; }}>
-			<PanelLeft size={15} />
-		</button>
-	</div>
+	<SidebarHead mode="notes" />
 
 	<div class="top">
 		<button class="nav" onclick={() => { ui.openSearch(); ui.mobileNav = false; }}>
@@ -236,9 +225,6 @@
 
 <style>
 	.sidebar { position: relative; flex: none; display: flex; flex-direction: column; height: 100%; background: var(--bg-side); border-right: 1px solid var(--border); user-select: none; }
-	.head { display: flex; align-items: center; gap: 6px; height: 40px; padding: 0 8px 0 12px; }
-	.grow { flex: 1; }
-	.brand { display: flex; align-items: center; gap: 7px; font-weight: 650; letter-spacing: -0.01em; text-decoration: none; }
 	.top, .foot { padding: 2px 6px; }
 	.foot { border-top: 1px solid var(--border); padding: 6px; }
 	.nav { display: flex; align-items: center; gap: 8px; width: 100%; height: var(--row-h); padding: 0 8px; border-radius: var(--radius-sm); color: var(--text-2); text-decoration: none; }

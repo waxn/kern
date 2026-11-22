@@ -24,7 +24,13 @@ class SmtpSender:
 
     def send(self, envelope_from: str, recipients: list[str], raw: bytes) -> dict:
         """Returns {recipient: (code, msg)} for recipients the server refused
-        while accepting others. Raises if nobody accepted it."""
+        while accepting others. Raises if nobody accepted it. A "send as" address with a
+        server of its own (mail/identities.py) goes out through that server."""
+        from . import identities
+
+        ident = identities.own_server(envelope_from)
+        if ident is not None:
+            return identities.send(ident, envelope_from, recipients, raw)
         host, port = self.cfg["SMTP_HOST"], self.cfg["SMTP_PORT"]
         password = self.password
         if self.cfg["SMTP_SECURITY"] == "starttls":

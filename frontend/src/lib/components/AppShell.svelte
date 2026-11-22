@@ -10,6 +10,8 @@
 	import TabBar from '#lib/components/TabBar.svelte';
 	import TabCorner from '#lib/components/TabCorner.svelte';
 	import MailSide from '#lib/mail/MailSide.svelte';
+	import MailSearch from '#lib/mail/components/MailSearch.svelte';
+	import { openMailSearch, ui as mailUi } from '#lib/mail/state.svelte.js';
 	import { modeFor, switchMode, trackMode } from '#lib/state/mode.ts';
 	import Toasts from '#lib/components/Toasts.svelte';
 	import CardEditor from '#lib/learn/CardEditor.svelte';
@@ -82,7 +84,7 @@
 	const path = $derived(page.url.pathname);
 	const mode = $derived(modeFor(path));
 	// Pages with their own header put the corner control there (DocView, mail's top bar).
-	const ownHeader = $derived(path.startsWith('/doc/') || path === '/mail' || path.startsWith('/mail/'));
+	const ownHeader = $derived(path.startsWith('/doc/') || ((path === '/mail' || path.startsWith('/mail/')) && !/^\/mail\/(packages|scheduled|files|blocklist|stats)\b/.test(path)));
 	const showTabs = $derived(prefs.tabs.length > 1);
 
 	function hasTextSelection(): boolean {
@@ -104,8 +106,13 @@
 			e.preventDefault();
 			fn();
 		};
-		if (is('search') && !(combo === 'Mod+K' && hasTextSelection())) return run(() => (ui.searchOpen ? (ui.searchOpen = false) : ui.openSearch()));
-		if (combo === 'Mod+P') return run(() => (ui.searchOpen ? (ui.searchOpen = false) : ui.openSearch()));
+		// In Mail mode the same keys search mail (the sidebar's Search row is in the same place).
+		const toggleSearch = () =>
+			mode === 'mail'
+				? mailUi.search.open ? (mailUi.search.open = false) : openMailSearch()
+				: ui.searchOpen ? (ui.searchOpen = false) : ui.openSearch();
+		if (is('search') && !(combo === 'Mod+K' && hasTextSelection())) return run(toggleSearch);
+		if (combo === 'Mod+P') return run(toggleSearch);
 		// Works while typing too: it is meant to be summoned from inside a page.
 		if (is('intelligence')) return run(() => (ai.popupOpen = !ai.popupOpen));
 		if (is('toggleSidebar')) return run(() => (prefs.sidebarOpen = !prefs.sidebarOpen));
@@ -150,6 +157,7 @@
 </div>
 
 <SearchModal />
+<MailSearch />
 <ContextMenu />
 <ConfirmDialog />
 {#if ui.cardEditor}<CardEditor />{/if}

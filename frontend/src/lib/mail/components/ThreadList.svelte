@@ -3,11 +3,14 @@
   import { navLink, navigate, route } from '../router.svelte.js';
   import {
     agenda, checkNow, clearedToday, contextFolder, syncProgress, errorToast, folderById, info, labelById, list, loadAgenda, loadFolders, loadThreads,
-    mailbox, parcels, prefs, READING_MIN, savePrefs, threadAction, toast, ui, viewAction, viewTitle,
+    mailbox, openMailSearch, parcels, threadAction, toast, ui, viewAction, viewTitle,
   } from '../state.svelte.js';
   import { displayName, highlight, participantsLabel, searchWords, shortDate, snoozeLabel, timeGroup } from '../format.js';
   import { ago } from '../when.js';
-  import { packageSummary } from '../packages.js';
+  import { arrivalLabel } from '../packages.js';
+  import { addToken, hasToken, hitParts, removeToken } from '../searchQuery.js';
+  import TabCorner from '#lib/components/TabCorner.svelte';
+  import { prefs as kernPrefs } from '#lib/state/prefs.svelte.ts';
   import { swipe } from '../swipe.js';
   import { startDrag } from '../dnd.js';
   import { api } from '../api.svelte.js';
@@ -35,23 +38,19 @@
     doneTimer = setTimeout(() => (refreshing = 'idle'), 1600);
   }
 
-  // Layout: split (list + conversation) or full width (Gmail's default).
-  function toggleLayout() {
-    prefs.readingPane = !prefs.readingPane;
-    savePrefs();
-  }
-
   const ctx = $derived(folderById(contextFolder()));
   const role = $derived(ctx?.role || '');
   const selecting = $derived(list.selected.size > 0 || list.selectedAll);
   const allSelected = $derived(list.selectedAll || (list.threads.length > 0 && list.selected.size === list.threads.length));
-  // How many conversations "select all" would reach, when the server told us.
+  // How many conversations "select all" reaches: the server counts every view's first page.
   const viewTotal = $derived.by(() => {
+    if (list.total != null) return list.total;
     if (ctx) return list.unreadOnly ? ctx.unread : ctx.total;
     if (route.view === 'starred') return mailbox.starred;
     return null;
   });
-  const canSelectAllInView = $derived(allSelected && !list.selectedAll && !!list.next);
+  // Gmail's "Select all N conversations": offered whenever there's more than what's loaded.
+  const canSelectAllInView = $derived(allSelected && !list.selectedAll && (!!list.next || (viewTotal ?? 0) > list.threads.length));
   let selMenu = $state(false);
   function selectWhere(pred) {
     list.selectedAll = false;
@@ -150,27 +149,44 @@
 
   // The ledger line under the title: what's here and what's coming back.
   const subtitle = $derived.by(() => {
-    if (route.view === 'search') return [`${list.threads.length}${list.next ? '+' : ''} results`];
+    if (route.view === 'search') {
+      const n = viewTotal ?? list.threads.length;
+      return [`${n.toLocaleString()}${viewTotal == null && list.next ? '+' : ''} ${n === 1 ? 'conversation' : 'conversations'}`];
+    }
     if (role === 'snoozed') {
       const next = agenda.snoozes[0];
       return [`${list.threads.length} snoozed`, next ? `next back ${snoozeLabel(next.until)}` : ''].filter(Boolean);
     }
     if (role === 'inbox') {
-      const today = new Date().toLocaleDateString([], { weekday: 'short', day: 'numeric', month: 'short' });
-      const parts = [today, unreadHere ? `${unreadHere} unread` : 'all read'];
+      const n = ctx?.unread ?? unreadHere;
+      const parts = [n ? `${n.toLocaleString()} unread` : 'all read'];
       const soon = agenda.snoozes.filter((s) => new Date(s.until) - Date.now() < 36 * 3600e3);
       if (soon.length) parts.push(`${soon.length} back ${snoozeLabel(soon[0].until).toLowerCase()}`);
       const waiting = agenda.followups.filter((f) => f.status === 'waiting').length;
       if (waiting) parts.push(`waiting on ${waiting} ${waiting === 1 ? 'reply' : 'replies'}`);
-      parts.push(...packageSummary(parcels.active, new Date(), { short: true }).map((text) => ({ text, href: '/packages' })));
       return parts;
     }
     if (role === '') return [unreadHere ? `${unreadHere} unread` : 'all read'];
-    return [`${list.threads.length}${list.next ? '+' : ''} conversations`];
+    const n = viewTotal ?? list.threads.length;
+    return [`${n.toLocaleString()}${viewTotal == null && list.next ? '+' : ''} conversations`];
   });
+  // Parcels on their way, small, at the top of the Inbox (all of them on the Packages page).
+  const strip = $derived(role === 'inbox' ? parcels.active.slice(0, 4) : []);
+  const isSearch = $derived(route.view === 'search');
+  const SEARCH_FILTERS = [['is:unread', 'Unread'], ['has:attachment', 'Attachments'], ['newer_than:7d', '7 days'], ['newer_than:30d', '30 days'], ['in:anywhere', 'Everywhere']];
+  function refine(tok) {
+    const q = hasToken(route.q, tok) ? removeToken(route.q, tok) : addToken(route.q, tok);
+    if (q.trim()) navigate({ page: 'mail', view: 'search', q, threadId: null });
+  }
+  function setSort(v) {
+    if (list.sort === v) return;
+    list.sort = v;
+    loadThreads();
+  }
   const hits = $derived(route.view === 'search' ? searchWords(route.q) : []);
   const nudges = $derived(role === 'inbox' ? agenda.followups.filter((f) => f.status === 'nudged') : []);
-  const grouped = $derived(role !== 'snoozed' && !selecting);
+  // Grouping stays while you select, so ticking a box never moves the rows.
+  const grouped = $derived(role !== 'snoozed' && !(isSearch && list.sort === 'relevance'));
   const cleared = $derived(list.threads.length === 0 ? clearedToday() : 0);
 
   async function nudgeDone(f) {
@@ -189,14 +205,25 @@
   }
 </script>
 
-<div class="head">
+<div class="head" class:selecting>
+  {#if kernPrefs.tabs.length <= 1}<TabCorner location={false} plus={false} />{/if}
+  {@render selectBox()}
   {#if selecting}
     <div class="bulk">
-      {@render selectBox()}
-      <span class="n num">{list.selectedAll ? `All${viewTotal != null ? ' ' + viewTotal.toLocaleString() : ''}` : list.selected.size} selected</span>
+      <span class="n num">
+        {#if list.selectedAll}
+          All {viewTotal != null ? viewTotal.toLocaleString() : ''} selected
+          <button class="linkish" onclick={clearSelection}>Clear</button>
+        {:else}
+          {list.selected.size.toLocaleString()} selected
+          {#if canSelectAllInView}
+            <button class="linkish" onclick={() => (list.selectedAll = true)}>Select all{viewTotal != null ? ` ${viewTotal.toLocaleString()}` : ''}</button>
+          {/if}
+        {/if}
+      </span>
       <div class="acts">
         {#if role !== 'archive' && !isTrash}<button class="icon-btn" title="Archive (e)" aria-label="Archive" onclick={() => bulk('archive')}><Icon name="archive" /></button>{/if}
-        {#if role !== 'snoozed' && !isTrash}<button class="icon-btn" title="Snooze (b)" aria-label="Snooze" onclick={() => (ui.dialog = { type: 'snooze', ids: [...list.selected] })}><Icon name="clock" /></button>{/if}
+        {#if role !== 'snoozed' && !isTrash && !list.selectedAll}<button class="icon-btn" title="Snooze (b)" aria-label="Snooze" onclick={() => (ui.dialog = { type: 'snooze', ids: [...list.selected] })}><Icon name="clock" /></button>{/if}
         {#if list.selectedAll}
           <!-- whole-view actions only: the rest need conversations picked one page at a time -->
         {:else if role === 'junk'}
@@ -218,45 +245,57 @@
           <button class="icon-btn" title="Label (l)" aria-label="Label" onclick={() => (ui.dialog = { type: 'label', ids: [...list.selected] })}><Icon name="label" /></button>
         {/if}
       </div>
-      <button class="icon-btn" aria-label="Clear selection" onclick={clearSelection}><Icon name="close" /></button>
+      <button class="icon-btn" title="Clear selection (Esc)" aria-label="Clear selection" onclick={clearSelection}><Icon name="close" /></button>
     </div>
   {:else}
-    {#if list.threads.length}{@render selectBox()}{/if}
     <div class="titles">
-      <h2 class="display">{viewTitle()}</h2>
-      <span class="ledger sub">{#each subtitle as part, i}{#if i}<span class="sep">·</span>{/if}{#if part.href}<a class="sublink" href={part.href} use:navLink>{part.text}</a>{:else}<span>{part}</span>{/if}{/each}</span>
+      {#if isSearch}
+        <button class="qbtn" title="Change the search" onclick={() => openMailSearch(route.q)}><Icon name="search" size={14} /><span class="truncate">{route.q}</span></button>
+      {:else}
+        <h2>{viewTitle()}</h2>
+      {/if}
+      <span class="sub">{#each subtitle as part, i}{#if i}<span class="sep">·</span>{/if}{#if part.href}<a class="sublink" href={part.href} use:navLink>{part.text}</a>{:else}<span>{part}</span>{/if}{/each}</span>
     </div>
-    {#if route.view !== 'search' && role !== 'snoozed' && role !== 'sent' && role !== 'drafts'}
-      <div class="seg" role="group" aria-label="Show">
+    {#if isSearch}
+      <div class="seg" role="group" aria-label="Order">
+        <button class:on={list.sort !== 'relevance'} aria-pressed={list.sort !== 'relevance'} onclick={() => setSort('date')}>Newest</button>
+        <button class:on={list.sort === 'relevance'} aria-pressed={list.sort === 'relevance'} onclick={() => setSort('relevance')}>Best match</button>
+      </div>
+    {:else}
+      <div class="seg" role="group" aria-label="Show" class:off={role === 'snoozed' || role === 'sent' || role === 'drafts'}>
         <button class:on={!list.unreadOnly} aria-pressed={!list.unreadOnly} onclick={() => { list.unreadOnly = false; loadThreads(); }}>All</button>
         <button class:on={list.unreadOnly} aria-pressed={list.unreadOnly} onclick={() => { list.unreadOnly = true; loadThreads(); }}>Unread</button>
       </div>
     {/if}
-    {#if ctx && unreadHere > 0}
-      <button class="icon-btn" title="Mark all as read" aria-label="Mark all as read" onclick={markAllRead}><Icon name="mailOpen" size={17} /></button>
-    {/if}
-    {#if wide && typeof innerWidth === 'number' && innerWidth >= READING_MIN}
-      <button class="icon-btn" title={prefs.readingPane ? 'Full-width inbox' : 'Split view'} aria-label={prefs.readingPane ? 'Switch to full-width inbox' : 'Switch to split view'}
-              onclick={toggleLayout}><Icon name={prefs.readingPane ? 'full' : 'split'} size={17} /></button>
-    {/if}
-    <span class="checked-note" class:show={refreshing === 'done'} aria-live="polite">{refreshing === 'done' ? 'Up to date' : ''}</span>
+    <button class="icon-btn" title="Mark all as read" aria-label="Mark all as read" disabled={!ctx || !(ctx.unread || unreadHere)} onclick={markAllRead}><Icon name="mailOpen" size={17} /></button>
     <button class="icon-btn refresh" class:spin={refreshing === 'spin'} class:done={refreshing === 'done'} disabled={refreshing === 'spin'}
-            title="Check for new mail" aria-label="Check for new mail" onclick={refresh}>
+            title={refreshing === 'done' ? 'Up to date' : 'Check for new mail'} aria-label="Check for new mail" onclick={refresh}>
       {#key refreshing === 'done'}<span class="ricon"><Icon name={refreshing === 'done' ? 'check' : 'refresh'} size={17} /></span>{/key}
     </button>
   {/if}
 </div>
 
+{#if isSearch}
+  <div class="filters" role="group" aria-label="Narrow the results">
+    {#each SEARCH_FILTERS as [tok, label] (tok)}
+      <button class:on={hasToken(route.q, tok)} aria-pressed={hasToken(route.q, tok)} onclick={() => refine(tok)}>{label}</button>
+    {/each}
+  </div>
+{/if}
+
 {#snippet selectBox()}
   <div class="selbox">
-    <input type="checkbox" checked={allSelected && list.threads.length > 0} indeterminate={selecting && !allSelected} onchange={toggleAll}
+    <input type="checkbox" checked={allSelected && list.threads.length > 0} indeterminate={selecting && !allSelected} onchange={toggleAll} disabled={!list.threads.length}
            aria-label={allSelected ? 'Select none' : 'Select all'} title={allSelected ? 'Select none' : 'Select all'} />
-    <button class="selmenu" aria-label="Select…" aria-haspopup="menu" aria-expanded={selMenu} onclick={() => (selMenu = !selMenu)}><Icon name="chevronDown" size={13} /></button>
+    <button class="selmenu" aria-label="Select…" aria-haspopup="menu" aria-expanded={selMenu} disabled={!list.threads.length} onclick={() => (selMenu = !selMenu)}><Icon name="chevronDown" size={13} /></button>
     {#if selMenu}
       <!-- svelte-ignore a11y_no_static_element_interactions a11y_click_events_have_key_events -->
       <div class="selscrim" onclick={() => (selMenu = false)}></div>
       <div class="menu" role="menu">
-        <button role="menuitem" onclick={() => selectWhere(() => true)}>All</button>
+        <button role="menuitem" onclick={() => selectWhere(() => true)}>All loaded ({list.threads.length})</button>
+        {#if list.next || (viewTotal ?? 0) > list.threads.length}
+          <button role="menuitem" onclick={() => { selectWhere(() => true); list.selectedAll = true; }}>Every conversation{viewTotal != null ? ` (${viewTotal.toLocaleString()})` : ''}</button>
+        {/if}
         <button role="menuitem" onclick={() => selectWhere(() => false)}>None</button>
         <button role="menuitem" onclick={() => selectWhere((t) => !t.unread)}>Read</button>
         <button role="menuitem" onclick={() => selectWhere((t) => t.unread > 0)}>Unread</button>
@@ -267,25 +306,25 @@
   </div>
 {/snippet}
 
-{#if canSelectAllInView}
-  <div class="allbar" role="status">
-    All {list.threads.length} conversations on this page are selected.
-    <button class="linkish" onclick={() => (list.selectedAll = true)}>Select all{viewTotal != null ? ` ${viewTotal.toLocaleString()}` : ''} conversations in {viewTitle()}</button>
-  </div>
-{:else if list.selectedAll}
-  <div class="allbar" role="status">
-    All{viewTotal != null ? ` ${viewTotal.toLocaleString()}` : ''} conversations in {viewTitle()} are selected.
-    <button class="linkish" onclick={clearSelection}>Clear selection</button>
-  </div>
-{/if}
-
-{#if isTrash && list.threads.length && !selecting}
+{#if isTrash && list.threads.length}
   <div class="notice">
     {role === 'junk' ? 'Junk' : 'Trash'} is emptied by your mail server according to its own rules.
   </div>
 {/if}
 
 <div class="scroll rows" role="list">
+  {#if strip.length}
+    <div class="parcels" aria-label="Packages on the way">
+      {#each strip as p (p.id)}
+        <a class="parcel pk-{p.status}" href={p.threadId ? `/mail/inbox/t/${p.threadId}` : '/mail/packages'} use:navLink title={`${p.merchant || p.carrierName}: ${p.statusLabel}`}>
+          <Icon name={p.status === 'exception' ? 'shieldAlert' : 'package'} size={13} />
+          <span class="pname truncate">{p.merchant || p.carrierName}</span>
+          <span class="pwhen">{arrivalLabel(p)}</span>
+        </a>
+      {/each}
+      {#if parcels.active.length > strip.length}<a class="parcel more" href="/mail/packages" use:navLink>+{parcels.active.length - strip.length}</a>{/if}
+    </div>
+  {/if}
   {#if nudges.length}
     <div class="nudges" aria-label="Waiting for replies">
       {#each nudges as f (f.id)}
@@ -369,7 +408,7 @@
       <div class="content">
         <div class="line1">
           <span class="who">
-            {participantsLabel(t.participants, info.address)}
+            {t.who || participantsLabel(t.participants, info.address)}
             {#if t.count > 1}<span class="cnt num">{t.count}</span>{/if}
           </span>
           {#if t.risk === 'high' || t.risk === 'medium'}
@@ -395,7 +434,11 @@
         </div>
         <div class="line2">
           <span class="subject">{#each highlight(t.subject || '(no subject)', hits) as p}{#if p.hit}<mark>{p.text}</mark>{:else}{p.text}{/if}{/each}</span>
-          <span class="snippet">{#each highlight(t.snippet, hits) as p}{#if p.hit}<mark>{p.text}</mark>{:else}{p.text}{/if}{/each}</span>
+          {#if t.hit}
+            <span class="snippet">{#each hitParts(t.hit) as p}{#if p.hit}<mark>{p.text}</mark>{:else}{p.text}{/if}{/each}</span>
+          {:else}
+            <span class="snippet">{#each highlight(t.snippet, hits) as p}{#if p.hit}<mark>{p.text}</mark>{:else}{p.text}{/if}{/each}</span>
+          {/if}
         </div>
         {#if t.labels.length || folderChips(t).length}
           <div class="chips">
@@ -438,34 +481,54 @@
 </div>
 
 <style>
+  /* One fixed-height header (the conversation's toolbar is the same height), whatever is selected. */
   .head {
     display: flex;
     align-items: center;
     gap: 6px;
-    min-height: 74px;
-    padding: 12px 12px 10px 22px;
+    height: 48px;
+    padding: 0 calc(var(--mail-pad) - 6px) 0 var(--list-indent);
     flex: none;
     border-bottom: 1px solid var(--line);
+    --list-indent: 24px;
   }
+  .head :global(.corner) { margin-left: -16px; margin-right: 2px; }
   .seg { display: inline-flex; background: var(--bg-sunken); border-radius: var(--radius-sm); padding: 2px; flex: none; }
+  .seg.off { visibility: hidden; }
   .seg button { border: 0; background: none; padding: 3px 9px; border-radius: calc(var(--radius-sm) - 1px); cursor: pointer; font-size: 12px; color: var(--text-2); }
   .seg button.on { background: var(--bg-elev); color: var(--text); box-shadow: var(--shadow-sm); font-weight: 600; }
-  .titles { flex: 1; min-width: 0; display: grid; gap: 3px; }
-  h2 { font-size: 28px; line-height: 1.05; margin: 0; white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
+  .titles { flex: 1; min-width: 0; display: flex; align-items: baseline; gap: 8px; overflow: hidden; }
+  h2 { font-size: 15px; font-weight: 650; letter-spacing: -0.01em; line-height: 1.2; margin: 0; white-space: nowrap; overflow: hidden; text-overflow: ellipsis; flex: none; max-width: 60%; }
+  .qbtn { display: inline-flex; align-items: center; gap: 6px; min-width: 0; max-width: 70%; height: 28px; padding: 0 10px; border-radius: var(--radius); background: var(--bg-sunken); color: var(--text); font-size: 13px; align-self: center; }
+  .qbtn:hover { background: var(--bg-hover); }
+  .qbtn :global(svg) { flex: none; color: var(--text-3); }
   .bulk { display: flex; align-items: center; gap: 8px; flex: 1; min-width: 0; }
-  .bulk input { accent-color: var(--accent); }
-  .bulk .n { font-size: 12px; white-space: nowrap; }
+  .bulk .n { font-size: 12.5px; white-space: nowrap; color: var(--text-2); display: inline-flex; gap: 8px; align-items: baseline; }
   .bulk .acts { display: flex; align-items: center; gap: 2px; flex: 1; overflow-x: auto; scrollbar-width: none; }
   .bulk .acts::-webkit-scrollbar { display: none; }
-  .notice { font-size: 12px; padding: 8px 22px; border-bottom: 1px dashed var(--line-strong); color: var(--text-3); font-style: italic; }
+  .notice { font-size: 12px; padding: 8px var(--mail-pad) 8px 24px; border-bottom: 1px dashed var(--line-strong); color: var(--text-3); font-style: italic; }
   .rows { flex: 1; }
-  .sub { display: flex; flex-wrap: wrap; gap: 0 6px; }
+  .sub { display: flex; gap: 0 6px; min-width: 0; overflow: hidden; white-space: nowrap; text-overflow: ellipsis; font-size: 12px; color: var(--text-3); }
   .sub .sep { opacity: .5; }
+  .filters { display: flex; gap: 4px; padding: 7px var(--mail-pad) 7px 24px; overflow-x: auto; scrollbar-width: none; border-bottom: 1px solid var(--line); flex: none; }
+  .filters button { flex: none; padding: 2px 10px; border-radius: 12px; color: var(--text-2); font-size: 12px; border: 1px solid var(--line); white-space: nowrap; }
+  .filters button:hover { background: var(--bg-hover); color: var(--text); }
+  .filters button.on { background: var(--accent-soft); border-color: color-mix(in srgb, var(--accent) 45%, transparent); color: var(--text); }
+  .parcels { display: flex; gap: 6px; padding: 8px var(--mail-pad) 8px 24px; overflow-x: auto; scrollbar-width: none; border-bottom: 1px solid var(--line); }
+  .parcel { flex: none; display: inline-flex; align-items: center; gap: 6px; max-width: 260px; height: 24px; padding: 0 10px; border-radius: 12px;
+    background: var(--bg-sunken); color: var(--text-2) !important; text-decoration: none; font-size: 12px; }
+  .parcel:hover { background: var(--bg-hover); color: var(--text) !important; }
+  .parcel :global(svg) { flex: none; color: var(--text-3); }
+  .pname { color: var(--text); font-weight: 550; min-width: 0; }
+  .pwhen { white-space: nowrap; }
+  .parcel.pk-out_for_delivery .pwhen, .parcel.pk-ready_for_pickup .pwhen { color: var(--accent-ink); font-weight: 600; }
+  .parcel.pk-exception .pwhen, .parcel.pk-exception :global(svg) { color: var(--warn); }
+  .parcel.more { font-weight: 600; }
   .group {
-    position: sticky; top: 0; z-index: 3; padding: 14px 22px 6px; background-color: var(--bg);
+    position: sticky; top: 0; z-index: 3; padding: 12px var(--mail-pad) 5px 24px; background-color: var(--bg);
     border-bottom: 1px solid var(--line); font-size: 10px;
   }
-  .nudges { padding: 10px 12px 2px; display: grid; gap: 6px; }
+  .nudges { padding: 10px var(--mail-pad) 2px 24px; display: grid; gap: 6px; }
   .nudge {
     display: flex; align-items: center; gap: 10px; padding: 8px 6px 8px 12px; border-radius: var(--radius);
     border: 1px solid var(--accent); background: var(--accent-soft);
@@ -480,7 +543,7 @@
   .cleared { font-size: 14px; color: var(--text-2); margin: 0 0 4px; }
   .swipe-wrap { position: relative; overflow: hidden; }
   .reveal {
-    position: absolute; top: 0; bottom: 0; display: none; align-items: center; gap: 8px; padding: 0 22px;
+    position: absolute; top: 0; bottom: 0; display: none; align-items: center; gap: 8px; padding: 0 24px;
     font: 600 11px var(--mono); letter-spacing: .1em; text-transform: uppercase; color: var(--text-2);
   }
   .reveal.right { left: 0; right: 0; background: var(--ok-soft); color: var(--ok); }
@@ -494,7 +557,7 @@
     display: flex;
     align-items: flex-start;
     gap: 10px;
-    padding: var(--row-pad) 14px var(--row-pad) 22px;
+    padding: var(--row-pad) var(--mail-pad) var(--row-pad) 24px;
     border-bottom: 1px solid var(--line);
     transition: background .1s;
   }
@@ -506,7 +569,7 @@
   .hit { position: absolute; inset: 0; border: 0; background: transparent; cursor: pointer; z-index: 0; padding: 0; }
   .hit:focus-visible { outline-offset: -2px; }
   .dot {
-    position: absolute; left: 9px; top: calc(var(--row-pad) + 7px); width: 6px; height: 6px; border-radius: 50%;
+    position: absolute; left: 10px; top: calc(var(--row-pad) + 7px); width: 6px; height: 6px; border-radius: 50%;
     background: var(--accent); opacity: 0; transition: opacity .15s;
   }
   .unread .dot { opacity: 1; }
@@ -546,7 +609,7 @@
   .star:hover { color: var(--text-2); }
   .star.on { color: var(--star); }
   .hover-acts {
-    position: absolute; right: 42px; top: 50%; transform: translateY(-50%); z-index: 2;
+    position: absolute; right: calc(var(--mail-pad) + 28px); top: 50%; transform: translateY(-50%); z-index: 2;
     display: none; gap: 1px; padding: 2px; border-radius: var(--radius-sm); background: var(--bg-elev);
     border: 1px solid var(--line); box-shadow: var(--shadow-sm);
   }
@@ -566,6 +629,7 @@
   .selbox input { accent-color: var(--accent); width: 15px; height: 15px; margin: 0; }
   .selmenu { border: 0; background: none; color: var(--text-3); cursor: pointer; display: grid; place-items: center; width: 18px; height: 22px; border-radius: 4px; padding: 0; }
   .selmenu:hover { background: var(--bg-hover); color: var(--text); }
+  .selbox input:disabled, .selmenu:disabled { opacity: .35; cursor: default; }
   .selscrim { position: fixed; inset: 0; z-index: 40; }
   .menu {
     position: absolute; top: calc(100% + 4px); left: 0; z-index: 41; min-width: 140px; display: grid; padding: 4px;
@@ -573,7 +637,6 @@
   }
   .menu button { border: 0; background: none; text-align: left; padding: 6px 10px; border-radius: var(--radius-sm); cursor: pointer; color: var(--text); font-size: 13px; }
   .menu button:hover { background: var(--bg-hover); }
-  .allbar { display: flex; flex-wrap: wrap; align-items: center; justify-content: center; gap: 6px; padding: 8px 16px; font-size: 12.5px; color: var(--text-2); background: var(--bg-sunken); border-bottom: 1px solid var(--line); }
   .linkish { border: 0; background: none; padding: 0; color: var(--accent-ink); font-weight: 600; cursor: pointer; font-size: inherit; }
   .linkish:hover { text-decoration: underline; }
   .refresh .ricon { display: grid; place-items: center; }
@@ -581,8 +644,6 @@
   .refresh.done { color: var(--ok); }
   .refresh.done .ricon { animation: kern-pop .38s var(--ease); }
   .refresh:disabled { opacity: 1; cursor: progress; }
-  .checked-note { font-size: 11.5px; color: var(--ok); white-space: nowrap; opacity: 0; transform: translateX(6px); transition: opacity .2s, transform .2s var(--ease); pointer-events: none; }
-  .checked-note.show { opacity: 1; transform: none; }
   @keyframes kern-spin { to { transform: rotate(360deg); } }
   @keyframes kern-pop { 0% { transform: scale(.4) rotate(-40deg); opacity: 0; } 70% { transform: scale(1.18); opacity: 1; } 100% { transform: scale(1); } }
   @media (prefers-reduced-motion: reduce) { .refresh.spin .ricon, .refresh.done .ricon { animation: none; } }

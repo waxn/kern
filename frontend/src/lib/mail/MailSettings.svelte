@@ -8,7 +8,7 @@
   import { ui } from '#lib/state/ui.svelte.ts';
   import { api } from './api.svelte.js';
   import { loadMailStatus, mailStatus } from './status.svelte.js';
-  import { account as prefsSrv, dropMailCache, loadAccountPrefs, prefs, saveAccountPrefs, savePrefs } from './state.svelte.js';
+  import { account as prefsSrv, dropMailCache, loadAccountPrefs, loadPackages, prefs, saveAccountPrefs, savePrefs } from './state.svelte.js';
   import { loadTemplates, templates } from './templates.svelte.js';
 
   const PROVIDERS = [
@@ -32,6 +32,43 @@
   let rules = $state(null);
   let failed = $state([]);
   let filled = false;
+  // Send mail as (mail/identities.py) and live package tracking (mail/tracking.py).
+  let idents = $state([]);
+  const blankIdent = { address: '', name: '', via: 'gmail', smtpHost: 'smtp.gmail.com', smtpPort: 465, smtpSecurity: 'ssl', login: '', password: '' };
+  let ident = $state(null); // the add form, or null
+  let identBusy = $state('');
+  let identMsg = $state(null); // {ok, text}
+  let tracking = $state(null);
+  let trackKey = $state('');
+  let countryPick = $state('');
+  let mapInfo = $state(null);
+  let mapKey = $state('');
+  let mapBusy = $state(false);
+  let mapMsg = $state(null);
+  async function saveMap(key) {
+    mapBusy = true;
+    mapMsg = null;
+    try {
+      mapInfo = await api.post('/packages/map', { key });
+      mapKey = '';
+      mapMsg = { ok: true, text: mapInfo.provider === 'maptiler' ? 'MapTiler maps are on.' : 'Back to OpenStreetMap.' };
+      loadPackages();
+    } catch (e) {
+      mapMsg = { ok: false, text: e.message };
+    } finally {
+      mapBusy = false;
+    }
+  }
+  // Default country for numbers Parcels can't place without one: from the browser's region.
+  let trackCountry = $state((() => { try { return new Intl.Locale(navigator.language).maximize().region || ''; } catch { return ''; } })());
+  const COUNTRIES = (() => {
+    const codes = 'AD AE AR AT AU BA BE BG BR BY CA CH CL CN CO CY CZ DE DK EE EG ES FI FR GB GR HK HR HU ID IE IL IN IS IT JP KR KZ LI LT LU LV MA MD ME MK MT MX MY NG NL NO NZ PE PH PK PL PT RO RS RU SA SE SG SI SK TH TR TW UA US UY VN ZA'.split(' ');
+    let names;
+    try { names = new Intl.DisplayNames([navigator.language || 'en'], { type: 'region' }); } catch { names = null; }
+    return codes.map((c) => [c, names?.of(c) || c]).sort((a, b) => a[1].localeCompare(b[1]));
+  })();
+  let trackBusy = $state(false);
+  let trackMsg = $state(null);
 
   const st = $derived(mailStatus.data);
   const twofa = $derived(st?.two_factor);
@@ -54,12 +91,70 @@
     loadAccountPrefs();
     loadTemplates();
     try {
-      [trusted, rules, failed] = await Promise.all([api.get('/trusted-senders'), api.get('/risk/rules'), api.get('/ops/failed')]);
+      [trusted, rules, failed, idents, tracking] = await Promise.all([api.get('/trusted-senders'), api.get('/risk/rules'), api.get('/ops/failed'),
+        api.get('/identities'), api.get('/packages/tracking')]);
+      mapInfo = await api.get('/packages/map').catch(() => null);
     } catch {
       /* not connected yet */
     }
   }
   onMount(loadAll);
+
+  function identVia(v) {
+    ident.via = v;
+    if (v === 'gmail') Object.assign(ident, { smtpHost: 'smtp.gmail.com', smtpPort: 465, smtpSecurity: 'ssl' });
+    if (v === 'account') Object.assign(ident, { smtpHost: '', password: '' });
+    if (v === 'other') Object.assign(ident, { smtpHost: '', smtpPort: 465, smtpSecurity: 'ssl' });
+  }
+  async function addIdent() {
+    identBusy = 'save';
+    identMsg = null;
+    try {
+      const { via, ...data } = ident;
+      const saved = await api.post('/identities', data);
+      if (saved.ownServer) await api.post(`/identities/${saved.id}/test`);
+      idents = await api.get('/identities');
+      identMsg = { ok: true, text: saved.ownServer ? `Signed in to ${saved.smtpHost}. You can send as ${saved.address}.` : `You can send as ${saved.address}.` };
+      ident = null;
+    } catch (e) {
+      identMsg = { ok: false, text: e.message };
+      idents = await api.get('/identities').catch(() => idents);
+    } finally {
+      identBusy = '';
+    }
+  }
+  async function testIdent(i) {
+    identBusy = 't' + i.id;
+    identMsg = null;
+    try {
+      await api.post(`/identities/${i.id}/test`);
+      identMsg = { ok: true, text: `Signed in to ${i.smtpHost}.` };
+    } catch (e) {
+      identMsg = { ok: false, text: e.message };
+    } finally {
+      identBusy = '';
+    }
+  }
+  async function removeIdent(i) {
+    if (!(await ui.confirm({ title: `Stop sending as ${i.address}?`, message: 'Mail you already sent is not affected.', confirmLabel: 'Remove' }))) return;
+    await api.del(`/identities/${i.id}`);
+    idents = idents.filter((x) => x.id !== i.id);
+  }
+  async function saveTracking(provider, extra = {}) {
+    trackBusy = true;
+    trackMsg = null;
+    try {
+      tracking = await api.post('/packages/tracking', provider
+        ? { provider, key: trackKey || undefined, country: countryPick || tracking?.country || trackCountry || '', ...extra }
+        : { provider: '' });
+      trackKey = '';
+      trackMsg = provider ? (tracking.lastError ? { ok: false, text: tracking.lastError } : { ok: true, text: 'Connected. Packages update from the carrier from now on.' }) : null;
+    } catch (e) {
+      trackMsg = { ok: false, text: e.message };
+    } finally {
+      trackBusy = false;
+    }
+  }
 
   function pick(p) {
     provider = p.id;
@@ -252,6 +347,106 @@
     </div>
   </div>
 
+  {#if st.connected}
+    <div class="section-title">Send mail as</div>
+    <div class="group">
+      <div class="item col">
+        <div><b>Other addresses you send from</b><span>For example a Gmail address that forwards to this mailbox: add it with Gmail's own server and
+          an app password. Mail then leaves through Gmail (so it's signed by Gmail and doesn't land in spam), one copy is
+          saved in Sent here, and replies come back through the forward. Nothing arrives twice. Replies are sent from the
+          address the email was written to.</span></div>
+        {#if idents.length}
+          <ul class="list">
+            {#each idents as i (i.id)}
+              <li><span><b class="inline">{i.name ? `${i.name} <${i.address}>` : i.address}</b><span class="faint"> · {i.ownServer ? `through ${i.smtpHost}` : `through ${acct?.address || 'this account'}`}</span></span>
+                {#if i.ownServer}<button class="btn ghost" disabled={!!identBusy} onclick={() => testIdent(i)}>{identBusy === 't' + i.id ? 'Testing…' : 'Test'}</button>{/if}
+                <button class="btn ghost" onclick={() => removeIdent(i)}>Remove</button></li>
+            {/each}
+          </ul>
+        {/if}
+        {#if identMsg}<span class="test" class:good={identMsg.ok} class:bad={!identMsg.ok}>{#if identMsg.ok}<CircleCheck size={13} />{:else}<CircleAlert size={13} />{/if} {identMsg.text}</span>{/if}
+        {#if ident}
+          <div class="identform">
+            <div class="providers">
+              {#each [['gmail', 'Gmail'], ['account', 'This account’s server (an alias)'], ['other', 'Other server']] as [v, label] (v)}
+                <button class="prov" class:on={ident.via === v} onclick={() => identVia(v)}>{label}</button>
+              {/each}
+            </div>
+            <div class="row"><input class="input wide" type="email" bind:value={ident.address} placeholder={ident.via === 'gmail' ? 'you@gmail.com' : 'you@example.com'} aria-label="Address" />
+              <input class="input wide" bind:value={ident.name} placeholder="Name (optional)" aria-label="Name" /></div>
+            {#if ident.via !== 'account'}
+              {#if ident.via === 'other'}
+                <div class="row"><input class="input wide" bind:value={ident.smtpHost} placeholder="smtp.example.com" aria-label="SMTP server" /><input class="input port" type="number" bind:value={ident.smtpPort} aria-label="Port" />
+                  <select class="input sel" bind:value={ident.smtpSecurity} aria-label="Security"><option value="ssl">SSL/TLS</option><option value="starttls">STARTTLS</option></select></div>
+                <input class="input wide" bind:value={ident.login} placeholder="Username (if not the address)" aria-label="Username" />
+              {/if}
+              <input class="input wide" type="password" bind:value={ident.password} autocomplete="new-password" placeholder={ident.via === 'gmail' ? 'Gmail app password' : 'Password'} aria-label="Password" />
+              {#if ident.via === 'gmail'}<p class="hint">Google Account → Security → 2-Step Verification → App passwords. Make one called “Kern” and paste it here.</p>{/if}
+            {:else}
+              <p class="hint">Your provider must let you send as this address (Purelymail: add it as an alias or a custom domain).</p>
+            {/if}
+            <div class="row">
+              <button class="btn primary" disabled={!!identBusy || !ident.address || (ident.via !== 'account' && (!ident.password || !ident.smtpHost))} onclick={addIdent}>{identBusy === 'save' ? 'Checking…' : 'Add address'}</button>
+              <button class="btn ghost" onclick={() => { ident = null; identMsg = null; }}>Cancel</button>
+            </div>
+          </div>
+        {:else}
+          <div><button class="btn" onclick={() => { ident = { ...blankIdent }; identMsg = null; }}>Add an address</button></div>
+        {/if}
+      </div>
+    </div>
+
+    <div class="section-title" id="tracking">Package tracking</div>
+    <div class="group">
+      <div class="item col">
+        <div><b>Live tracking</b><span>Shipping emails only say what the shop knew when it wrote them, so a package delivered without a
+          “delivered” email would stay on the way. With live tracking the mail service asks Parcels for each package's real status,
+          scans and a map of where it is, about every 90 minutes (more often on delivery day). Only tracking numbers are sent, and
+          your country for numbers that need one. Parcels' free plan covers 300 packages a month (each package counts once a month,
+          however often it's checked): sign up at <a href="https://parcelsapp.com/dashboard" target="_blank" rel="noopener noreferrer">parcelsapp.com</a>
+          and copy the API key.</span></div>
+        {#if tracking?.hasKey}
+          {@const a = tracking.allowance}
+          <div class="allow">
+            <span class="test" class:good={!tracking.lastError} class:bad={!!tracking.lastError}>{#if tracking.lastError}<CircleAlert size={13} /> {tracking.lastError}{:else}<CircleCheck size={13} /> On{#if tracking.lastChecked} · checked {when(tracking.lastChecked)}{/if}{/if}</span>
+            {#if a}
+              <div class="meter" role="meter" aria-valuemin="0" aria-valuemax={a.limit} aria-valuenow={a.used} aria-label="Packages tracked this month">
+                <span style:width="{Math.min(100, (a.used / a.limit) * 100)}%" class:low={a.left < a.limit * 0.1}></span>
+              </div>
+              <span class="faint"><b class="inline">{a.left.toLocaleString()}</b> of {a.limit.toLocaleString()} left this month{a.exact ? ' (from Parcels)' : ' (counted here)'}</span>
+            {/if}
+          </div>
+        {/if}
+        <div class="row">
+          <input class="input wide" type="password" bind:value={trackKey} autocomplete="off" placeholder={tracking?.hasKey ? 'Key saved. Paste a new one to replace it.' : 'Parcels API key'} aria-label="Parcels API key" />
+          <select class="input sel" value={countryPick || tracking?.country || trackCountry} onchange={(e) => (countryPick = e.currentTarget.value)} aria-label="Your country" title="Where your packages are delivered">
+            <option value="">Country…</option>
+            {#each COUNTRIES as [code, name] (code)}<option value={code}>{name}</option>{/each}
+          </select>
+          <button class="btn primary" disabled={trackBusy || (!trackKey && !tracking?.hasKey)} onclick={() => saveTracking('parcels')}>{trackBusy ? 'Checking…' : tracking?.hasKey && !trackKey ? 'Save' : 'Connect'}</button>
+          {#if tracking?.hasKey}<button class="btn ghost" disabled={trackBusy} onclick={() => saveTracking('')}>Turn off</button>{/if}
+        </div>
+        {#if tracking?.hasKey}
+          <div class="row lim"><span class="faint">Packages a month on your plan</span><input class="input port" type="number" min="1" value={tracking.allowance?.limit ?? 300}
+            onchange={(e) => saveTracking('parcels', { limit: Number(e.currentTarget.value) || 300 })} aria-label="Packages a month on your plan" /></div>
+        {/if}
+        {#if trackMsg}<span class="test" class:good={trackMsg.ok} class:bad={!trackMsg.ok}>{#if trackMsg.ok}<CircleCheck size={13} />{:else}<CircleAlert size={13} />{/if} {trackMsg.text}</span>{/if}
+      </div>
+      <div class="item col">
+        <div><b>Package map</b><span>Each package shows a line through its scans. Places are looked up on OpenStreetMap and map
+          tiles are fetched by your Kern server, so your browser never contacts them. Without a key the map is OpenStreetMap's own,
+          toned to the theme; with a free <a href="https://cloud.maptiler.com/account/keys/" target="_blank" rel="noopener noreferrer">MapTiler</a>
+          key it uses MapTiler's quieter dark and light maps.</span></div>
+        <div class="row">
+          <input class="input wide" type="password" bind:value={mapKey} autocomplete="off" placeholder={mapInfo?.provider === 'maptiler' ? 'MapTiler key saved' : 'MapTiler API key (optional)'} aria-label="MapTiler API key" />
+          <button class="btn" disabled={mapBusy || !mapKey} onclick={() => saveMap(mapKey)}>{mapBusy ? 'Checking…' : 'Use MapTiler'}</button>
+          {#if mapInfo?.provider === 'maptiler'}<button class="btn ghost" disabled={mapBusy} onclick={() => saveMap('')}>Use OpenStreetMap</button>{/if}
+        </div>
+        {#if mapMsg}<span class="test" class:good={mapMsg.ok} class:bad={!mapMsg.ok}>{#if mapMsg.ok}<CircleCheck size={13} />{:else}<CircleAlert size={13} />{/if} {mapMsg.text}</span>{/if}
+      </div>
+    </div>
+  {/if}
+
   {#if prefsSrv.loaded}
     <div class="section-title">Writing</div>
     <div class="group">
@@ -278,7 +473,7 @@
       <div class="item"><div><b>After archiving or deleting</b></div>{@render seg(prefsSrv.after_action, [['next', 'Open next'], ['list', 'Back to list']], (v) => setPref({ after_action: v }))}</div>
       <div class="item"><div><b>Layout</b><span>This browser. Split shows the conversation next to the list; full width lets the inbox fill the window and opens a conversation over it, like Gmail.</span></div>
         {@render seg(prefs.readingPane ? 'split' : 'full', [['split', 'Split'], ['full', 'Full width']], (v) => setLocal('readingPane', v === 'split'))}</div>
-      <div class="item"><div><b>Dark emails</b><span>This browser. In the dark theme, show emails as light text on a dark background. Any email can be switched back to its original colors from the message.</span></div><input type="checkbox" checked={prefs.darkEmails} onchange={() => setLocal('darkEmails', !prefs.darkEmails)} /></div>
+      <div class="item"><div><b>Fit emails to the theme</b><span>This browser. Emails sit on Kern's background instead of a white sheet; in the dark theme their colors are darkened to match (mail that's dark already keeps its colors). Any email can be shown in its original colors from the message.</span></div><input type="checkbox" checked={prefs.darkEmails} onchange={() => setLocal('darkEmails', !prefs.darkEmails)} /></div>
       <div class="item"><div><b>Desktop notifications</b><span>This browser. A generic “New mail” alert while Kern is in the background; never the sender or subject.</span></div><input type="checkbox" checked={prefs.notifications} onchange={toggleNotifications} /></div>
     </div>
   {/if}
@@ -355,4 +550,11 @@
   .rules td span { display: block; }
   .rules td.w { text-align: right; font-variant-numeric: tabular-nums; white-space: nowrap; padding-left: 12px; color: var(--text-2); }
   .rules tr.off { opacity: 0.55; }
+  .allow { display: grid; gap: 6px; }
+  .meter { height: 6px; border-radius: 3px; background: var(--surface-2); overflow: hidden; max-width: 360px; }
+  .meter span { display: block; height: 100%; border-radius: 3px; background: var(--accent); }
+  .meter span.low { background: var(--danger); }
+  .lim { align-items: center; }
+  .identform { display: grid; gap: 8px; padding: 10px; border: 1px dashed var(--border-strong); border-radius: var(--radius); }
+  .inline { display: inline !important; }
 </style>

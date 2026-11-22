@@ -213,8 +213,14 @@ object Notifications {
             PendingIntent.FLAG_IMMUTABLE or PendingIntent.FLAG_UPDATE_CURRENT,
         )
 
+    /** Named like the lists in the app and on the web (the server's `who`, backend/mail/names.py). */
     private fun sender(t: app.kern.data.MailThread): String =
-        t.participants.firstOrNull { it.name.isNotBlank() }?.name ?: t.participants.firstOrNull()?.addr ?: "New mail"
+        t.who.ifBlank { t.participants.firstOrNull { !it.to }?.display ?: t.participants.firstOrNull()?.display ?: "New mail" }
+
+    /** Whether the generic "New mail" notification (from the periodic check) is showing. */
+    fun genericMailShown(ctx: Context): Boolean = runCatching {
+        ctx.getSystemService(android.app.NotificationManager::class.java).activeNotifications.any { it.id == ID_MAIL }
+    }.getOrDefault(false)
 
     /**
      * One notification per new conversation (grouped), with Archive and Mark read. With

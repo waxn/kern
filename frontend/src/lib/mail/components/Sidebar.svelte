@@ -2,8 +2,7 @@
   // @ts-nocheck: plain JavaScript (ported from Manifest).
   import { href, navLink, navigate, route } from '../router.svelte.js';
   import { contextFolder, info, loadFolders, mailbox, parcels, scheduled, syncProgress, threadAction, ui } from '../state.svelte.js';
-  import { openCompose } from '../compose.svelte.js';
-  import { api } from '../api.svelte.js';
+    import { api } from '../api.svelte.js';
   import Icon from './Icon.svelte';
   import { dropTarget } from '../dnd.js';
 
@@ -91,13 +90,6 @@
 {/if}
 
 <nav class="sidebar mail-sidebar" class:open class:drawer={!wide && !embedded} class:embedded aria-label="Mailboxes">
-  <div class="top">
-    <button class="btn primary compose" onclick={() => { openCompose(); close(); }}>
-      <Icon name="pencil" size={16} /> <span>Compose</span>
-      {#if wide}<span class="hint num">C</span>{/if}
-    </button>
-  </div>
-
   <div class="scroll body">
     <ul>
       {#each system as f (f.id)}
@@ -142,15 +134,19 @@
           </a>
         </li>
       {/if}
-      {#if parcels.active.length || parcels.delivered.length || route.page === 'packages'}
-        <li>
+      <li>
+        <a href="/mail/stats" use:navLink onclick={close} class:active={route.page === 'stats'}
+           aria-current={route.page === 'stats' ? 'page' : undefined}>
+          <Icon name="stats" size={16} /><span class="name">Stats</span>
+        </a>
+      </li>
+      <li>
           <a href="/mail/packages" use:navLink onclick={close} class:active={route.page === 'packages'}
              aria-current={route.page === 'packages' ? 'page' : undefined}>
             <Icon name="package" size={16} /><span class="name">Packages</span>
             {#if parcels.active.length}<span class="count num" title="On the way">{parcels.active.length}</span>{/if}
           </a>
         </li>
-      {/if}
     </ul>
 
     <div class="section">
@@ -247,21 +243,15 @@
     z-index: 79;
     animation: fade-in .2s;
   }
-  .top { padding: 10px 10px 6px; display: grid; }
-  .compose { height: 32px; justify-content: center; font-size: 13px; font-weight: 600; position: relative; }
-  .compose .hint {
-    position: absolute; right: 12px; font-size: 10.5px; opacity: .55; border: 1px solid currentColor;
-    border-radius: 3px; padding: 0 4px; line-height: 15px;
-  }
-  .body { flex: 1; padding: 4px 6px 12px; }
+  .body { flex: 1; padding: 0 6px 12px; }
   ul { list-style: none; margin: 0; padding: 0; }
   li a {
     position: relative;
     display: flex;
     align-items: center;
-    gap: 9px;
+    gap: 8px;
     height: var(--row-h, 28px);
-    padding: 0 8px 0 10px;
+    padding: 0 8px;
     border-radius: var(--radius-sm);
     color: var(--text-2);
     text-decoration: none;
@@ -286,7 +276,7 @@
     width: 11px; height: 11px; flex: none; margin: 0 3px;
     background: var(--c); clip-path: polygon(0 0, 70% 0, 100% 50%, 70% 100%, 0 100%);
   }
-  .section { display: flex; align-items: center; justify-content: space-between; margin: 14px 4px 2px 10px; }
+  .section { display: flex; align-items: center; justify-content: space-between; margin: 14px 4px 2px 8px; }
   .none { padding: 3px 14px 6px; font-size: 12.5px; color: var(--text-3); font-style: italic; }
   .foot { display: flex; align-items: center; gap: 8px; padding: 10px 12px 12px 14px; border-top: 1px solid var(--line); }
   .account { flex: 1; min-width: 0; }

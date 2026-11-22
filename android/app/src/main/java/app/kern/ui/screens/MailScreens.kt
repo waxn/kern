@@ -7,6 +7,7 @@ import android.webkit.WebResourceRequest
 import android.webkit.WebView
 import android.webkit.WebViewClient
 import androidx.compose.foundation.background
+import androidx.compose.foundation.border
 import androidx.compose.foundation.clickable
 import androidx.compose.foundation.horizontalScroll
 import androidx.compose.foundation.layout.Arrangement
@@ -24,6 +25,7 @@ import androidx.compose.foundation.layout.fillMaxSize
 import androidx.compose.foundation.layout.fillMaxWidth
 import androidx.compose.foundation.layout.height
 import androidx.compose.foundation.layout.imePadding
+import androidx.compose.foundation.layout.navigationBarsPadding
 import androidx.compose.foundation.layout.padding
 import androidx.compose.foundation.layout.size
 import androidx.compose.foundation.layout.statusBarsPadding
@@ -43,6 +45,7 @@ import androidx.compose.material.icons.outlined.Close
 import androidx.compose.material.icons.outlined.Delete
 import androidx.compose.material.icons.outlined.Edit
 import androidx.compose.material.icons.outlined.Email
+import androidx.compose.material.icons.outlined.LocalShipping
 import androidx.compose.material.icons.outlined.Lock
 import androidx.compose.material.icons.outlined.MarkEmailUnread
 import androidx.compose.material.icons.outlined.MoreVert
@@ -79,6 +82,8 @@ import androidx.compose.ui.text.font.FontWeight
 import androidx.compose.ui.text.input.KeyboardType
 import androidx.compose.ui.text.style.TextOverflow
 import androidx.compose.ui.unit.dp
+import androidx.compose.ui.unit.sp
+import androidx.compose.foundation.layout.offset
 import androidx.compose.ui.graphics.toArgb
 import androidx.compose.ui.viewinterop.AndroidView
 import app.kern.data.ApiError
@@ -131,14 +136,25 @@ private fun MailGate(ws: Workspace, status: MailStatus): Boolean {
     return true
 }
 
-private fun who(t: MailThread, me: String): String {
-    val others = t.participants.filter { !it.addr.equals(me, ignoreCase = true) }.ifEmpty { t.participants }
-    val names = others.map { it.name.ifBlank { it.addr.substringBefore('@') }.substringBefore(' ') }.distinct()
-    return when {
-        names.isEmpty() -> "(nobody)"
-        names.size <= 2 -> names.joinToString(", ")
-        else -> "${names.first()} … ${names.last()}"
+/** Who a conversation is with. The server sends this as `who` (backend/mail/names.py); this is the
+ *  same rule for lists cached before it did, so the phone and the web name people alike. */
+internal fun who(t: MailThread, me: String): String {
+    if (t.who.isNotBlank()) return t.who
+    fun first(p: MailAddr) = p.display.split(Regex("[\\s,]+")).firstOrNull().orEmpty().ifBlank { p.display }
+    val senders = t.participants.filter { !it.to && !it.addr.equals(me, ignoreCase = true) }
+    if (senders.isEmpty()) {
+        val to = t.participants.filter { it.to }
+        if (to.isNotEmpty()) return "To: " + to.take(3).joinToString(", ") { first(it) } + if (to.size > 3) "…" else ""
     }
+    val people = senders.ifEmpty { t.participants.filter { !it.to } }
+    if (people.isEmpty()) return "(no sender)"
+    if (people.size == 1) return people[0].display
+    val a = people.first()
+    val b = people.last()
+    val short = first(a) != first(b)
+    val na = if (short) first(a) else a.display
+    val nb = if (short) first(b) else b.display
+    return if (people.size == 2) "$na, $nb" else "$na … $nb"
 }
 
 private fun shortWhen(iso: String?): String {
@@ -167,6 +183,7 @@ fun MailScreen(ws: Workspace, nav: Nav, initialView: String? = null, standalone:
     var loading by remember { mutableStateOf(true) }
     var refreshing by remember { mutableStateOf(false) }
     var error by remember { mutableStateOf<String?>(null) }
+    var parcels by remember { mutableStateOf<List<app.kern.data.MailPackage>>(emptyList()) }
     val me = status?.account?.str("address") ?: ""
 
     // Instant start: the Inbox as this phone last saw it, until the server answers.
@@ -221,6 +238,32 @@ fun MailScreen(ws: Workspace, nav: Nav, initialView: String? = null, standalone:
         }
     }
 
+    suspend fun loadParcels() {
+        runCatching { ws.kern.mailPackages() }.getOrNull()?.let { parcels = it.active }
+    }
+    // Live: mail read, archived or arriving anywhere else shows here within a second or two,
+    // the same feed the web app and the notifications use.
+    LaunchedEffect(status) {
+        val s = status ?: return@LaunchedEffect
+        if (!s.twoFactor.sessionVerified || !s.connected) return@LaunchedEffect
+        loadParcels()
+        var since: Long? = runCatching { ws.kern.mailChanges(null).last }.getOrNull()
+        while (true) {
+            try {
+                val r = ws.kern.mailChanges(since, 25)
+                val changed = r.reset || r.events.isNotEmpty()
+                since = r.last
+                if (changed && !searching) load()
+                if (r.events.any { it.kind == "package" }) loadParcels()
+                if (changed && view == "inbox") app.kern.notify.Notifications.clearMail(ctx)
+            } catch (e: kotlinx.coroutines.CancellationException) {
+                throw e
+            } catch (_: Exception) {
+                kotlinx.coroutines.delay(5_000)
+            }
+        }
+    }
+
     val title = when (view) {
         "starred" -> "Starred"
         "all" -> "All mail"
@@ -261,6 +304,7 @@ fun MailScreen(ws: Workspace, nav: Nav, initialView: String? = null, standalone:
                             chips.forEach { (v, label) ->
                                 Pill(label, if (v == view) kern.accent else kern.text2, onClick = { view = v })
                             }
+                            Pill("Packages" + if (parcels.isNotEmpty()) " ${parcels.size}" else "", kern.text2, onClick = { nav.go("mail/packages") })
                         }
                     }
                     PullToRefreshBox(
@@ -281,6 +325,9 @@ fun MailScreen(ws: Workspace, nav: Nav, initialView: String? = null, standalone:
                             error != null && threads.isEmpty() -> ErrorState(error!!) { scope.launch { loading = true; load() } }
                             threads.isEmpty() -> EmptyState(Icons.Outlined.Email, if (searching) "No matches" else "Nothing here", null)
                             else -> LazyColumn(Modifier.fillMaxSize()) {
+                                if (view == "inbox" && !searching && parcels.isNotEmpty()) item(key = "parcels") {
+                                    ParcelStrip(parcels) { p -> nav.go(p.threadId?.let { "mail/thread/$it" } ?: "mail/packages") }
+                                }
                                 items(threads, key = { it.id }) { t ->
                                     SwipeRow(
                                         t,
@@ -328,6 +375,220 @@ fun MailScreen(ws: Workspace, nav: Nav, initialView: String? = null, standalone:
 }
 
 private val ROLE_VIEWS = setOf("inbox", "snoozed", "drafts", "sent", "archive", "junk", "trash")
+
+/** A search match from the server: the matched words sit between \u0002 and \u0003. */
+private fun hitText(hit: String, strong: androidx.compose.ui.graphics.Color) = androidx.compose.ui.text.buildAnnotatedString {
+    hit.split('\u0002').forEachIndexed { i, piece ->
+        val parts = piece.split('\u0003', limit = 2)
+        if (i > 0 && parts.size == 2) {
+            pushStyle(androidx.compose.ui.text.SpanStyle(color = strong, fontWeight = FontWeight.SemiBold))
+            append(parts[0]); pop(); append(parts[1])
+        } else append(piece.replace("\u0003", ""))
+    }
+}
+
+/** Packages on the way, small, at the top of the Inbox (the same strip as the web app). */
+@Composable
+private fun ParcelStrip(parcels: List<app.kern.data.MailPackage>, onOpen: (app.kern.data.MailPackage) -> Unit) {
+    Row(Modifier.fillMaxWidth().horizontalScroll(rememberScrollState()).padding(horizontal = 16.dp, vertical = 8.dp),
+        horizontalArrangement = Arrangement.spacedBy(6.dp)) {
+        parcels.take(6).forEach { p ->
+            val hot = p.status == "out_for_delivery" || p.status == "ready_for_pickup"
+            Row(Modifier.clip(androidx.compose.foundation.shape.RoundedCornerShape(14.dp)).background(kern.surface2)
+                .clickable { onOpen(p) }.padding(horizontal = 10.dp, vertical = 5.dp), verticalAlignment = Alignment.CenterVertically) {
+                Icon(Icons.Outlined.LocalShipping, null, tint = if (p.status == "exception") kern.danger else kern.text3, modifier = Modifier.size(14.dp))
+                Spacer(Modifier.width(6.dp))
+                Text(p.merchant.ifBlank { p.carrierName }, style = MaterialTheme.typography.labelMedium, color = kern.text, maxLines = 1)
+                Spacer(Modifier.width(6.dp))
+                Text(arrival(p), style = MaterialTheme.typography.labelMedium, color = if (hot) kern.accent else kern.text2, maxLines = 1)
+            }
+        }
+    }
+}
+
+/** One short line about when it arrives (like the web's packages.js arrivalLabel). */
+internal fun arrival(p: app.kern.data.MailPackage): String {
+    val today = LocalDate.now()
+    val at = runCatching { ZonedDateTime.parse(p.statusAt).withZoneSameInstant(java.time.ZoneId.systemDefault()).toLocalDate() }.getOrNull()
+    return when (p.status) {
+        "delivered" -> when (at) { today -> "Delivered today"; today.minusDays(1) -> "Delivered yesterday"; null -> "Delivered"; else -> "Delivered ${at.dayOfMonth}/${at.monthValue}" }
+        "ready_for_pickup" -> "Ready to pick up"
+        "out_for_delivery" -> if (at == null || at == today) "Arriving today" else "Out for delivery"
+        "exception" -> "Needs attention"
+        else -> {
+            val exp = p.expected?.let { runCatching { LocalDate.parse(it) }.getOrNull() }
+            when {
+                exp == null -> p.statusLabel
+                exp == today -> "Arriving today"
+                exp == today.plusDays(1) -> "Arriving tomorrow"
+                exp.isBefore(today) -> "Expected ${java.time.temporal.ChronoUnit.DAYS.between(exp, today)} d ago"
+                java.time.temporal.ChronoUnit.DAYS.between(today, exp) < 7 -> "Arriving " + exp.dayOfWeek.name.lowercase().replaceFirstChar { it.uppercase() }
+                else -> "Arriving ${exp.dayOfMonth}/${exp.monthValue}"
+            }
+        }
+    }
+}
+
+@OptIn(ExperimentalMaterial3Api::class)
+@Composable
+fun MailPackagesScreen(ws: Workspace, nav: Nav) {
+    val scope = rememberCoroutineScope()
+    val snack = LocalSnack.current
+    val ctx = LocalContext.current
+    var data by remember { mutableStateOf<app.kern.data.MailPackages?>(null) }
+    var error by remember { mutableStateOf<String?>(null) }
+    var refreshing by remember { mutableStateOf(false) }
+    suspend fun load() {
+        try { data = ws.kern.mailPackages(); error = null } catch (e: Exception) { error = e.message }
+    }
+    LaunchedEffect(Unit) { load() }
+    Column(Modifier.fillMaxSize().background(kern.bg).statusBarsPadding()) {
+        KTopBar("Packages", onBack = { nav.back() })
+        val d = data
+        when {
+            d == null && error == null -> Loading()
+            d == null -> ErrorState(error!!) { scope.launch { load() } }
+            else -> PullToRefreshBox(isRefreshing = refreshing, onRefresh = { scope.launch { refreshing = true; load(); refreshing = false } }) {
+                LazyColumn(Modifier.fillMaxSize(), contentPadding = androidx.compose.foundation.layout.PaddingValues(start = 16.dp, end = 16.dp, bottom = 32.dp)) {
+                    if (d.tracking?.hasKey != true) item {
+                        Text("Live tracking is off: shops rarely email when something arrives. Turn it on (Parcels, free for 300 packages a month) in Kern's web app, Settings → Mail → Package tracking.",
+                            style = MaterialTheme.typography.bodySmall, color = kern.text3, modifier = Modifier.padding(bottom = 12.dp))
+                    }
+                    if (d.active.isEmpty() && d.delivered.isEmpty()) item { EmptyState(Icons.Outlined.LocalShipping, "No packages", "Shipping emails with a tracking number show up here.") }
+                    if (d.active.isNotEmpty()) item { SectionLabel("On the way") }
+                    items(d.active, key = { "a" + it.id }) { p -> PackageItem(p, nav, ctx, d.tracking?.hasKey == true, d.map) { action ->
+                        scope.launch { runCatching { ws.kern.mailPackageAction(p.id, action) }.onFailure { snack.error(it) }; load() } } }
+                    if (d.delivered.isNotEmpty()) item { SectionLabel("Delivered") }
+                    items(d.delivered, key = { "d" + it.id }) { p -> PackageItem(p, nav, ctx, false, d.map) { action ->
+                        scope.launch { runCatching { ws.kern.mailPackageAction(p.id, action) }.onFailure { snack.error(it) }; load() } } }
+                }
+            }
+        }
+    }
+}
+
+/** The package map: a line through its scans on map tiles from Kern's server, dark or light with
+ *  the theme (the web's PackageMap.svelte / mapView.js, same math). */
+@Composable
+private fun PackageMap(points: List<Pair<Double, Double>>, delivered: Boolean, map: app.kern.data.MailMapInfo, height: androidx.compose.ui.unit.Dp = 170.dp) {
+    val ctx = LocalContext.current
+    val k = kern
+    val theme = if (k.dark) "dark" else "light"
+    androidx.compose.foundation.layout.BoxWithConstraints(Modifier.padding(top = 10.dp).fillMaxWidth().height(height)
+        .clip(androidx.compose.foundation.shape.RoundedCornerShape(10.dp))
+        .background(if (k.dark) androidx.compose.ui.graphics.Color(0xFF1B1B1D) else androidx.compose.ui.graphics.Color(0xFFF2F1EE))) {
+        val w = maxWidth.value.toDouble()
+        val h = maxHeight.value.toDouble()
+        val tile = 256.0
+        fun project(lat: Double, lon: Double, z: Int): Pair<Double, Double> {
+            val size = tile * Math.pow(2.0, z.toDouble())
+            val s = Math.sin(lat * Math.PI / 180).coerceIn(-0.9999, 0.9999)
+            return ((lon + 180) / 360 * size) to ((0.5 - Math.log((1 + s) / (1 - s)) / (4 * Math.PI)) * size)
+        }
+        val pad = 22.0
+        var z = 9
+        if (points.size > 1) {
+            z = 11
+            while (z > 1) {
+                val xy = points.map { project(it.first, it.second, z) }
+                if (xy.maxOf { it.first } - xy.minOf { it.first } <= w - 2 * pad && xy.maxOf { it.second } - xy.minOf { it.second } <= h - 2 * pad) break
+                z--
+            }
+        }
+        val xy = points.map { project(it.first, it.second, z) }
+        val ox = (xy.maxOf { it.first } + xy.minOf { it.first }) / 2 - w / 2
+        val oy = (xy.maxOf { it.second } + xy.minOf { it.second }) / 2 - h / 2
+        // One zoom level deeper at half size: sharp on the phone's dense screen.
+        val zt = minOf(z + 1, 18)
+        val size = tile / 2
+        val n = 1 shl zt
+        val base = ctx.app.api.base
+        // OpenStreetMap's colourful map, greyed down (and turned dark in the dark theme) like the web app does.
+        val tone = when {
+            map.provider == "maptiler" -> androidx.compose.ui.graphics.ColorFilter.colorMatrix(androidx.compose.ui.graphics.ColorMatrix().apply { setToSaturation(0.7f) })
+            k.dark -> androidx.compose.ui.graphics.ColorFilter.colorMatrix(androidx.compose.ui.graphics.ColorMatrix(floatArrayOf(
+                -0.22f, -0.43f, -0.08f, 0f, 228f,
+                -0.22f, -0.43f, -0.08f, 0f, 228f,
+                -0.22f, -0.43f, -0.08f, 0f, 230f,
+                0f, 0f, 0f, 1f, 0f)))
+            else -> androidx.compose.ui.graphics.ColorFilter.colorMatrix(androidx.compose.ui.graphics.ColorMatrix().apply { setToSaturation(0.15f) })
+        }
+        for (ty in Math.floor(oy * 2 / tile).toInt()..Math.floor((oy + h) * 2 / tile).toInt()) {
+            if (ty < 0 || ty >= n) continue
+            for (tx in Math.floor(ox * 2 / tile).toInt()..Math.floor((ox + w) * 2 / tile).toInt()) {
+                val x = ((tx % n) + n) % n
+                coil.compose.AsyncImage(model = "$base/api/mail/maptiles/$theme/$zt/$x/$ty.png", contentDescription = null, colorFilter = tone,
+                    modifier = Modifier.offset((tx * size - ox).dp, (ty * size - oy).dp).size(size.dp))
+            }
+        }
+        val accent = k.accent
+        val page = k.bg
+        val done = k.green
+        androidx.compose.foundation.Canvas(Modifier.fillMaxSize()) {
+            val pts = xy.map { androidx.compose.ui.geometry.Offset(((it.first - ox).dp).toPx(), ((it.second - oy).dp).toPx()) }
+            if (pts.size > 1) {
+                val path = androidx.compose.ui.graphics.Path().apply { moveTo(pts[0].x, pts[0].y); pts.drop(1).forEach { lineTo(it.x, it.y) } }
+                val round = androidx.compose.ui.graphics.drawscope.Stroke(width = 6.dp.toPx(), cap = androidx.compose.ui.graphics.StrokeCap.Round, join = androidx.compose.ui.graphics.StrokeJoin.Round)
+                drawPath(path, page.copy(alpha = 0.7f), style = round)
+                drawPath(path, accent, style = androidx.compose.ui.graphics.drawscope.Stroke(width = 3.dp.toPx(), cap = androidx.compose.ui.graphics.StrokeCap.Round, join = androidx.compose.ui.graphics.StrokeJoin.Round))
+            }
+            pts.dropLast(1).forEach {
+                drawCircle(page, 3.5.dp.toPx(), it)
+                drawCircle(accent, 3.5.dp.toPx(), it, style = androidx.compose.ui.graphics.drawscope.Stroke(2.dp.toPx()))
+            }
+            pts.lastOrNull()?.let {
+                drawCircle(page, 8.5.dp.toPx(), it)
+                drawCircle(if (delivered) done else accent, 6.dp.toPx(), it)
+            }
+        }
+        Text(map.attribution, style = MaterialTheme.typography.labelSmall.copy(fontSize = 8.sp), color = k.text3,
+            modifier = Modifier.align(Alignment.BottomEnd).padding(horizontal = 4.dp, vertical = 1.dp))
+    }
+}
+
+@Composable
+private fun SectionLabel(text: String) {
+    Text(text.uppercase(), style = MaterialTheme.typography.labelSmall, color = kern.text3, modifier = Modifier.padding(top = 14.dp, bottom = 6.dp))
+}
+
+@Composable
+private fun PackageItem(p: app.kern.data.MailPackage, nav: Nav, ctx: android.content.Context, live: Boolean, map: app.kern.data.MailMapInfo, act: (String) -> Unit) {
+    var open by remember { mutableStateOf(false) }
+    val tone = when (p.status) { "delivered" -> kern.green; "exception" -> kern.danger; "out_for_delivery", "ready_for_pickup" -> kern.accent; else -> kern.text2 }
+    Column(Modifier.padding(vertical = 4.dp).fillMaxWidth().clip(androidx.compose.foundation.shape.RoundedCornerShape(12.dp))
+        .background(kern.surface).clickable { open = !open }.padding(14.dp)) {
+        Row(verticalAlignment = Alignment.CenterVertically) {
+            Column(Modifier.weight(1f)) {
+                Text(listOf(p.carrierName, p.merchant).filter { it.isNotBlank() }.joinToString(" · "), style = MaterialTheme.typography.labelMedium, color = kern.text3, maxLines = 1)
+                Text(arrival(p), style = MaterialTheme.typography.titleMedium, color = kern.text)
+            }
+            Text(p.statusLabel, style = MaterialTheme.typography.labelMedium, color = tone)
+        }
+        val route = p.route.latLon
+        if (route.isNotEmpty()) PackageMap(route, p.status == "delivered", map)
+        Row(Modifier.padding(top = 10.dp).fillMaxWidth(), horizontalArrangement = Arrangement.spacedBy(4.dp)) {
+            repeat(4) { i -> Box(Modifier.weight(1f).height(4.dp).clip(androidx.compose.foundation.shape.RoundedCornerShape(2.dp)).background(if (i <= p.step) tone else kern.border)) }
+        }
+        p.events.firstOrNull()?.let { e ->
+            Text(e.text + if (e.where.isNotBlank()) " · ${e.where}" else "", style = MaterialTheme.typography.bodySmall, color = kern.text2,
+                modifier = Modifier.padding(top = 8.dp), maxLines = if (open) 3 else 1, overflow = TextOverflow.Ellipsis)
+        }
+        if (open) {
+            p.events.drop(1).take(10).forEach { e ->
+                Text(e.text + if (e.where.isNotBlank()) " · ${e.where}" else "", style = MaterialTheme.typography.bodySmall, color = kern.text3, modifier = Modifier.padding(top = 4.dp))
+            }
+            Text(p.number, style = MaterialTheme.typography.bodySmall, color = kern.text3, modifier = Modifier.padding(top = 8.dp))
+            Row(Modifier.padding(top = 10.dp), horizontalArrangement = Arrangement.spacedBy(8.dp)) {
+                if (p.threadId != null) KButton("Email") { nav.go("mail/thread/${p.threadId}") }
+                if (p.trackUrl.isNotBlank()) KButton("Track") {
+                    runCatching { ctx.startActivity(Intent(Intent.ACTION_VIEW, android.net.Uri.parse(p.trackUrl)).addFlags(Intent.FLAG_ACTIVITY_NEW_TASK)) }
+                }
+                if (live) KButton("Check now") { act("refresh") }
+                if (p.status != "delivered") KButton("Got it") { act("delivered") }
+            }
+        }
+    }
+}
 
 /** Swipe right to archive, left to mark read/unread (like Gmail). */
 @Composable
@@ -378,7 +639,8 @@ private fun ThreadRow(t: MailThread, me: String, onClick: () -> Unit) {
             }
             Text(t.subject.ifBlank { "(no subject)" }, maxLines = 1, overflow = TextOverflow.Ellipsis,
                 fontWeight = if (unread) FontWeight.SemiBold else FontWeight.Normal, style = MaterialTheme.typography.bodyMedium, color = kern.text)
-            Text(t.snippet, maxLines = 1, overflow = TextOverflow.Ellipsis, style = MaterialTheme.typography.bodySmall, color = kern.text3)
+            if (t.hit.isNotBlank()) Text(hitText(t.hit, kern.text), maxLines = 1, overflow = TextOverflow.Ellipsis, style = MaterialTheme.typography.bodySmall, color = kern.text3)
+            else Text(t.snippet, maxLines = 1, overflow = TextOverflow.Ellipsis, style = MaterialTheme.typography.bodySmall, color = kern.text3)
         }
     }
 }
@@ -521,16 +783,21 @@ fun MailThreadScreen(ws: Workspace, nav: Nav, id: Long) {
 private fun MessageItem(ws: Workspace, m: MailMessage, expanded: Boolean, onToggle: () -> Unit) {
     var body by remember(m.id) { mutableStateOf<MailBody?>(null) }
     var failed by remember(m.id) { mutableStateOf(false) }
-    LaunchedEffect(m.id, expanded) {
-        if (expanded && body == null) body = runCatching { ws.kern.mailBody(m.id) }.getOrElse { failed = true; null }
+    var original by remember(m.id) { mutableStateOf(false) }
+    val ctx = LocalContext.current
+    // The server fits the email to the theme (no white sheet; dark mail keeps its colors), like the web app.
+    val colors = if (original) null else if (kern.dark) (if (ctx.app.settings.mailDarkEmails) "dark" else null) else "light"
+    LaunchedEffect(m.id, expanded, colors) {
+        if (expanded) body = runCatching { ws.kern.mailBody(m.id, colors) }.getOrElse { failed = true; body }
     }
     Column(Modifier.padding(horizontal = 12.dp, vertical = 4.dp).fillMaxWidth()
-        .background(kern.surface, androidx.compose.foundation.shape.RoundedCornerShape(12.dp))) {
+        .clip(androidx.compose.foundation.shape.RoundedCornerShape(12.dp))
+        .border(1.dp, kern.border, androidx.compose.foundation.shape.RoundedCornerShape(12.dp))) {
         Row(Modifier.fillMaxWidth().clickable(onClick = onToggle).padding(12.dp), verticalAlignment = Alignment.CenterVertically) {
             Column(Modifier.weight(1f)) {
-                Text(if (m.fromMe) "Me" else m.from.label, fontWeight = FontWeight.SemiBold, maxLines = 1, overflow = TextOverflow.Ellipsis,
+                Text(if (m.fromMe) "Me" else m.from.display.ifBlank { "(unknown sender)" }, fontWeight = FontWeight.SemiBold, maxLines = 1, overflow = TextOverflow.Ellipsis,
                     style = MaterialTheme.typography.bodyMedium)
-                Text(if (expanded) "to " + (m.to + m.cc).joinToString(", ") { it.label }.ifBlank { "(no recipients)" } else m.snippet,
+                Text(if (expanded) "to " + (m.to + m.cc).joinToString(", ") { it.display }.ifBlank { "(no recipients)" } else m.snippet,
                     maxLines = 1, overflow = TextOverflow.Ellipsis, style = MaterialTheme.typography.bodySmall, color = kern.text3)
             }
             Text(ago(m.date), style = MaterialTheme.typography.bodySmall, color = kern.text3)
@@ -545,7 +812,15 @@ private fun MessageItem(ws: Workspace, m: MailMessage, expanded: Boolean, onTogg
                     val blank = b.html == null && (b.text ?: "").isBlank()
                     if (blank && !hasFiles) Text("No message text.", style = MaterialTheme.typography.bodySmall, color = kern.text3,
                         modifier = Modifier.padding(start = 12.dp, end = 12.dp, bottom = 12.dp))
-                    else if (!blank) EmailView(b)
+                    else if (!blank) {
+                        if (b.html != null && (original || b.colors in setOf("adapted", "dark", "light"))) {
+                            Row(Modifier.fillMaxWidth().padding(horizontal = 12.dp), horizontalArrangement = Arrangement.End) {
+                                Text(if (original) "Fit to theme" else "Original colors", style = MaterialTheme.typography.labelMedium, color = kern.text3,
+                                    modifier = Modifier.clip(androidx.compose.foundation.shape.RoundedCornerShape(8.dp)).clickable { original = !original }.padding(horizontal = 8.dp, vertical = 4.dp))
+                            }
+                        }
+                        EmailView(b, original = original)
+                    }
                     if (b.remoteImages > 0) Text("Images from the web stay hidden in the app. Open the message in Kern's web app to load them.",
                         style = MaterialTheme.typography.bodySmall, color = kern.text3, modifier = Modifier.padding(start = 12.dp, end = 12.dp, bottom = 10.dp))
                     m.attachments.filter { !it.inline }.takeIf { it.isNotEmpty() }?.let { atts ->
@@ -566,30 +841,24 @@ private fun MessageItem(ws: Workspace, m: MailMessage, expanded: Boolean, onTogg
  */
 @SuppressLint("SetJavaScriptEnabled")
 @Composable
-private fun EmailView(b: MailBody) {
+private fun EmailView(b: MailBody, original: Boolean = false) {
     val ctx = LocalContext.current
     val k = kern
     val inner = b.html ?: b.textHtml ?: android.text.Html.escapeHtml(b.text ?: "")
-    // HTML mail is drawn the way senders design it (on white); in the dark theme it is inverted
-    // to light-on-dark (pictures inverted back) unless it's dark already or you ask for the original.
-    val isHtml = b.html != null
-    var original by remember(b) { mutableStateOf(false) }
-    val darkWanted = k.dark && isHtml && ctx.app.settings.mailDarkEmails && !looksDark(b.html ?: "")
-    val dark = darkWanted && !original
     fun hex(c: androidx.compose.ui.graphics.Color) = String.format("#%06X", 0xFFFFFF and c.toArgb())
-    val bg = when { dark -> "#ebebe9"; isHtml -> "#ffffff"; else -> hex(k.surface) }
-    val fg = if (isHtml) "#1f1f1f" else hex(k.text)
-    // The body is inverted, not <html>: WebView paints the root's background outside the filter.
-    val darkCss = if (dark) "html{background:#141416!important}body{filter:invert(1) hue-rotate(180deg);min-height:100%}img,video,picture,[background],[style*=\"background-image\"]{filter:invert(1) hue-rotate(180deg)}" else ""
-    if (darkWanted || original) Row(Modifier.fillMaxWidth().padding(horizontal = 12.dp), horizontalArrangement = Arrangement.End) {
-        Text(if (original) "Dark colors" else "Original colors", style = MaterialTheme.typography.labelMedium, color = k.text3,
-            modifier = Modifier.clip(androidx.compose.foundation.shape.RoundedCornerShape(8.dp)).clickable { original = !original }.padding(horizontal = 8.dp, vertical = 4.dp))
-    }
-    val page = """<!doctype html><html><head><meta charset="utf-8">
+    // The email sits on the app's own background: the server already fitted its colors to the theme
+    // (backend/mail/colors.py), so nothing is inverted here. Original colors: as sent, on white.
+    val asSent = original && b.html != null
+    val bg = if (asSent) "#ffffff" else "transparent"
+    val fg = if (asSent) "#222222" else hex(k.text)
+    val link = if (asSent || !k.dark) "#2f4ad0" else "#8ab4f8"
+    val scheme = if (k.dark && !asSent) "dark" else "light"
+    val page = """<!doctype html><html style="color-scheme:$scheme"><head><meta charset="utf-8">
         <meta http-equiv="Content-Security-Policy" content="default-src 'none'; style-src 'unsafe-inline'; img-src data:">
+        <meta name="color-scheme" content="$scheme">
         <meta name="viewport" content="width=device-width, initial-scale=1">
-        <style>$darkCss html,body{margin:0;padding:6px 10px 10px;background:$bg;color:$fg;font:15px/1.5 sans-serif;overflow-wrap:anywhere}
-        img{max-width:100%;height:auto}pre{white-space:pre-wrap}blockquote{margin:0 0 0 .6em;padding-left:.8em;border-left:2px solid #bbb;color:#666}</style>
+        <style>html,body{margin:0;padding:4px 10px 10px;background:$bg;color:$fg;font:15px/1.5 sans-serif;overflow-wrap:anywhere}
+        a{color:$link}img{max-width:100%;height:auto}pre{white-space:pre-wrap}blockquote{margin:0 0 0 .6em;padding-left:.8em;border-left:2px solid #888;opacity:.8}</style>
         </head><body>$inner</body></html>"""
     key(page) {
         AndroidView(factory = { c ->
@@ -601,7 +870,7 @@ private fun EmailView(b: MailBody) {
                 settings.domStorageEnabled = false
                 settings.loadsImagesAutomatically = true // data: images only (network loads are blocked)
                 isVerticalScrollBarEnabled = false
-                setBackgroundColor(android.graphics.Color.TRANSPARENT)
+                setBackgroundColor(if (asSent) android.graphics.Color.WHITE else android.graphics.Color.TRANSPARENT)
                 webViewClient = object : WebViewClient() {
                     override fun shouldOverrideUrlLoading(view: WebView, request: WebResourceRequest): Boolean {
                         val u = request.url
@@ -639,8 +908,12 @@ fun MailComposeScreen(ws: Workspace, nav: Nav, message: Long? = null, mode: Stri
     var signature by remember { mutableStateOf("") }
     var busy by remember { mutableStateOf(false) }
     var ready by remember { mutableStateOf(message == null) }
+    var from by remember { mutableStateOf("") }
+    var info by remember { mutableStateOf<app.kern.data.MailInfo?>(null) }
+    var fromMenu by remember { mutableStateOf(false) }
     val m = mode ?: "new"
 
+    LaunchedEffect(Unit) { info = runCatching { ws.kern.mailInfo() }.getOrNull() }
     LaunchedEffect(message, mode) {
         runCatching { ws.kern.api.get<kotlinx.serialization.json.JsonObject>("/mail/preferences") }.getOrNull()?.let { p ->
             val sig = p.str("signature") ?: ""
@@ -650,7 +923,7 @@ fun MailComposeScreen(ws: Workspace, nav: Nav, message: Long? = null, mode: Stri
         if (message != null) {
             try {
                 val p = ws.kern.mailPrefill(message, m)
-                to = addrsText(p.to); cc = addrsText(p.cc); subject = p.subject; quoted = p.bodyHtml
+                to = addrsText(p.to); cc = addrsText(p.cc); subject = p.subject; quoted = p.bodyHtml; from = p.from
             } catch (e: Exception) { snack.error(e) }
             ready = true
         }
@@ -662,7 +935,7 @@ fun MailComposeScreen(ws: Workspace, nav: Nav, message: Long? = null, mode: Stri
         busy = true
         try {
             val sigHtml = if (signature.isNotBlank()) "<div><br></div><div>-- <br>" + android.text.Html.escapeHtml(signature).replace("\n", "<br>") + "</div>" else ""
-            ws.kern.mailSend(m, message, rcpt, parseAddrs(cc), subject, textToHtml(text) + sigHtml + quoted)
+            ws.kern.mailSend(m, message, rcpt, parseAddrs(cc), subject, textToHtml(text) + sigHtml + quoted, from)
             snack.show("Sending…")
             nav.back()
         } catch (e: Exception) {
@@ -672,10 +945,21 @@ fun MailComposeScreen(ws: Workspace, nav: Nav, message: Long? = null, mode: Stri
 
     Column(Modifier.fillMaxSize().background(kern.bg).statusBarsPadding().imePadding()) {
         KTopBar(when (m) { "reply", "reply_all" -> "Reply"; "forward" -> "Forward"; else -> "New message" }, onBack = { nav.back() }) {
-            IconButton(onClick = { send() }, enabled = ready && !busy) { Icon(Icons.AutoMirrored.Outlined.Send, "Send", tint = kern.accent) }
+            IconButton(onClick = { send() }, enabled = ready && !busy, modifier = Modifier.padding(end = 4.dp)) { Icon(Icons.AutoMirrored.Outlined.Send, "Send", tint = kern.accent) }
         }
         if (!ready) Loading() else Column(Modifier.fillMaxSize().verticalScroll(rememberScrollState()).padding(horizontal = 16.dp),
             verticalArrangement = Arrangement.spacedBy(8.dp)) {
+            val i = info
+            if (i != null && i.identities.isNotEmpty()) Box {
+                val label = i.identities.firstOrNull { it.address.equals(from, true) }?.let { if (it.name.isBlank()) it.address else "${it.name} <${it.address}>" }
+                    ?: if (i.fromName.isBlank()) i.address else "${i.fromName} <${i.address}>"
+                Text("From  $label", style = MaterialTheme.typography.bodyMedium, color = kern.text2, maxLines = 1, overflow = TextOverflow.Ellipsis,
+                    modifier = Modifier.fillMaxWidth().clip(androidx.compose.foundation.shape.RoundedCornerShape(8.dp)).clickable { fromMenu = true }.padding(vertical = 10.dp, horizontal = 4.dp))
+                DropdownMenu(expanded = fromMenu, onDismissRequest = { fromMenu = false }) {
+                    DropdownMenuItem(text = { Text(i.address) }, onClick = { from = ""; fromMenu = false })
+                    i.identities.forEach { id -> DropdownMenuItem(text = { Text(id.address) }, onClick = { from = id.address; fromMenu = false }) }
+                }
+            }
             KField(to, { to = it }, "To", keyboard = KeyboardOptions(keyboardType = KeyboardType.Email))
             if (cc.isNotBlank() || m == "reply_all") KField(cc, { cc = it }, "Cc", keyboard = KeyboardOptions(keyboardType = KeyboardType.Email))
             KField(subject, { subject = it }, "Subject")
@@ -683,25 +967,10 @@ fun MailComposeScreen(ws: Workspace, nav: Nav, message: Long? = null, mode: Stri
             if (signature.isNotBlank()) Text("-- \n$signature", style = MaterialTheme.typography.bodySmall, color = kern.text3)
             if (quoted.isNotBlank()) Text(if (m == "forward") "The forwarded message is added below." else "The earlier message is quoted below your reply.",
                 style = MaterialTheme.typography.bodySmall, color = kern.text3)
-            KButton(if (busy) "Sending…" else "Send", Modifier.fillMaxWidth(), primary = true, enabled = !busy, icon = Icons.AutoMirrored.Outlined.Send) { send() }
-            Spacer(Modifier.height(24.dp))
+            // Room around Send so it isn't cramped against the fields or the keyboard.
+            KButton(if (busy) "Sending…" else "Send", Modifier.fillMaxWidth().padding(top = 16.dp).height(52.dp), primary = true, enabled = !busy && ready,
+                icon = Icons.AutoMirrored.Outlined.Send) { send() }
+            Spacer(Modifier.height(32.dp).navigationBarsPadding())
         }
     }
-}
-
-/** An email that already has a dark background (same idea as the web's emailFrame.looksDark). */
-internal fun looksDark(html: String): Boolean {
-    val m = Regex("""(?is)(?:<body[^>]*\bbgcolor\s*=\s*["']?|body\s*\{[^}]*background(?:-color)?\s*:\s*|^\s*<(?:table|div|center)[^>]*(?:bgcolor\s*=\s*["']?|background(?:-color)?\s*:\s*))(#[0-9a-f]{3,6}|rgb\([^)]*\)|black|white)""")
-        .find(html.take(4000)) ?: return false
-    val c = m.groupValues[1].lowercase()
-    val rgb = when {
-        c == "black" -> listOf(0, 0, 0)
-        c == "white" -> listOf(255, 255, 255)
-        c.startsWith("#") -> {
-            val h = if (c.length == 4) c.drop(1).map { "$it$it" }.joinToString("") else c.drop(1).padEnd(6, '0')
-            listOf(0, 2, 4).map { h.substring(it, it + 2).toInt(16) }
-        }
-        else -> Regex("\\d+").findAll(c).take(3).map { it.value.toInt() }.toList().takeIf { it.size == 3 } ?: return false
-    }
-    return (0.2126 * rgb[0] + 0.7152 * rgb[1] + 0.0722 * rgb[2]) / 255 < 0.4
 }

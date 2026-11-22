@@ -213,15 +213,17 @@
 </section>
 
 <style>
+  /* The page's own background: an email reads on Kern's page, not on a panel. */
   .card {
-    background: var(--bg-elev);
+    background: var(--bg);
     border: var(--card-border);
     border-radius: var(--radius);
     margin-bottom: 10px;
     box-shadow: var(--shadow-sm);
     transition: box-shadow .15s;
   }
-  .card:not(.open) { background: color-mix(in srgb, var(--bg-elev) 70%, var(--bg)); }
+  .card:not(.open) { background: var(--bg); }
+  .card:not(.open):hover { background: var(--bg-hover); }
   header { position: relative; display: flex; align-items: flex-start; gap: 12px; padding: 12px 14px; }
   .toggle { position: absolute; inset: 0; border: 0; background: transparent; cursor: pointer; border-radius: var(--radius); }
   .avatar {

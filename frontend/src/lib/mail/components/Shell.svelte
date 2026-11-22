@@ -3,13 +3,12 @@
   import { onDestroy, onMount, untrack } from 'svelte';
   import { navigate, route } from '../router.svelte.js';
   import {
-    current, folderByRole, info, list, listView, net, loadAccountPrefs, loadAgenda, loadFolders, loadPackages, loadScheduled, loadInfo, loadThread, loadThreads, mailbox, prefs,
+    current, folderByRole, info, list, listView, net, openMailSearch, loadAccountPrefs, loadAgenda, loadFolders, loadPackages, loadScheduled, loadInfo, loadThread, loadThreads, mailbox, prefs,
     READING_MIN, threadAction, ui, unreadInbox,
   } from '../state.svelte.js';
   import { startLive, stopLive, updateTitle } from '../live.js';
   import { installShortcuts } from '../shortcuts.js';
   import { closeCompose, openCompose, openReply, saveDraft } from '../compose.svelte.js';
-  import TopBar from './TopBar.svelte';
   import ThreadList from './ThreadList.svelte';
   import ThreadView from './ThreadView.svelte';
   import Composer from './Composer.svelte';
@@ -20,6 +19,7 @@
   import PackagesPage from '../pages/PackagesPage.svelte';
   import ScheduledPage from '../pages/ScheduledPage.svelte';
   import FilesPage from '../pages/FilesPage.svelte';
+  import StatsPage from '../pages/StatsPage.svelte';
   import { loadTemplates } from '../templates.svelte.js';
   import Icon from './Icon.svelte';
 
@@ -102,11 +102,12 @@
     'g d': () => navigate({ page: 'mail', view: folderByRole('drafts') ? 'drafts' : 'inbox', threadId: null }),
     'g p': () => navigate({ page: 'packages' }),
     'g f': () => navigate({ page: 'files' }),
+    'g t': () => navigate({ page: 'stats' }),
     'g z': () => navigate({ page: 'mail', view: folderByRole('snoozed') ? 'snoozed' : 'inbox', threadId: null }),
   };
 
   function handle(key) {
-    if (ui.viewer) return false;
+    if (ui.viewer || ui.search.open) return false;
     if (key === 'escape') {
       if (ui.senderCard) ui.senderCard = null;
       else if (ui.dialog) ui.dialog = null;
@@ -121,7 +122,7 @@
     if (go[key]) return go[key]();
     if (key === '?') return (ui.dialog = { type: 'help' });
     if (key === 'c') return openCompose();
-    if (key === '/') return (ui.searchFocusTick += 1);
+    if (key === '/') return openMailSearch();
     if (route.page !== 'mail') return false;
     switch (key) {
       case 'j': return moveFocus(1);
@@ -238,22 +239,6 @@
 
 <div class="shell" class:wide class:reading bind:clientWidth={width}>
   <div class="main">
-    <TopBar {wide} />
-    {#if !net.online}
-      <div class="banner off" role="status">You're offline. Mail will catch up as soon as you're back.</div>
-    {:else if !net.live}
-      <div class="banner off" role="status"><span class="spinner tiny"></span> Reconnecting…</div>
-    {:else if workerBad}
-      <div class="banner" role="status">
-        {#if info.worker.state === 'unconfigured'}
-          Your mail account isn't connected. Showing what's stored here. <a href="/settings?s=mail">Settings → Mail</a>
-        {:else if info.worker.state === 'error'}
-          Can't reach the mail server right now. Retrying… <span class="faint">{info.worker.lastError}</span>
-        {:else}
-          The mail service isn't running, so new mail won't arrive. Changes are saved when it's back.
-        {/if}
-      </div>
-    {/if}
     {#if route.page === 'mail'}
       <div class="panes">
         {#if showList}
@@ -279,8 +264,26 @@
       <ScheduledPage />
     {:else if route.page === 'files'}
       <FilesPage />
+    {:else if route.page === 'stats'}
+      <StatsPage />
     {/if}
   </div>
+  <!-- Connection trouble floats over the bottom instead of pushing the list down. -->
+  {#if !net.online || !net.live || workerBad}
+    <div class="status-pill" role="status">
+      {#if !net.online}
+        You're offline. Mail will catch up when you're back.
+      {:else if !net.live}
+        <span class="spinner tiny"></span> Reconnecting…
+      {:else if info.worker.state === 'unconfigured'}
+        Your mail account isn't connected. <a href="/settings?s=mail">Settings → Mail</a>
+      {:else if info.worker.state === 'error'}
+        Can't reach the mail server. Retrying…
+      {:else}
+        The mail service isn't running, so new mail won't arrive.
+      {/if}
+    </div>
+  {/if}
 </div>
 
 {#if !wide && route.page === 'mail' && !route.threadId && !ui.composers.some((c) => !c.minimized)}
@@ -330,8 +333,14 @@
     display: flex;
     flex-direction: column;
   }
-  .banner a { color: inherit; text-decoration: underline; }
-  .banner.off { background: var(--bg-sunken); color: var(--text-2); display: flex; align-items: center; gap: 8px; }
+  .status-pill {
+    position: absolute; left: 50%; bottom: 16px; transform: translateX(-50%); z-index: 45;
+    display: flex; align-items: center; gap: 8px; max-width: calc(100% - 32px);
+    padding: 7px 14px; border-radius: 999px; font-size: 12.5px; color: var(--text-2);
+    background: var(--bg-elev); border: 1px solid var(--line-strong); box-shadow: var(--shadow-lg);
+    white-space: nowrap; overflow: hidden; text-overflow: ellipsis; pointer-events: auto; animation: rise .2s var(--ease);
+  }
+  .status-pill a { color: var(--accent); }
   .spinner.tiny { width: 12px; height: 12px; border-width: 1.5px; }
   .thread-pane.empty {
     display: grid;
@@ -345,13 +354,6 @@
   .seal { color: var(--text-3); opacity: .7; display: inline-block; margin-bottom: 8px; }
   .empty-state p { margin: 6px 0; }
   .empty-state .big { font-size: 17px; color: var(--text-2); }
-  .banner {
-    background: var(--warn-soft);
-    color: var(--warn);
-    padding: 8px 18px;
-    font-size: 12.5px;
-    border-bottom: 1px solid var(--line);
-  }
   .composers {
     position: fixed;
     right: 16px;

@@ -141,7 +141,8 @@ class MailPushService : Service() {
         val fresh = r.events.filter { it.kind == "message" && it.new }.mapNotNull { it.thread }.distinct()
         val touched = r.events.flatMap { it.threads + listOfNotNull(it.thread) }.toSet()
         val notified = app.settings.mailNotified
-        if (fresh.isEmpty() && notified.none { it in touched }) return
+        val generic = touched.isNotEmpty() && Notifications.genericMailShown(ctx)
+        if (fresh.isEmpty() && notified.none { it in touched } && !generic) return
         // One request for the Inbox's newest conversations covers both: what to show, and what was read elsewhere.
         val inbox = runCatching { k.mailThreads("inbox").threads }.getOrNull() ?: return
         val byId = inbox.associateBy { it.id }
@@ -150,6 +151,8 @@ class MailPushService : Service() {
         // Read, archived or deleted somewhere else: take its notification away.
         val gone = notified.filter { id -> id in touched && (byId[id]?.unread ?: 0) == 0 }
         gone.forEach { Notifications.cancelMailThread(ctx, it) }
+        // Everything read elsewhere: the plain "New mail" from the periodic check goes too.
+        if (generic && inbox.none { it.unread > 0 }) Notifications.cancel(ctx, Notifications.ID_MAIL)
         cacheInbox(inbox)
     }
 

@@ -20,7 +20,7 @@ from .. import actions, followups, imgproxy, labels as labels_mod, parsing, risk
 from ..identity import my_addresses
 from ..models import (
     Attachment, BlockRule, Correspondent, Draft, DraftStatus, Folder, FolderRole, Label, Message,
-    OpStatus, OutboxOp, Thread, ThreadFolder, TrustedImageSender, Upload, WorkerStatus,
+    MailIdentity, OpStatus, OutboxOp, Thread, ThreadFolder, TrustedImageSender, Upload, WorkerStatus,
 )
 from .util import ApiError, api, body, int_or_none, iso
 from mail.account import cfg as _mail_cfg
@@ -47,11 +47,15 @@ def followup_json(f) -> dict:
 
 
 def thread_json(t: Thread, folders: dict[int, list[int]] | None = None, snoozes: dict | None = None,
-                fups: dict | None = None, muted: set | None = None, pkgs: dict | None = None) -> dict:
+                fups: dict | None = None, muted: set | None = None, pkgs: dict | None = None,
+                me: set | None = None) -> dict:
+    from ..names import participants_label
+
     s = (snoozes or {}).get(t.id)
     f = (fups or {}).get(t.id)
     return {
         "id": t.id,
+        "who": participants_label(t.participants, my_addresses() if me is None else me),
         "subject": t.subject,
         "snippet": t.snippet,
         "lastDate": iso(t.last_date),
@@ -280,6 +284,7 @@ def info(request):
         "fromName": prefs_mod.from_name(),
         "undoSeconds": prefs_mod.undo_seconds(),
         "maxAttachmentBytes": settings.MAX_ATTACHMENT_BYTES,
+        "identities": [{"address": a, "name": n} for a, n in MailIdentity.objects.order_by("address").values_list("address", "name")],
         "worker": {
             "state": "offline" if stale else ws.state,
             "detail": ws.detail if ws else "",
@@ -434,35 +439,98 @@ def _thread_queryset(view: str, q: str):
     raise ApiError("Unknown view.")
 
 
+def _view_total(view: str, q: str, unread_only: bool) -> int:
+    if view.startswith("folder:") and not q:
+        rows = ThreadFolder.objects.filter(folder_id=int_or_none(view.split(":", 1)[1]))
+        return (rows.filter(unread=True) if unread_only else rows).count()
+    qs = _thread_queryset(view, q)
+    if unread_only:
+        qs = qs.filter(Exists(Message.objects.filter(thread=OuterRef("pk"), seen=False)))
+    return qs.count()
+
+
+def _threads_json(page: list[Thread], q: str = "") -> list[dict]:
+    folders_by_thread: dict[int, list[int]] = {}
+    for tid, fid in ThreadFolder.objects.filter(thread_id__in=[t.id for t in page]).values_list("thread_id", "folder_id"):
+        folders_by_thread.setdefault(tid, []).append(fid)
+    ids = [t.id for t in page]
+    snoozes = snooze.active_for_threads(ids)
+    fups = followups.open_for_threads(ids)
+    muted = mute_mod.muted_thread_ids(ids)
+    pkgs = _package_chips(ids)
+    me = my_addresses()
+    out = [thread_json(t, folders_by_thread, snoozes, fups, muted, pkgs, me) for t in page]
+    if q:
+        found = search.hits(q, ids)
+        for t in out:
+            t["hit"] = found.get(t["id"], "")
+    return out
+
+
 @api()
 def threads(request):
     view = resolve_view(request.GET.get("view", ""))
     q = request.GET.get("q", "").strip()[:500]
     unread_only = request.GET.get("unread") == "1"
     cursor = request.GET.get("cursor")
-    if view.startswith("folder:") and not q:
-        page = _folder_page(int_or_none(view.split(":", 1)[1]), unread_only, cursor, PAGE + 1)
-    else:
-        qs = _thread_queryset(view, q)
+    by_relevance = bool(q) and request.GET.get("sort") == "relevance"
+    next_cursor = None
+    ranked = search.ranked_thread_ids(q) if by_relevance else None
+    if ranked is not None:
+        # Relevance: the ranking is computed once per request; the cursor is an offset into it.
         if unread_only:
-            qs = qs.filter(Exists(Message.objects.filter(thread=OuterRef("pk"), seen=False)))
-        qs = qs.order_by("-last_date", "-id")
-        if cursor:
-            dt, tid = _parse_cursor(cursor)
-            qs = qs.filter(Q(last_date__lt=dt) | Q(last_date=dt, id__lt=tid))
-        page = list(qs[: PAGE + 1])
-    more = len(page) > PAGE
-    page = page[:PAGE]
-    folders_by_thread: dict[int, list[int]] = {}
-    for tid, fid in ThreadFolder.objects.filter(thread_id__in=[t.id for t in page]).values_list("thread_id", "folder_id"):
-        folders_by_thread.setdefault(tid, []).append(fid)
-    next_cursor = f"{page[-1].last_date.isoformat()}|{page[-1].id}" if more and page[-1].last_date else None
-    ids = [t.id for t in page]
-    snoozes = snooze.active_for_threads(ids)
-    fups = followups.open_for_threads(ids)
-    muted = mute_mod.muted_thread_ids(ids)
-    pkgs = _package_chips(ids)
-    return {"threads": [thread_json(t, folders_by_thread, snoozes, fups, muted, pkgs) for t in page], "next": next_cursor}
+            unread = set(Message.objects.filter(thread_id__in=ranked, seen=False).values_list("thread_id", flat=True))
+            ranked = [t for t in ranked if t in unread]
+        offset = int_or_none((cursor or "").removeprefix("o:")) or 0
+        ids = ranked[offset: offset + PAGE]
+        by_id = Thread.objects.in_bulk(ids)
+        page = [by_id[i] for i in ids if i in by_id]
+        if offset + PAGE < len(ranked):
+            next_cursor = f"o:{offset + PAGE}"
+        total = len(ranked) if not cursor else None
+    else:
+        if view.startswith("folder:") and not q:
+            page = _folder_page(int_or_none(view.split(":", 1)[1]), unread_only, cursor, PAGE + 1)
+        else:
+            qs = _thread_queryset(view, q)
+            if unread_only:
+                qs = qs.filter(Exists(Message.objects.filter(thread=OuterRef("pk"), seen=False)))
+            qs = qs.order_by("-last_date", "-id")
+            if cursor:
+                dt, tid = _parse_cursor(cursor)
+                qs = qs.filter(Q(last_date__lt=dt) | Q(last_date=dt, id__lt=tid))
+            page = list(qs[: PAGE + 1])
+        more = len(page) > PAGE
+        page = page[:PAGE]
+        next_cursor = f"{page[-1].last_date.isoformat()}|{page[-1].id}" if more and page[-1].last_date else None
+        # How many there are in all ("Select all 1,234 conversations"): first page only.
+        total = None if cursor else (len(page) if not more else _view_total(view, q, unread_only))
+    return {"threads": _threads_json(page, q), "next": next_cursor, "total": total}
+
+
+@api()
+def search_suggest(request):
+    """Everything the search box shows while you type: people, labels, folders and the best
+    few conversations, in one request."""
+    q = request.GET.get("q", "")[:300]
+    op, partial = search.last_token(q)
+    people = search.contacts(partial) if op in ("", "from", "to", "cc", "bcc") and partial else []
+    labels = ([label_json(lb) for lb in Label.objects.filter(name__icontains=partial)[:4]]
+              if partial and op in ("", "label") else [])
+    folders = ([folder_json(f) for f in Folder.objects.filter(name__icontains=partial).exclude(role=FolderRole.ALL)[:4]]
+               if partial and op in ("", "in") else [])
+    found, total = [], 0
+    if q.strip():
+        ranked = search.ranked_thread_ids(q, limit=500)
+        if ranked is None:
+            qs = _thread_queryset("", q.strip()).order_by("-last_date", "-id")
+            ids = list(qs.values_list("id", flat=True)[:6])
+            total = qs.count()
+        else:
+            ids, total = ranked[:6], len(ranked)
+        by_id = Thread.objects.in_bulk(ids)
+        found = _threads_json([by_id[i] for i in ids if i in by_id], q.strip())
+    return {"people": people, "labels": labels, "folders": folders, "threads": found, "total": total}
 
 
 @api()
@@ -662,15 +730,20 @@ def message_body(request, pk: int):
     if m.risk_level == "high" and request.GET.get("images") != "1":
         load = False
     cid_map = {a.content_id: a.id for a in m.attachments.all() if a.content_id}
+    # colors=dark|light fits the email to Kern's page in that theme; anything else: as sent.
+    theme = request.GET.get("colors", "")
+    theme = theme if theme in ("dark", "light") else ""
+    how = "none"
     if pm.html:
-        res = sanitize.sanitize_html(pm.html, message_pk=m.pk, load_images=load, cid_map=cid_map)
-        html, remote = res.html, res.remote_images
+        res = sanitize.sanitize_html(pm.html, message_pk=m.pk, load_images=load, cid_map=cid_map, theme=theme)
+        html, remote, how = res.html, res.remote_images, res.colors
         if not remote and not _shows_anything(html):
             html = None  # an empty HTML part (e.g. only attachments): don't draw a blank page
     else:
         html, remote = None, 0
     return {
         "html": html,
+        "colors": how,
         "text": (pm.text or "") if html is None else None,
         "textHtml": sanitize.linkify_text(pm.text or "") if html is None else None,
         "remoteImages": remote,
@@ -886,53 +959,131 @@ def _package_chips(thread_ids: list[int]) -> dict:
     by_key = {k: s for s in ships for k in s.message_keys}
     out = {}
     rows = Message.objects.filter(thread_id__in=thread_ids, message_key__in=list(by_key)).values_list("thread_id", "message_key")
+    now = timezone.now()
+
+    def chip(s):
+        if _settled(s, now):
+            return {"status": "delivered", "label": "Probably delivered"}
+        return {"status": s.status, "label": pk.STATUS_LABEL.get(s.status, s.status)}
+
     for tid, key in sorted(rows, key=lambda r: by_key[r[1]].status_at):
-        s = by_key[key]
-        out[tid] = {"status": s.status, "label": pk.STATUS_LABEL.get(s.status, s.status)}
+        out[tid] = chip(by_key[key])
     for s in ships:  # thread set directly (e.g. after a resync changed keys)
         if s.thread_id in thread_ids and s.thread_id not in out:
-            out[s.thread_id] = {"status": s.status, "label": pk.STATUS_LABEL.get(s.status, s.status)}
+            out[s.thread_id] = chip(s)
     return out
 
 
-def shipment_json(s) -> dict:
+def shipment_json(s, assumed: bool = False) -> dict:
     from .. import packages
 
     tid = s.thread_id
     if not tid and s.message_keys:
         tid = Message.objects.filter(message_key__in=s.message_keys, thread__isnull=False).values_list("thread_id", flat=True).first()
     carrier = packages.CARRIERS.get(s.carrier)
+    status = "delivered" if assumed else s.status
     return {
         "id": s.id, "number": s.number, "carrier": s.carrier, "carrierName": carrier.name if carrier else s.carrier,
-        "status": s.status, "statusLabel": packages.STATUS_LABEL.get(s.status, s.status), "statusAt": iso(s.status_at),
-        "step": packages.STATUS_STEP.get(s.status, 1),
+        "status": status, "statusLabel": "Probably delivered" if assumed else packages.STATUS_LABEL.get(s.status, s.status),
+        "statusAt": iso(s.status_at), "step": packages.STATUS_STEP.get(status, 1), "assumed": assumed,
         "expected": s.expected.isoformat() if s.expected else None, "expectedText": s.expected_text,
         "merchant": s.merchant, "subject": s.subject, "trackUrl": packages.track_url(s.carrier, s.number),
         "threadId": tid, "hidden": s.hidden,
+        "live": s.live, "location": s.location, "checkedAt": iso(s.checked_at), "events": (s.live_events or [])[:12],
+        "route": s.route or {},
     }
+
+
+def _settled(s, now) -> bool:
+    """No live tracking and no news long after it was due: it almost certainly arrived
+    (shops rarely email "delivered"). Shown as probably delivered instead of on the way."""
+    if s.live or s.status in ("delivered", "exception", "ready_for_pickup"):
+        return False
+    quiet = lambda days: bool(s.status_at) and s.status_at < now - timedelta(days=days)  # noqa: E731
+    if s.status == "out_for_delivery":
+        return quiet(2)
+    if s.expected:
+        return s.expected < timezone.localdate() - timedelta(days=2) and quiet(2)
+    return quiet(14)
+
+
+def package_buckets(now=None) -> tuple[list, list]:
+    """(on the way, delivered in the last two weeks) as JSON."""
+    from ..models import Shipment
+
+    now = now or timezone.now()
+    recent = now - timedelta(days=14)
+    qs = Shipment.objects.filter(hidden=False)
+    active, done = [], []
+    for s in qs.exclude(status="delivered").filter(status_at__gte=now - timedelta(days=60)).order_by("expected", "-status_at")[:150]:
+        if _settled(s, now):
+            if (s.expected and s.expected >= recent.date()) or (s.status_at and s.status_at >= recent):
+                done.append(shipment_json(s, assumed=True))
+        else:
+            active.append(shipment_json(s))
+    done += [shipment_json(s) for s in qs.filter(status="delivered", status_at__gte=recent).order_by("-status_at")[:50]]
+    done.sort(key=lambda p: p["statusAt"] or "", reverse=True)
+    return active[:100], done[:50]
 
 
 @api()
 def packages_list(request):
-    from ..models import Shipment
+    from .. import tracking
 
-    now = timezone.now()
-    recent = now - timedelta(days=14)
-    qs = Shipment.objects.filter(hidden=False)
-    # No news for 30 days and not expected any more: it almost certainly
-    # arrived (or the shop stopped emailing). Drop it rather than nag.
-    stale = Q(status_at__lt=now - timedelta(days=30)) & (Q(expected__isnull=True) | Q(expected__lt=(now - timedelta(days=7)).date()))
-    active = [shipment_json(s) for s in qs.exclude(status="delivered").exclude(stale).order_by("expected", "-status_at")[:100]]
-    done = [shipment_json(s) for s in qs.filter(status="delivered", status_at__gte=recent).order_by("-status_at")[:50]]
-    return {"active": active, "delivered": done}
+    from .. import geo
+
+    active, done = package_buckets()
+    return {"active": active, "delivered": done, "tracking": tracking.settings_json(), "map": geo.map_json()}
+
+
+@api(("GET", "POST"))
+def packages_map(request):
+    """The map's tiles: {key: "<MapTiler key>"} for MapTiler's maps, {key: ""} for OpenStreetMap's."""
+    from .. import geo
+
+    if request.method == "POST":
+        try:
+            return geo.set_maptiler_key(str(body(request).get("key") or ""))
+        except ValueError as exc:
+            raise ApiError(str(exc)) from exc
+    return geo.map_json()
+
+
+@api(("GET", "POST"))
+def packages_tracking(request):
+    """Live tracking settings: {provider: "parcels"|"", key?, country?, limit?}."""
+    from .. import tracking
+
+    if request.method == "POST":
+        data = body(request)
+        try:
+            out = tracking.configure(str(data.get("provider") or ""), data.get("key") if data.get("key") else None,
+                                     data.get("country") if "country" in data else None,
+                                     int_or_none(data.get("limit")) if data.get("limit") else None)
+            if out["provider"]:
+                tracking.check_key()
+                tracking.refresh(force=True)
+                out = tracking.settings_json()
+        except tracking.TrackingError as exc:
+            raise ApiError(str(exc)) from exc
+        return out
+    return tracking.settings_json()
 
 
 @api(("POST",))
 def package_action(request, pk: int):
+    from .. import tracking
     from ..models import Shipment
 
     s = Shipment.objects.get(pk=pk)
     action = body(request).get("action")
+    if action == "refresh":
+        try:
+            tracking.refresh([s], force=True)
+        except tracking.TrackingError as exc:
+            raise ApiError(str(exc)) from exc
+        s.refresh_from_db()
+        return shipment_json(s)
     if action == "hide":
         s.hidden = True
     elif action == "unhide":
@@ -1153,6 +1304,7 @@ def draft_json(d: Draft) -> dict:
         "subject": d.subject, "bodyHtml": d.body_html, "status": d.status, "error": d.error,
         "sendAt": iso(d.send_at), "inReplyTo": d.in_reply_to_id, "updated": iso(d.updated),
         "followupAt": iso(d.followup_at),
+        "from": d.from_addr,
         "uploads": [{"id": u.id, "filename": u.filename, "size": u.size, "contentType": u.content_type}
                     for u in d.uploads.all()],
         "forwardAttachments": [
@@ -1172,6 +1324,12 @@ def _apply_draft_fields(d: Draft, data: dict) -> None:
             d.bcc_addrs = sending.validate_recipients(data["bcc"])
     except sending.ComposeError as exc:
         raise ApiError(str(exc)) from exc
+    if "from" in data:
+        addr = str(data.get("from") or "").strip()
+        account_addr = _mail_cfg()["USERNAME"]
+        if addr and addr.lower() != account_addr.lower() and addr.lower() not in my_addresses():
+            raise ApiError("You can only send from your own addresses (Settings → Mail → Send mail as).")
+        d.from_addr = "" if addr.lower() == account_addr.lower() else addr[:320]
     if "subject" in data:
         d.subject = str(data["subject"])[:2000]
     if "bodyHtml" in data:
@@ -1371,7 +1529,8 @@ def draft_for_message(request, pk: int):
 
 LONG_POLL = 290.0  # Kern Mail on Android holds up to ~4.5 min; the web app asks for 20 s
 LONG_POLL_TICK = 0.25  # first 20 s: answer within a quarter second
-LONG_POLL_SLOW_TICK = 1.0  # after that (a phone's long hold): within a second
+LONG_POLL_SLOW_TICK = 0.5  # after that (a phone's long hold): within half a second, so a read on
+# the web clears the phone's notification right away
 
 
 @api()
@@ -1460,7 +1619,9 @@ def open_by_key(request):
 def today(request):
     """Mail for Kern's Home: what's waiting, coming back and arriving today."""
     from .. import account
-    from ..models import Draft, DraftStatus, FollowUp, FollowUpStatus, Shipment, Snooze, SnoozeStatus
+    from ..models import Draft, DraftStatus, FollowUp, FollowUpStatus, Snooze, SnoozeStatus
+
+    from ..names import display_name
 
     if not account.cfg()["USERNAME"]:
         return {"connected": False}
@@ -1474,16 +1635,89 @@ def today(request):
     if inbox:
         for m in (Message.objects.filter(folder=inbox, seen=False).exclude(risk_level="high")
                   .order_by("-sort_date").select_related("thread")[:5]):
-            important.append({"threadId": m.thread_id, "subject": m.subject, "from": m.from_name or m.from_addr,
+            important.append({"threadId": m.thread_id, "subject": m.subject,
+                              "from": display_name({"name": m.from_name, "addr": m.from_addr}),
                               "date": iso(m.sort_date)})
     snoozes = [{"threadId": s.thread_id, "subject": s.subject, "until": iso(s.wake_at)}
                for s in Snooze.objects.filter(status=SnoozeStatus.ACTIVE, wake_at__lte=end).order_by("wake_at")[:10]]
     nudged = [{"threadId": f.thread_id, "subject": f.subject, "id": f.pk}
               for f in FollowUp.objects.filter(status=FollowUpStatus.NUDGED).order_by("due_at")[:10]]
+    # Only what really happens today: out for delivery today, ready to collect, or due today.
+    # A package whose day has passed without news is not "arriving today" (see _settled).
     ships = []
-    for s in Shipment.objects.filter(hidden=False).exclude(status="delivered"):
-        if s.status in ("out_for_delivery", "ready_for_pickup") or (s.expected and s.expected <= end.date()):
-            ships.append(shipment_json(s))
+    today_date = timezone.localdate()
+    active, _ = package_buckets(now)
+    for p in active:
+        at = datetime.fromisoformat(p["statusAt"]) if p["statusAt"] else None
+        fresh = at is not None and timezone.localtime(at).date() >= today_date - timedelta(days=0 if p["status"] == "out_for_delivery" else 7)
+        if (p["status"] in ("out_for_delivery", "ready_for_pickup") and fresh) or p["expected"] == today_date.isoformat():
+            ships.append(p)
     scheduled = Draft.objects.filter(status=DraftStatus.SCHEDULED, send_at__lte=end).count()
     return {"connected": True, "unread": unread, "latest": important, "snoozes": snoozes, "nudged": nudged,
             "packages": ships[:10], "scheduledToday": scheduled}
+
+
+# --- send mail as (mail/identities.py) --------------------------------------------------
+
+@api(("GET", "POST"))
+def identities_view(request):
+    from .. import identities
+
+    if request.method == "POST":
+        try:
+            i = identities.save(body(request))
+        except identities.IdentityError as exc:
+            raise ApiError(str(exc)) from exc
+        return identities.as_json(i)
+    return identities.all_json()
+
+
+@api(("PATCH", "DELETE"))
+def identity_detail(request, pk: int):
+    from .. import identities
+
+    i = MailIdentity.objects.get(pk=pk)
+    if request.method == "DELETE":
+        i.delete()
+        identities.invalidate()
+        return {"ok": True}
+    try:
+        i = identities.save(body(request), i)
+    except identities.IdentityError as exc:
+        raise ApiError(str(exc)) from exc
+    return identities.as_json(i)
+
+
+@api(("POST",))
+def identity_test(request, pk: int):
+    from .. import identities
+
+    i = MailIdentity.objects.get(pk=pk)
+    try:
+        identities.test(i)
+    except identities.IdentityError as exc:
+        raise ApiError(str(exc)) from exc
+    return {"ok": True}
+
+
+@api()
+def mail_stats(request):
+    from .. import stats
+
+    return stats.compute(int_or_none(request.GET.get("days")) or 90)
+
+
+@api()
+def map_tile(request, theme: str, z: int, x: int, y: int):
+    """Map tiles for the package map, fetched and cached by the server (mail/geo.py)."""
+    from .. import geo
+
+    try:
+        data = geo.tile(theme, z, x, y)
+    except ValueError as exc:
+        raise ApiError(str(exc), 404) from exc
+    except OSError as exc:
+        raise ApiError("The map isn't available right now.", 502) from exc
+    resp = HttpResponse(data, content_type="image/png")
+    resp["Cache-Control"] = "private, max-age=604800"
+    return resp

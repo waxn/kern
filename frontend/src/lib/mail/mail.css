@@ -41,6 +41,7 @@
 	--ui: var(--font-sans);
 	--mono: var(--font-mono);
 	--row-pad: 9px;
+	--mail-pad: 16px; /* one horizontal padding for the list, its header and the conversation */
 	--sidebar-w: 212px;
 	--list-w: clamp(320px, 36%, 460px);
 	height: 100%;

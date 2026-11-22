@@ -313,6 +313,8 @@ class Draft(models.Model):
     forward_attachment_ids = models.JSONField(default=list)
     # "Nudge me if no reply by ..." chosen in the composer.
     followup_at = models.DateTimeField(null=True, blank=True)
+    # Send as another address of yours (MailIdentity); empty: the account's own address.
+    from_addr = models.CharField(max_length=320, blank=True, default="")
     created = models.DateTimeField(auto_now_add=True)
     updated = models.DateTimeField(auto_now=True)
 
@@ -393,6 +395,13 @@ class Shipment(models.Model):
     message_keys = models.JSONField(default=list)
     thread = models.ForeignKey(Thread, on_delete=models.SET_NULL, null=True, blank=True, related_name="shipments")
     hidden = models.BooleanField(default=False)
+    # Live tracking (mail/tracking.py): the carrier's latest scans.
+    live = models.BooleanField(default=False)
+    live_events = models.JSONField(default=list)
+    location = models.CharField(max_length=120, blank=True, default="")
+    # For the map: {"origin": str, "destination": str, "points": [[lat, lon, place], ...]} oldest first.
+    route = models.JSONField(default=dict)
+    checked_at = models.DateTimeField(null=True, blank=True)
     first_seen = models.DateTimeField(auto_now_add=True)
     updated = models.DateTimeField(auto_now=True)
 
@@ -457,3 +466,30 @@ class MailAccount(models.Model):
     created = models.DateTimeField(auto_now_add=True)
     updated = models.DateTimeField(auto_now=True)
 
+
+
+class MailIdentity(models.Model):
+    """Another address you send as ("Send mail as"), e.g. a Gmail address whose mail is
+    forwarded to this mailbox. With its own SMTP server the message goes out through that
+    server (so it's signed by that provider); without one it goes through the account's own
+    server. Either way the sent copy is saved in this mailbox's Sent folder."""
+
+    address = models.CharField(max_length=320, unique=True)
+    name = models.CharField(max_length=200, blank=True, default="")
+    smtp_host = models.CharField(max_length=255, blank=True, default="")
+    smtp_port = models.IntegerField(default=465)
+    smtp_security = models.CharField(max_length=16, default="ssl")  # ssl | starttls
+    login = models.CharField(max_length=320, blank=True, default="")
+    password_enc = models.TextField(blank=True, default="")
+    tls_verify = models.BooleanField(default=True)
+    created = models.DateTimeField(auto_now_add=True)
+    updated = models.DateTimeField(auto_now=True)
+
+
+class GeoPlace(models.Model):
+    """A scan location ("Malmö, Sweden") and where it is, so each place is looked up once."""
+
+    name = models.CharField(max_length=200, unique=True)
+    lat = models.FloatField(null=True)
+    lon = models.FloatField(null=True)
+    looked_up = models.DateTimeField(auto_now=True)

@@ -123,6 +123,7 @@ class SyncWorker(ctx: Context, params: WorkerParameters) : CoroutineWorker(ctx, 
             if (t == null || !t.connected) { s.mailUnread = null; return }
             val before = s.mailUnread
             if (before != null && t.unread > before) Notifications.showMail(ctx, t.unread - before)
+            if (t.unread == 0) Notifications.cancel(ctx, Notifications.ID_MAIL) // read elsewhere
             if (t.unread == 0) Notifications.cancel(ctx, Notifications.ID_MAIL)
             s.mailUnread = t.unread
         }

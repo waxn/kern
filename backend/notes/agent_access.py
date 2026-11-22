@@ -25,6 +25,8 @@ WRITE_BOOKMARKS = "bookmarks.write"
 SCOPES = {
     "search_mail": READ_MAIL,
     "read_email": READ_MAIL,
+    "read_email_thread": READ_MAIL,
+    "read_email_headers": READ_MAIL,
     "add_bookmark": WRITE_BOOKMARKS,
     "update_bookmark": WRITE_BOOKMARKS,
 }
@@ -66,6 +68,13 @@ TOOLS = [
           {"query": S}, ["query"]),
     _tool("read_email", "Read one email (read only) by the email_id from search_mail. Asks the user first.",
           {"email_id": {"type": "integer"}}, ["email_id"]),
+    _tool("read_email_thread", "Read a whole email conversation (read only) by its thread_id: every message with "
+          "its email_id, sender, recipients, date and text. Asks the user first.",
+          {"thread_id": {"type": "integer"}}, ["thread_id"]),
+    _tool("read_email_headers", "Read the full raw headers of one email (read only): Received chain, "
+          "Authentication-Results (SPF, DKIM, DMARC), Return-Path, Reply-To, Message-ID, List-* and the rest. "
+          "Use it to check where a message really came from or whether it is spoofed. Asks the user first.",
+          {"email_id": {"type": "integer"}}, ["email_id"]),
 ]
 
 
@@ -106,6 +115,22 @@ def describe(name: str, args: dict) -> str:
             if m:
                 return f"Open the email “{one_line(m.subject or '(no subject)', 100)}” from {_addr(m.from_name, m.from_addr) or 'unknown'}"
             return "Open an email"
+        if name == "read_email_headers":
+            from mail.models import Message
+            m = Message.objects.filter(id=int(args.get("email_id"))).first()
+            if m:
+                return f"Look at the headers of “{one_line(m.subject or '(no subject)', 100)}” from {_addr(m.from_name, m.from_addr) or 'unknown'}"
+            return "Look at an email's headers"
+        if name == "read_email_thread":
+            from mail.models import Message, Thread
+            t = Thread.objects.filter(id=int(args.get("thread_id"))).first()
+            if t:
+                first = Message.objects.filter(thread=t).order_by("sort_date").first()
+                who = _addr(first.from_name, first.from_addr) if first else ""
+                n = t.message_count
+                return (f"Read the conversation “{one_line(t.subject or '(no subject)', 100)}”"
+                        + (f" from {who}" if who else "") + (f" ({n} messages)" if n > 1 else ""))
+            return "Read an email conversation"
         if name == "add_bookmark":
             return f"Save {one_line(str(args.get('url', '')), 160)} as a bookmark"
         if name == "update_bookmark":
@@ -235,8 +260,7 @@ class AccessTools:
                 "unread": not m.seen, "snippet": one_line(m.snippet, 200)} for m in rows]
         return {"emails": out, "note": UNTRUSTED} if out else "No emails match."
 
-    def read_email(self, email_id):
-        self._mail("read_email")
+    def _email(self, email_id):
         from mail.models import Message
         try:
             m = Message.objects.select_related("folder").filter(id=int(email_id)).first()
@@ -244,14 +268,72 @@ class AccessTools:
             m = None
         if not m:
             raise AccessError("No email with that id.")
+        return m
+
+    def read_email(self, email_id):
+        self._mail("read_email")
+        m = self._email(email_id)
         self.mail_seen = True
-        addrs = lambda xs: ", ".join(_addr(x.get("name", ""), x.get("addr", "")) for x in xs or [] if isinstance(x, dict))
         body = m.body_text or m.snippet
-        return {"email_id": m.id, "from": _addr(m.from_name, m.from_addr), "to": addrs(m.to_addrs), "cc": addrs(m.cc_addrs),
-                "subject": m.subject, "date": m.sort_date.isoformat() if m.sort_date else None,
-                "folder": m.folder.display_name, "attachments": [a.filename for a in m.attachments.all()],
-                "phishing_risk": m.risk_level or "none", "body": body[:MAX_BODY],
-                "truncated": len(body) > MAX_BODY, "note": UNTRUSTED}
+        return {**_email_json(m), "body": body[:MAX_BODY], "truncated": len(body) > MAX_BODY,
+                "hint": "read_email_headers shows the full header block.", "note": UNTRUSTED}
+
+    def read_email_thread(self, thread_id):
+        self._mail("read_email_thread")
+        from mail.models import FolderRole, Message, Thread
+        try:
+            t = Thread.objects.filter(id=int(thread_id)).first()
+        except (TypeError, ValueError):
+            t = None
+        if not t:
+            raise AccessError("No conversation with that id.")
+        self.mail_seen = True
+        msgs = list(Message.objects.select_related("folder").filter(thread=t)
+                    .exclude(folder__role__in=[FolderRole.TRASH, FolderRole.JUNK]).order_by("sort_date", "id")) \
+            or list(Message.objects.select_related("folder").filter(thread=t).order_by("sort_date", "id"))
+        seen, out, budget = set(), [], MAX_THREAD
+        for m in reversed(msgs):  # newest kept in full when it's long
+            key = (m.message_key, m.blob_id)
+            if key in seen:
+                continue
+            seen.add(key)
+            body = (m.body_text or m.snippet or "").strip()
+            cut = body[:min(PER_MESSAGE, max(0, budget))]
+            budget -= len(cut)
+            out.append({**_email_json(m), "body": cut, "truncated": len(cut) < len(body)})
+        out.reverse()
+        return {"thread_id": t.id, "subject": t.subject, "messages": out, "note": UNTRUSTED}
+
+    def read_email_headers(self, email_id):
+        self._mail("read_email_headers")
+        from mail import parsing, store
+        m = self._email(email_id)
+        self.mail_seen = True
+        raw = store.get(m.blob_id)
+        end = raw.find(b"\r\n\r\n")
+        if end < 0:
+            end = raw.find(b"\n\n")
+        head = raw[: end if end >= 0 else min(len(raw), MAX_HEADERS)][:MAX_HEADERS]
+        text, _ = parsing.decode_bytes(head, "utf-8")
+        return {"email_id": m.id, "subject": m.subject, "headers": text.replace("\r\n", "\n"),
+                "authentication": m.auth_results or {}, "phishing_risk": m.risk_level or "none",
+                "note": "Headers are written partly by the sender and partly by each server on the way; only "
+                        "Authentication-Results from the user's own provider can be trusted. " + UNTRUSTED}
+
+
+MAX_THREAD = 24_000
+PER_MESSAGE = 8_000
+MAX_HEADERS = 30_000
+
+
+def _email_json(m) -> dict:
+    addrs = lambda xs: ", ".join(_addr(x.get("name", ""), x.get("addr", "")) for x in xs or [] if isinstance(x, dict))  # noqa: E731
+    return {"email_id": m.id, "thread_id": m.thread_id, "from": _addr(m.from_name, m.from_addr), "to": addrs(m.to_addrs),
+            "cc": addrs(m.cc_addrs), "reply_to": addrs(m.reply_to), "subject": m.subject,
+            "date": m.sort_date.isoformat() if m.sort_date else None, "folder": m.folder.display_name,
+            "unread": not m.seen, "attachments": [a.filename for a in m.attachments.all()],
+            "phishing_risk": m.risk_level or "none", "message_id": m.message_id,
+            "list_unsubscribe": bool((m.headers or {}).get("list-unsubscribe"))}
 
 
 def new_pending_id() -> str:

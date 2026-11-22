@@ -48,27 +48,58 @@ on the local network** (off by default, see Security).
   out) and shows them while the fresh copy loads. `threads.rebuild_thread_index()` rebuilds the
   index if it ever needs repairing.
 - **Mail and Notes are two modes** (the switch at the top of the sidebar, Alt+M). Each has its
-  own sidebar; Home, Settings and Intelligence belong to both.
+  own sidebar with the same top (hide-sidebar, Kern, the switch, then Search, New and Home on the
+  same rows), so switching moves nothing; Home, Settings and Intelligence belong to both.
 - **Intelligence on an email** (the sparkle in a conversation): the assistant gets that
-  conversation's text, marked as untrusted data, from a two-factor session only. It can make
-  tasks, pages and flashcards from it; it has no way to send, move or delete mail.
-- **Dark emails**: in the dark theme HTML mail is inverted to light-on-dark (pictures keep their
-  colors; mail that's already dark is left alone). The sun button on a message shows its
-  original colors. Settings → Mail → Dark emails turns it off.
+  conversation's text without asking (you picked it), marked as untrusted data, from a two-factor
+  session only. It can make tasks, pages and flashcards from it; it has no way to send,
+  move or delete mail.
+- **Emails sit on Kern's background.** The server fits each HTML email's colors to the theme
+  (`backend/mail/colors.py`): white and grey "pages" become transparent so the email reads on the
+  same background as the rest of the app, and in the dark theme light backgrounds are darkened and
+  dark text lightened, keeping their hues (pictures are untouched; nothing is inverted). Mail that's
+  dark already keeps its colors (only its black page goes), and mail with its own dark mode
+  (`prefers-color-scheme`) uses it. The sun button on a message shows its original colors.
+  Settings → Mail → Fit emails to the theme turns it off. Web and Android get the same result.
 - **Kern Mail for Android** (`android/`, the `mail` flavor) is a mail-only app with instant
   notifications: a foreground service long-polls the same feed (holds of 50 s growing to about
   4.5 min when nothing on the way cuts them short), so there's no Firebase. Notifications show
   sender and subject (only "New mail" on the lock screen) with Archive and Mark read.
-- **Search** uses SQLite FTS5 (subject, people, attachment names, body) plus Gmail-style
-  operators: `from:` `to:` `subject:` `in:` `label:` `has:attachment` `is:unread` `before:`
-  `after:` `filename:` `"exact words"` `-word`.
+- **Search** (the sidebar's Search row, Ctrl+K or `/`, in the same place as Notes' search) shows
+  results while you type: people (Tab completes `from:`), labels, folders and the best
+  conversations with the words that matched. Enter shows every result, newest first or best
+  match first (bm25, recent mail boosted), with filter chips. It uses SQLite FTS5 (subject, people,
+  attachment names, body; every word matches as a prefix, accents folded) plus operators: `from:`
+  (`from:me`) `to:` (`to:me`) `cc:` `subject:` `domain:` `list:` `in:` `label:`
+  `has:attachment|pdf|image|document|spreadsheet|presentation|calendar|link` `is:unread|read|starred|
+  answered|snoozed|muted` `before:` `after:` `older_than:2w` `newer_than:3d` `larger:5M` `smaller:100K`
+  `filename:` `risk:high` `"exact words"` `-word` `a OR b`.
 - **Tasks.** `t` (or the ✓ button) on a conversation makes a Kern task that links back to the
   email. "Nudge me if nobody replies" also creates a task due on that day; a reply completes it,
   completing or deleting the task ends the nudge, and moving the task's date moves the nudge.
   Home shows unread mail, nudges, snoozed mail coming back today, packages arriving today and
   scheduled sends.
 - **Packages** are detected from shipping emails by rules (tracking-number formats with check
-  digits, status words). Kern never contacts a carrier; "Track" is just a link.
+  digits, status words) and shown small at the top of the Inbox and on the Packages page (web and
+  Android). **Live tracking** (opt-in, Settings → Mail → Package tracking) asks Parcels
+  (parcelsapp.com, API v5; free for 300 packages a month) for the carrier's real status about every
+  90 minutes (25 on delivery day) from the mail worker (`backend/mail/tracking.py`); only tracking
+  numbers, and your country for numbers that need one, are sent. Each package counts once a month
+  however often it's checked; Kern counts what it sent (Parcels has no usage endpoint) and shows
+  what's left next to the key, using Parcels' own figures when it reports them. A **map** on each
+  package draws a line through its scans (places looked up once with OpenStreetMap's Nominatim,
+  `backend/mail/geo.py`) on CARTO tiles matching the theme, fetched and cached by the server, so
+  no key is needed and the browser never contacts them. Without live tracking, a package with no
+  news two days after it was due counts as "probably delivered" instead of staying on the way.
+- **Send mail as** (Settings → Mail): other addresses you send from, e.g. a Gmail that forwards to
+  this mailbox. With the address's own SMTP server (Gmail: smtp.gmail.com, an app password) mail
+  goes out through it and one copy is saved in Sent here; replies default to the address the
+  email was written to (`backend/mail/identities.py`).
+- **Stats** (`/mail/stats`): received and sent per day, time of day, weekdays, read rate, typical
+  reply time, newsletters, top senders and domains, mailbox size.
+- **Intelligence** asks before reading mail: searching, opening an email or a conversation
+  (`read_email_thread`) and a message's full headers (`read_email_headers`) show a permission
+  request first. The exception is "Ask about this email", where picking the conversation is the OK.
 - **Backups** (Settings → Data & backups) keep your mail *settings and the things you made*
   (snoozes, follow-ups, templates, block rules, labels) but leave the downloaded messages out:
   they're on the mail server, and email content shouldn't spread to every backup copy.
@@ -116,7 +147,13 @@ Mail makes Kern a much more valuable target, so these are deliberate:
   is sent to an AI provider.
 - **One-click unsubscribe** (RFC 8058) is only offered for DKIM-verified senders and goes
   through the same public-address check as the image proxy.
-- Desktop and Android notifications say only "New mail", never the sender or subject.
+- Desktop notifications say only "New mail", never the sender or subject (Android shows them
+  only when unlocked, if you allow it). A conversation read anywhere else takes its Android
+  notification away within about a second.
+- **Live package tracking** sends tracking numbers (and your country) to Parcels, only after you
+  add a key; the key is encrypted like mail passwords. The map sends scan place names to
+  Nominatim and fetches tiles from CARTO, from the server only. **Send-as** passwords are too, and their SMTP
+  hosts must be public like the account's.
 
 **Read carefully** if you review the code: `backend/mail/sanitize.py`,
 `frontend/src/lib/mail/emailFrame.js`, `backend/mail/api/guard.py`, `backend/accounts/totp.py`,

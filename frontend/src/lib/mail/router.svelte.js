@@ -6,7 +6,7 @@
 
 import { goto } from '$app/navigation';
 
-export const PAGES = ['packages', 'scheduled', 'files', 'blocklist'];
+export const PAGES = ['packages', 'scheduled', 'files', 'blocklist', 'stats'];
 export const route = $state({ page: 'mail', view: 'inbox', threadId: null, q: '' });
 
 export function parse(pathname, search) {

@@ -28,40 +28,43 @@ export function frameCsp(origin) {
   ].join('; ');
 }
 
-const BASE_CSS = `
-  html, body { margin: 0; padding: 0; background: #ffffff; color: #222222; }
-  body { font: 15px/1.5 system-ui, Cantarell, "Noto Sans", Ubuntu, "DejaVu Sans", Arial, sans-serif;
-         padding: 4px 2px 12px; overflow-wrap: anywhere; word-break: break-word; }
+// The email sits on Kern's own page: no white sheet. Its colors were already fitted to the
+// theme by the server (backend/mail/colors.py), so the frame only supplies Kern's text color
+// and a transparent background. "Original colors" draws it the way it was sent, on white.
+// color-scheme matches Kern's theme: a frame whose scheme differs from the page gets an opaque
+// backdrop, and emails with their own dark mode (prefers-color-scheme) pick theirs from it.
+const THEMES = {
+  dark: { text: '#e7e5e0', link: '#8ab4f8', quote: '#3a3a40', muted: '#a5a39d' },
+  light: { text: '#23221f', link: '#2f4ad0', quote: '#d3cfc6', muted: '#696761' },
+  original: { text: '#222222', link: '#2f4ad0', quote: '#c9c9cf', muted: '#555555' },
+};
+
+function baseCss(look) {
+  const t = THEMES[look] || THEMES.light;
+  const page = look === 'original' ? '#ffffff' : 'transparent';
+  return `
+  html, body { margin: 0; padding: 0; background: ${page}; color: ${t.text}; }
+  body { font: 15px/1.55 'Inter Variable', system-ui, -apple-system, 'Segoe UI', Cantarell, 'Noto Sans', Arial, sans-serif;
+         padding: 2px 0 8px; overflow-wrap: anywhere; word-break: break-word; }
   img { max-width: 100%; height: auto; }
   table { max-width: 100%; }
   pre { white-space: pre-wrap; }
-  blockquote[type=cite] { margin: 0 0 0 .8ex; border-left: 2px solid #c9c9cf; padding-left: 1ex; color: #555; }
-  a { color: #2f4ad0; }
+  blockquote[type=cite] { margin: 0 0 0 .8ex; border-left: 2px solid ${t.quote}; padding-left: 1ex; color: ${t.muted}; }
+  a { color: ${t.link}; }
 `;
+}
 
-// Dark emails: the whole page is inverted (light text on a dark page) and
-// pictures are inverted back so they keep their colors. Toggled by the
-// "kern-dark" class on <html>, so switching back to the original colors
-// doesn't reload the message.
-export const DARK_PAGE = '#ebebe9'; // inverted: #141416, next to Kern's dark surfaces
-const DARK_CSS = `
-  html.kern-dark { filter: invert(1) hue-rotate(180deg); background: ${DARK_PAGE}; }
-  html.kern-dark body { background-color: ${DARK_PAGE}; }
-  html.kern-dark img, html.kern-dark video, html.kern-dark picture, html.kern-dark svg image,
-  html.kern-dark [background], html.kern-dark [style*="background-image"], html.kern-dark [style*="background: url"] {
-    filter: invert(1) hue-rotate(180deg);
-  }
-  html.kern-dark [background] img, html.kern-dark [style*="background-image"] img { filter: none; }
-`;
-
-export function buildSrcdoc(html, origin, { dark = false } = {}) {
+// look: 'dark' | 'light' (fitted to Kern's theme) or 'original' (as sent, on white).
+export function buildSrcdoc(html, origin, { look = 'light' } = {}) {
   const csp = frameCsp(origin).replace(/"/g, '&quot;');
+  const scheme = look === 'dark' ? 'dark' : 'light';
   return (
-    `<!doctype html><html${dark ? ' class="kern-dark"' : ''}><head><meta charset="utf-8">` +
+    `<!doctype html><html style="color-scheme:${scheme}"><head><meta charset="utf-8">` +
     `<meta http-equiv="Content-Security-Policy" content="${csp}">` +
+    `<meta name="color-scheme" content="${scheme}">` +
     '<meta name="referrer" content="no-referrer">' +
     '<base target="_blank">' +
-    `<style>${BASE_CSS}${DARK_CSS}</style></head><body>` +
+    `<style>${baseCss(look)}</style></head><body>` +
     html +
     '</body></html>'
   );
@@ -127,56 +130,4 @@ export function collapseQuotes(doc) {
   doc.head.append(style);
   body.classList.add('mf-collapsed');
   return true;
-}
-
-// --- is this email already dark? ------------------------------------------------
-// Inverting a dark newsletter would make it bright, so those keep their colors.
-export function parseColor(c) {
-  if (!c) return null;
-  c = String(c).trim().toLowerCase();
-  const named = { black: [0, 0, 0], white: [255, 255, 255] };
-  if (named[c]) return named[c];
-  let m = c.match(/^#([0-9a-f]{3}|[0-9a-f]{6})\b/);
-  if (m) {
-    const h = m[1].length === 3 ? m[1].replace(/./g, '$&$&') : m[1];
-    return [0, 2, 4].map((i) => parseInt(h.slice(i, i + 2), 16));
-  }
-  m = c.match(/^rgba?\(\s*(\d+)[\s,]+(\d+)[\s,]+(\d+)(?:[\s,/]+([\d.]+%?))?/);
-  if (m) {
-    if (m[4] !== undefined && parseFloat(m[4]) === 0) return null; // transparent
-    return [m[1], m[2], m[3]].map(Number);
-  }
-  return null;
-}
-
-function luminance([r, g, b]) {
-  return (0.2126 * r + 0.7152 * g + 0.0722 * b) / 255;
-}
-
-function bgOf(el) {
-  const attr = el.getAttribute?.('bgcolor');
-  if (attr) return parseColor(attr);
-  const st = el.style;
-  if (!st) return null;
-  return parseColor(st.backgroundColor) || parseColor((st.background || '').split(/\s+(?![^(]*\))/)[0]);
-}
-
-export function looksDark(html) {
-  try {
-    const d = new DOMParser().parseFromString(html, 'text/html');
-    const css = [...d.querySelectorAll('style')].map((x) => x.textContent || '').join('\n');
-    const bodyRule = css.match(/(?:^|[}\s,])body\s*\{[^}]*background(?:-color)?\s*:\s*([^;}]+)/i);
-    if (bodyRule) {
-      const c = parseColor(bodyRule[1]);
-      if (c) return luminance(c) < 0.4;
-    }
-    const candidates = [d.body, ...d.body.querySelectorAll(':scope > *, :scope > * > *, :scope > * > * > *')].slice(0, 30);
-    for (const el of candidates) {
-      const c = bgOf(el);
-      if (c) return luminance(c) < 0.4;
-    }
-  } catch {
-    /* not parseable: treat as light */
-  }
-  return false;
 }

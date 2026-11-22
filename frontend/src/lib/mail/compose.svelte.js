@@ -29,6 +29,7 @@ export function openCompose(init = {}) {
     mode: init.mode || 'new',
     inReplyTo: init.inReplyTo || null,
     threadId: init.threadId || null,
+    from: init.from || '',
     to: init.to || [],
     cc: init.cc || [],
     bcc: init.bcc || [],
@@ -61,7 +62,7 @@ export async function openReply(message, mode, { docked } = {}) {
     openCompose({
       docked: inline,
       threadId: message.threadId,
-      mode: pre.mode, inReplyTo: pre.in_reply_to, to: pre.to, cc: pre.cc, subject: pre.subject,
+      mode: pre.mode, inReplyTo: pre.in_reply_to, to: pre.to, cc: pre.cc, subject: pre.subject, from: pre.from || '',
       bodyHtml: account.signature_on_replies && account.signature.trim()
         ? '<p><br></p>' + signatureHtml() + pre.body_html
         : pre.body_html,
@@ -85,7 +86,7 @@ export async function openDraft(draftIdOrMessage) {
     openCompose({
       draftId: d.id, mode: d.mode, inReplyTo: d.inReplyTo, to: d.to, cc: d.cc, bcc: d.bcc,
       subject: d.subject, bodyHtml: d.bodyHtml, uploads: d.uploads, forwardAttachments: d.forwardAttachments,
-      followupAt: d.followupAt,
+      followupAt: d.followupAt, from: d.from || '',
     });
   } catch (e) {
     errorToast(e);
@@ -94,6 +95,7 @@ export async function openDraft(draftIdOrMessage) {
 
 function payload(c) {
   return {
+    from: c.from || '',
     to: c.to, cc: c.cc, bcc: c.bcc, subject: c.subject, bodyHtml: c.bodyHtml,
     forwardAttachments: c.forwardAttachments.map((a) => a.id),
     followupAt: c.followupAt || '',
@@ -197,7 +199,7 @@ function reopen(d, threadId = null) {
   openCompose({
     draftId: d.id, mode: d.mode, inReplyTo: d.inReplyTo, to: d.to, cc: d.cc, bcc: d.bcc, threadId,
     subject: d.subject, bodyHtml: d.bodyHtml, uploads: d.uploads, forwardAttachments: d.forwardAttachments,
-    followupAt: d.followupAt,
+    followupAt: d.followupAt, from: d.from || '',
   });
 }
 

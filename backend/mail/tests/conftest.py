@@ -28,6 +28,9 @@ def _fresh(settings, tmp_path, db):
     settings.MEDIA_ROOT = tmp_path / "media"
     stages._contact_cache.clear()
     account._cache.clear()
+    from mail import identities
+
+    identities._cache.clear()
     secretbox.reset_for_tests()
     # The user's mail account: the corpus is addressed to ME.
     MailAccount.objects.create(pk=1, address=ME, imap_host="imap.test", smtp_host="smtp.test",

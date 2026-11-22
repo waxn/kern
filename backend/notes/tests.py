@@ -831,7 +831,7 @@ class AgentPermissionTests(TestCase):
         from notes import agent, agent_access
         names = {t["name"] for t in (*agent.TOOLS, *agent.WEB_TOOLS)}
         mailish = {n for n in names if "mail" in n or "email" in n}
-        self.assertEqual(mailish, {"search_mail", "read_email"})
+        self.assertEqual(mailish, {"search_mail", "read_email", "read_email_thread", "read_email_headers"})
         self.assertEqual(agent_access.MAIL_TOOLS, mailish)
         self.assertTrue(all(agent_access.SCOPES[n] == agent_access.READ_MAIL for n in mailish))
         run = agent.Run(granted={agent_access.READ_MAIL, agent_access.WRITE_BOOKMARKS}, mail_ok=True)
@@ -934,6 +934,16 @@ class AgentPermissionTests(TestCase):
         self.assertFalse(tools & {"web_search", "web_fetch"})
         from notes.models import Chat
         self.assertTrue(Chat.objects.get(id=self.chat).permissions.get("mail_seen"))
+
+    def test_headers_need_permission_too(self):
+        from notes import agent, agent_access
+        m = self.mail()
+        self.assertIn("Not allowed", self.call(agent.Run(mail_ok=True), "read_email_headers", email_id=m.id)["error"])
+        run = agent.Run(granted={agent_access.READ_MAIL}, mail_ok=True)
+        h = self.call(run, "read_email_headers", email_id=m.id)
+        self.assertIn("Subject:", h["headers"])
+        self.assertIn("From:", h["headers"])
+        self.assertTrue(run.mail_seen)
 
     def test_chat_asks_before_reading_mail_and_respects_the_answer(self):
         self.c.put("/api/ai/config", {"provider": "ollama", "model": "llama"}, format="json")

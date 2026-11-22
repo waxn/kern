@@ -71,12 +71,28 @@ HTML_WRAPPER = (
 )
 
 
+def _sender(draft: Draft) -> tuple[str, str]:
+    """(address, display name) the message is from: a "send as" address when one is picked."""
+    from . import identities, preferences
+
+    account_addr = _mail_cfg()["USERNAME"]
+    if draft.from_addr and draft.from_addr.lower() != account_addr.lower():
+        i = identities.find(draft.from_addr)
+        if i is not None:
+            return i.address, i.name or preferences.from_name() or ""
+        aliases = {a.lower(): a for a in _mail_cfg()["ALIASES"]}
+        if draft.from_addr.lower() in aliases:
+            return aliases[draft.from_addr.lower()], preferences.from_name() or ""
+    return account_addr, preferences.from_name() or ""
+
+
 def build_mime(draft: Draft, *, for_draft: bool = False) -> bytes:
     cfg = _mail_cfg()
     msg = EmailMessage(policy=SMTP)
     from . import preferences
 
-    msg["From"] = email.utils.formataddr((preferences.from_name() or "", cfg["USERNAME"]))
+    sender, name = _sender(draft)
+    msg["From"] = email.utils.formataddr((name, sender))
     if draft.to_addrs:
         msg["To"] = _fmt(draft.to_addrs)
     if draft.cc_addrs:
@@ -118,7 +134,7 @@ def build_for_send(draft: Draft) -> tuple[bytes, str, list[str]]:
     recipients = [a["addr"] for a in draft.to_addrs + draft.cc_addrs + draft.bcc_addrs]
     if not recipients:
         raise ComposeError("No recipients.")
-    return build_mime(draft), _mail_cfg()["USERNAME"], recipients
+    return build_mime(draft), _sender(draft)[0], recipients
 
 
 MAX_SCHEDULE = timedelta(days=366)
@@ -193,7 +209,11 @@ def after_send(draft: Draft, raw: bytes) -> None:
     with transaction.atomic():
         draft.status = DraftStatus.SENT
         draft.save(update_fields=["status"])
-        if not _mail_cfg()["SERVER_SAVES_SENT"]:
+        from . import identities
+
+        # The account's server keeps its own copy only of mail that went through it.
+        through_other = identities.own_server(_sender(draft)[0]) is not None
+        if through_other or not _mail_cfg()["SERVER_SAVES_SENT"]:
             blob = store.put(raw)
             outbox.enqueue("append", folder=actions.role_folder(FolderRole.SENT).pk,
                            blob=blob.sha256, flags=["\\Seen"])
@@ -242,7 +262,13 @@ def forward_header_html(m: Message) -> str:
 
 
 def compose_prefill(m: Message, mode: str, quoted_body_html: str) -> dict:
+    from . import identities
+
     me = my_addresses()
+    # Answer from the address it was sent to (a "send as" address, e.g. a forwarded Gmail).
+    to_me = [a.get("addr", "") for a in (m.to_addrs or []) + (m.cc_addrs or [])]
+    to_me += [str((m.headers or {}).get(h, "")).strip("<> ") for h in ("delivered-to", "x-forwarded-to", "x-original-to")]
+    reply_from = identities.for_reply(to_me)
     refs = list(m.references or [])
     if m.message_id and m.message_id not in refs:
         refs.append(m.message_id)
@@ -251,6 +277,7 @@ def compose_prefill(m: Message, mode: str, quoted_body_html: str) -> dict:
             "mode": "forward",
             "to": [], "cc": [],
             "subject": _prefixed(m.subject, "Fwd"),
+            "from": reply_from,
             "body_html": forward_header_html(m) + quoted_body_html,
             "in_reply_to": m.pk,
             "references": [],
@@ -276,6 +303,7 @@ def compose_prefill(m: Message, mode: str, quoted_body_html: str) -> dict:
         "to": to,
         "cc": cc,
         "subject": _prefixed(m.subject, "Re"),
+        "from": reply_from,
         "body_html": quote_html(m, quoted_body_html),
         "in_reply_to": m.pk,
         "references": refs,

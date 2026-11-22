@@ -2,7 +2,7 @@
   // @ts-nocheck: plain JavaScript (ported from Manifest).
   // Mail's icon names, drawn with Kern's icon set (Lucide), so mail looks like the rest of Kern.
   import {
-    AlarmClock, Archive, ArrowLeft, Ban, Bell, BellOff, Bold, Calendar, Check, ChevronDown, ChevronRight, Clock, Code,
+    AlarmClock, Archive, ArrowLeft, Ban, Bell, BellOff, ChartColumn, Bold, Calendar, Check, ChevronDown, ChevronRight, Clock, Code,
     Copy, Download, Ellipsis, ExternalLink, Eye, File, Folder, FolderInput, Forward, Image, Inbox, Info, Italic,
     Keyboard, Link, List, ListOrdered, LogOut, Mail, MailOpen, MailX, Maximize2, Menu, Minimize2, Minus, Moon, Package,
     Columns2, PanelTop, Palette, Paperclip, Pencil, Pin, Play, Plus, Quote, RefreshCw, RemoveFormatting, Reply, ReplyAll, Rows3, Search, Send,
@@ -23,7 +23,7 @@
     keyboard: Keyboard, calendar: Calendar, pin: Pin, info: Info, eye: Eye, refresh: RefreshCw,
     chevronDown: ChevronDown, chevronRight: ChevronRight, package: Package, truck: Truck, copy: Copy,
     external: ExternalLink, mute: BellOff, bell: Bell, prompt: Sparkles, undo: Undo2, palette: Palette, clock: Clock,
-    alarm: AlarmClock, unsubscribe: MailX, play: Play, split: Columns2, full: PanelTop,
+    alarm: AlarmClock, unsubscribe: MailX, play: Play, split: Columns2, full: PanelTop, stats: ChartColumn,
   };
   const C = $derived(MAP[name] || Info);
 </script>

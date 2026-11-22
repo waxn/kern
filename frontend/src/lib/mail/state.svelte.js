@@ -9,7 +9,7 @@ import { inverseOf as undoInverse } from './undo.js';
 export const info = $state({ address: '', fromName: '', undoSeconds: 8, worker: { state: 'offline' }, pendingOps: 0, failedOps: 0, maxAttachmentBytes: 0 });
 export const mailbox = $state({ folders: [], labels: [], starred: 0, loaded: false });
 // selectedAll: every conversation in the view is selected, not only the loaded ones.
-export const list = $state({ key: '', threads: [], next: null, loading: false, error: '', selected: new Set(), selectedAll: false, focusIndex: -1, unreadOnly: false, checkedAt: 0 });
+export const list = $state({ key: '', threads: [], next: null, total: null, loading: false, error: '', selected: new Set(), selectedAll: false, focusIndex: -1, unreadOnly: false, checkedAt: 0, sort: 'date' });
 export const current = $state({ thread: null, messages: [], packages: [], scheduled: [], tasks: [], loading: false, error: '' });
 // First-sync progress per folder id: {done, total}. Fed by SSE events.
 export const syncProgress = $state({});
@@ -45,7 +45,7 @@ export async function saveAccountPrefs(changes) {
 // Things scheduled to come back to you: snoozes and "nudge if no reply".
 export const agenda = $state({ snoozes: [], followups: [], loaded: false });
 // Shipments found in shipping emails (mail/packages.py on the server).
-export const parcels = $state({ active: [], delivered: [], loaded: false });
+export const parcels = $state({ active: [], delivered: [], tracking: null, map: null, loaded: false });
 // Messages waiting to be sent later ("send later").
 export const scheduled = $state({ items: [], loaded: false });
 export const ui = $state({
@@ -53,9 +53,15 @@ export const ui = $state({
   composers: [],
   dialog: null, // {type: 'spam'|'move'|'label'|'help'|'snooze'|'prompt'|'confirm', ...}
   searchFocusTick: 0,
+  search: { open: false, q: '' }, // the search palette (components/MailSearch.svelte)
   senderCard: null, // {addr, name, x, y}
   viewer: null, // {items: [{src, href, name, size}], index}
 });
+
+export function openMailSearch(q = '') {
+  ui.search.q = q || (route.view === 'search' ? route.q : '');
+  ui.search.open = true;
+}
 
 // Side-by-side list + conversation only when both get enough room.
 export const READING_MIN = 960; // of the mail area (Kern's sidebar is outside it)
@@ -122,6 +128,7 @@ export async function loadScheduled() {
   try {
     scheduled.items = await api.get('/scheduled');
     scheduled.loaded = true;
+    writeCache('scheduled', { items: $state.snapshot(scheduled.items) });
   } catch {
     /* non-essential */
   }
@@ -132,7 +139,10 @@ export async function loadPackages() {
     const r = await api.get('/packages');
     parcels.active = r.active;
     parcels.delivered = r.delivered;
+    parcels.tracking = r.tracking || null;
+    parcels.map = r.map || null;
     parcels.loaded = true;
+    writeCache('packages', { active: r.active, delivered: r.delivered, tracking: r.tracking || null, map: r.map || null });
   } catch {
     /* non-essential */
   }
@@ -216,8 +226,14 @@ function applyFolders(data) {
   mailbox.loaded = true;
 }
 if (typeof window !== 'undefined') {
+  // Everything the sidebar and the Inbox header show, as this device saw it last, so the
+  // first paint already has its final shape (nothing pops in a moment later).
   const f = readCache('folders');
   if (f) applyFolders(f);
+  const p = readCache('packages');
+  if (p) Object.assign(parcels, { active: p.active || [], delivered: p.delivered || [], tracking: p.tracking || null, map: p.map || null });
+  const sc = readCache('scheduled');
+  if (sc) scheduled.items = sc.items || [];
 }
 
 export async function loadFolders() {
@@ -273,7 +289,7 @@ export function viewTitle(view = route.view) {
 }
 
 function listKey() {
-  return route.view === 'search' ? 'search:' + route.q : 'view:' + route.view + (list.unreadOnly ? ':unread' : '');
+  return route.view === 'search' ? 'search:' + route.q + ':' + list.sort + (list.unreadOnly ? ':unread' : '') : 'view:' + route.view + (list.unreadOnly ? ':unread' : '');
 }
 
 let listSeq = 0;
@@ -288,6 +304,7 @@ export async function loadThreads({ more = false, quiet = false } = {}) {
     if (cached) {
       list.threads = cached.threads;
       list.next = cached.next;
+      list.total = cached.total ?? null;
       list.key = key;
       list.selected = new Set();
       list.selectedAll = false;
@@ -298,7 +315,9 @@ export async function loadThreads({ more = false, quiet = false } = {}) {
   if (!quiet) list.loading = true;
   list.error = '';
   try {
-    const params = route.view === 'search' ? { q: route.q } : { view, unread: list.unreadOnly ? 1 : undefined };
+    const params = route.view === 'search'
+      ? { q: route.q, sort: list.sort === 'relevance' ? 'relevance' : undefined, unread: list.unreadOnly ? 1 : undefined }
+      : { view, unread: list.unreadOnly ? 1 : undefined };
     if (more && list.next) params.cursor = list.next;
     const data = await api.get('/threads', params);
     if (seq !== listSeq) return;
@@ -311,7 +330,9 @@ export async function loadThreads({ more = false, quiet = false } = {}) {
         list.selectedAll = false;
         list.focusIndex = -1;
       }
-      if (route.view !== 'search') writeCache(key, { threads: data.threads, next: data.next });
+      if (route.view !== 'search') writeCache(key, { threads: data.threads, next: data.next, total: data.total ?? null });
+      if (data.total != null) list.total = data.total;
+      else if (!data.next) list.total = data.threads.length;
       // Quiet refresh keeps already-loaded extra pages (only when the fresh
       // first page isn't the whole list; otherwise it is the truth).
       if (quiet && key === list.key && data.next && list.threads.length > data.threads.length) {
@@ -391,7 +412,7 @@ function patchListLocal(ids, action) {
 
 // "Select all N conversations in <view>": the server applies it to the whole view.
 export async function viewAction(action) {
-  const scope = route.view === 'search' ? { view: 'all', q: route.q } : { view: listView(), unread: list.unreadOnly };
+  const scope = route.view === 'search' ? { view: 'all', q: route.q, unread: list.unreadOnly } : { view: listView(), unread: list.unreadOnly };
   const ids = list.threads.map((t) => t.id);
   patchListLocal(ids, action);
   list.selected = new Set();

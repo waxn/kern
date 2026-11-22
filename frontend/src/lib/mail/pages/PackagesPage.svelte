@@ -28,16 +28,28 @@
 
 <div class="mail-page scroll">
   <div class="inner">
-    <h1 class="display">Packages</h1>
-    <p class="ledger sub">{ledger.join(' · ')}</p>
+    <h1>Packages</h1>
+    <p class="sub">{ledger.join(' · ')}</p>
+
+    {#if parcels.loaded && !parcels.tracking?.hasKey}
+      <div class="tip">
+        <Icon name="truck" size={16} />
+        <span>Shops rarely email when something is delivered. Turn on <b>live tracking</b> (Parcels, free for 300 packages a
+          month) to get the carrier's real status, a map of where the package is and its latest scans.</span>
+        <a class="btn small" href="/settings?s=mail#tracking">Set up</a>
+      </div>
+    {:else if parcels.tracking?.lastError}
+      <div class="tip warn"><Icon name="shieldAlert" size={16} /><span>Live tracking: {parcels.tracking.lastError}</span>
+        <a class="btn small" href="/settings?s=mail#tracking">Settings</a></div>
+    {/if}
 
     {#if parcels.loaded && !active.length && !parcels.delivered.length}
       <div class="empty">
         <span class="big"><Icon name="package" size={30} stroke={1.4} /></span>
         <p><b>No packages yet.</b></p>
         <p class="faint">When a shipping email with a tracking number arrives, it shows up here with its status and expected
-          day. Detection runs on your server from the email itself. Kern never contacts the carrier; “Track” just opens
-          their page when you click it.</p>
+          day. Detection runs on your server from the email itself; with live tracking on, the carrier's status is checked
+          every hour or so.</p>
       </div>
     {/if}
 
@@ -63,11 +75,17 @@
 
 <style>
   .mail-page { flex: 1; min-height: 0; width: 100%; }
-  .inner { max-width: 820px; margin: 0 auto; padding: 18px 20px 80px; }
-  h1 { font-size: 36px; margin: 6px 0 4px; }
-  .sub { color: var(--text-3); margin: 0 0 22px; }
+  .inner { max-width: 860px; margin: 0 auto; padding: 36px 40px 80px; }
+  h1 { font-size: 22px; font-weight: 650; letter-spacing: -0.01em; margin: 0 0 4px; }
+  .sub { color: var(--text-2); margin: 0 0 18px; }
+  .tip { display: flex; align-items: center; gap: 10px; padding: 10px 12px; border: 1px solid var(--line); border-radius: var(--radius); color: var(--text-2); font-size: 13px; margin-bottom: 8px; }
+  .tip :global(svg) { flex: none; color: var(--accent-ink); }
+  .tip span { flex: 1; }
+  .tip.warn :global(svg) { color: var(--warn); }
+  a.btn { text-decoration: none; color: var(--text); }
+  @media (max-width: 760px) { .inner { padding: 48px 16px 80px; } }
   section { margin-top: 18px; }
-  h2 { color: var(--text-3); margin: 0 0 10px; font-size: inherit; }
+  h2 { color: var(--text-3); margin: 0 0 10px; }
   .grid { display: grid; gap: 10px; }
   .empty { text-align: center; padding: 50px 20px; max-width: 460px; margin: 0 auto; }
   .empty .big {
