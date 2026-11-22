@@ -4,7 +4,7 @@
   import { resolvedTheme } from '#lib/state/prefs.svelte.ts';
   import { api } from '../api.svelte.js';
   import { prefs } from '../state.svelte.js';
-  import { buildSrcdoc, collapseQuotes, looksDark, SANDBOX } from '../emailFrame.js';
+  import { buildSrcdoc, collapseQuotes, SANDBOX } from '../emailFrame.js';
   import { linkTokens, quoteBlocks } from '../format.js';
   import Icon from './Icon.svelte';
 
@@ -16,58 +16,75 @@
   let showQuoted = $state(false);
   let loadedFor = null;
 
-  async function load(images = false) {
+  // How the email is drawn: fitted to Kern's theme by the server (no white sheet, no inversion;
+  // mail that's dark already keeps its colors), or "original" as sent, on white.
+  let original = $state(false);
+  const look = $derived(original ? 'original' : resolvedTheme() === 'dark' ? (prefs.darkEmails !== false ? 'dark' : 'original') : 'light');
+  let images = false;
+
+  async function load(withImages = images) {
     error = '';
+    images = withImages;
+    const want = look;
+    const params = { colors: want === 'original' ? undefined : want, images: withImages ? 1 : undefined };
     try {
-      body = await api.get(`/messages/${m.id}/body`, images ? { images: 1 } : {});
+      const b = await api.get(`/messages/${m.id}/body`, params);
+      if (want === look) body = { ...b, look: want };
     } catch (e) {
       error = e.message;
     }
   }
 
   $effect(() => {
-    if (loadedFor === m.id) return;
-    loadedFor = m.id;
-    body = null;
-    load();
+    const key = m.id + '|' + look;
+    if (loadedFor === key) return;
+    const sameMessage = loadedFor?.startsWith(m.id + '|');
+    loadedFor = key;
+    if (!sameMessage) {
+      body = null; // a different message; switching looks keeps the old one until the new arrives
+      images = false;
+    }
+    untrack(() => load());
   });
 
-  // Dark theme: emails are shown light-on-dark unless they're dark already or
-  // you asked for this one's original colors.
-  const darkTheme = $derived(prefs.darkEmails !== false && resolvedTheme() === 'dark');
-  const alreadyDark = $derived(body?.html ? looksDark(body.html) : false);
-  let original = $state(false);
-  const dark = $derived(darkTheme && !alreadyDark && !original);
-  // Built once per body; switching colors flips a class inside the frame instead of reloading it.
-  const srcdoc = $derived(body && body.html != null ? buildSrcdoc(body.html, location.origin, { dark: untrack(() => dark) }) : null);
-  $effect(() => {
-    const on = dark;
-    frame?.contentDocument?.documentElement?.classList.toggle('kern-dark', on);
-  });
+  const adjustable = $derived(!!body?.html && (original || ['adapted', 'dark', 'light'].includes(body.colors)));
+  const srcdoc = $derived(body && body.html != null ? buildSrcdoc(body.html, location.origin, { look: body.look }) : null);
   // An HTML part with nothing to see (the server usually catches these).
   let blank = $state(false);
   const hasFiles = $derived((m.attachments || []).some((a) => !a.inline));
 
   // Size the iframe to its content. The frame is same-origin (no scripts), so
   // the parent can observe its document.
+  // Measure the body, not the root: documentElement.scrollHeight is never smaller than the frame
+  // itself, so each +2 would grow the frame and re-trigger the observer forever. Emails that size
+  // things in vh/100% grow with the frame too, so growth that keeps chasing is cut off.
+  let growStreak = 0;
   function measure() {
     const doc = frame?.contentDocument;
-    if (!doc || !doc.documentElement) return;
-    const h = Math.max(doc.documentElement.scrollHeight, doc.body ? doc.body.scrollHeight : 0);
-    height = Math.min(Math.max(h + 2, 40), 40000);
+    if (!doc || !doc.body) return;
+    const b = doc.body;
+    const h = Math.ceil(Math.max(b.getBoundingClientRect().height, b.scrollHeight));
+    const next = Math.min(Math.max(h + 2, 40), 40000);
+    if (next === height) return;
+    if (next > height) {
+      if (++growStreak > 4) return; // content tracks the frame height: stop chasing it
+    } else {
+      growStreak = 0;
+    }
+    height = next;
   }
   let frameQuote = $state(false);
   let quoteOpen = $state(false);
   function toggleQuote() {
     quoteOpen = !quoteOpen;
     frame?.contentDocument?.body?.classList.toggle('mf-collapsed', !quoteOpen);
+    growStreak = 0;
     requestAnimationFrame(measure);
   }
 
   function onLoad() {
     const doc = frame?.contentDocument;
     if (doc) {
-      doc.documentElement.classList.toggle('kern-dark', dark);
       blank = !(doc.body?.innerText || '').replace(/[\s\u200b\u200c\u00a0]/g, '')
         && !doc.querySelector('img, video, svg, picture, hr, [background], [style*="background"]');
       try {
@@ -77,12 +94,14 @@
         frameQuote = false;
       }
     }
+    growStreak = 0;
+    height = 120;
     measure();
     if (!doc) return;
     try {
       const ro = new ResizeObserver(measure);
-      ro.observe(doc.documentElement);
-      for (const img of doc.images) img.addEventListener('load', measure, { once: true });
+      ro.observe(doc.body);
+      for (const img of doc.images) img.addEventListener('load', () => { growStreak = 0; measure(); }, { once: true });
       frame._ro?.disconnect();
       frame._ro = ro;
     } catch {
@@ -112,10 +131,10 @@
     </div>
   {/if}
   {#if srcdoc != null}
-    <div class="paper" class:dark class:blank>
-      {#if darkTheme && !alreadyDark}
-        <button class="colors" title={original ? 'Show in dark colors' : 'Show original colors'} aria-pressed={original}
-                aria-label={original ? 'Show in dark colors' : 'Show original colors'} onclick={() => (original = !original)}>
+    <div class="paper" class:original={body.look === 'original'} class:blank>
+      {#if adjustable}
+        <button class="colors" title={original ? 'Fit to theme' : 'Show original colors'} aria-pressed={original}
+                aria-label={original ? 'Fit colors to the theme' : 'Show original colors'} onclick={() => (original = !original)}>
           <Icon name={original ? 'moon' : 'sun'} size={14} />
         </button>
       {/if}
@@ -159,17 +178,16 @@
     background: var(--bg-sunken); color: var(--text-2); font-size: 12.5px;
   }
   .images-bar span { flex: 1; min-width: 180px; }
+  /* No sheet of its own: the email sits on the card like the rest of the conversation. */
   .paper {
-    margin: 0 14px 12px 62px;
-    background: #fff;
-    border-radius: 8px;
-    padding: 6px 10px;
-    border: 1px solid var(--line);
+    position: relative;
+    margin: 0 var(--mail-pad, 16px) 12px 62px;
+    padding: 0;
+    background: transparent;
   }
-  iframe { width: 100%; border: 0; display: block; background: #fff; color-scheme: light; }
-  .paper { position: relative; }
-  .paper.dark { background: #141416; border-color: var(--line); }
-  .paper.dark iframe { background: #141416; }
+  iframe { width: 100%; border: 0; display: block; background: transparent; }
+  .paper.original { background: #fff; border-radius: 8px; padding: 8px 12px; border: 1px solid var(--line); }
+  .paper.original iframe { color-scheme: light; }
   /* Nothing to see: no white box. */
   .paper.blank { position: absolute; width: 1px; height: 1px; overflow: hidden; opacity: 0; pointer-events: none; margin: 0; padding: 0; border: 0; }
   .colors {
@@ -180,9 +198,9 @@
   .paper:hover .colors, .colors:focus-visible, .colors[aria-pressed='true'] { opacity: 1; }
   .colors:hover { color: var(--text); border-color: var(--line); }
   @media (hover: none) { .colors { opacity: .8; } }
-  .paper:not(.dark) .colors { background: #f4f4f2; color: #555; }
+  .paper.original .colors { background: #f4f4f2; color: #555; }
   .none { margin: 0; font-size: 13px; }
-  .paper.dark .frame-dots { background: #26262a; border-color: #3a3a40; color: #aaa; }
+
   .text {
     margin: 0 18px 14px 62px;
     white-space: pre-wrap;
@@ -196,7 +214,8 @@
     border-radius: 6px; padding: 0 8px; height: 18px; line-height: 14px; font-size: 11px; cursor: pointer; letter-spacing: .1em;
   }
   .dots:hover { background: var(--bg-hover); }
-  .frame-dots { margin: 2px 0 6px; background: #f1f1ef; border-color: #d6d6d0; color: #555; }
+  .frame-dots { margin: 2px 0 6px; }
+  .paper.original .frame-dots { background: #f1f1ef; border-color: #d6d6d0; color: #555; }
   @media (max-width: 640px) {
     .paper, .images-bar, .err { margin-left: 8px; margin-right: 8px; padding-left: 6px; padding-right: 6px; }
     .text { margin-left: 14px; margin-right: 14px; }
