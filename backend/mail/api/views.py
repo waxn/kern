@@ -1038,12 +1038,17 @@ def packages_list(request):
 
 @api(("GET", "POST"))
 def packages_map(request):
-    """The map's tiles: {key: "<MapTiler key>"} for MapTiler's maps, {key: ""} for OpenStreetMap's."""
+    """The map's tiles: {provider, key?, custom?: {light, dark, attribution}} (mail/geo.py MAP_SOURCES).
+    The older {key} alone switches to MapTiler, or back to OpenStreetMap when empty."""
     from .. import geo
 
     if request.method == "POST":
+        data = body(request)
         try:
-            return geo.set_maptiler_key(str(body(request).get("key") or ""))
+            if "provider" not in data:
+                return geo.set_maptiler_key(str(data.get("key") or ""))
+            return geo.configure_map(str(data["provider"]), data.get("key") if "key" in data else None,
+                                     data.get("custom") if isinstance(data.get("custom"), dict) else None)
         except ValueError as exc:
             raise ApiError(str(exc)) from exc
     return geo.map_json()
@@ -1051,15 +1056,17 @@ def packages_map(request):
 
 @api(("GET", "POST"))
 def packages_tracking(request):
-    """Live tracking settings: {provider: "parcels"|"", key?, country?, limit?}."""
+    """Live tracking settings: {provider: "parcels"|"trackingmore"|"scraper"|"", key?, country?, limit?,
+    scraper?: {url, fallbacks}}. key "" forgets the stored key, a missing key keeps it."""
     from .. import tracking
 
     if request.method == "POST":
         data = body(request)
         try:
-            out = tracking.configure(str(data.get("provider") or ""), data.get("key") if data.get("key") else None,
+            out = tracking.configure(str(data.get("provider") or ""), data.get("key") if "key" in data else None,
                                      data.get("country") if "country" in data else None,
-                                     int_or_none(data.get("limit")) if data.get("limit") else None)
+                                     int_or_none(data.get("limit")) if data.get("limit") else None,
+                                     data.get("scraper") if isinstance(data.get("scraper"), dict) else None)
             if out["provider"]:
                 tracking.check_key()
                 tracking.refresh(force=True)
@@ -1718,6 +1725,7 @@ def map_tile(request, theme: str, z: int, x: int, y: int):
         raise ApiError(str(exc), 404) from exc
     except OSError as exc:
         raise ApiError("The map isn't available right now.", 502) from exc
-    resp = HttpResponse(data, content_type="image/png")
+    resp = HttpResponse(data, content_type=geo.image_type(data))
     resp["Cache-Control"] = "private, max-age=604800"
+    resp["X-Content-Type-Options"] = "nosniff"
     return resp

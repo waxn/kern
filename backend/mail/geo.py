@@ -4,11 +4,10 @@
   once with OpenStreetMap's Nominatim and kept in GeoPlace. Only the place name is sent, never
   anything from your mail, at most one lookup a second (Nominatim's usage policy).
 * Map tiles, fetched by the server and cached on disk, so the browser and the phone only ever
-  talk to Kern (your IP address isn't sent to the map provider):
-  - with a MapTiler key (Settings → Mail → Package tracking, free plan): MapTiler's muted
-    "dataviz" maps, a dark one and a light one to match Kern's theme;
-  - without one: OpenStreetMap's own tiles (no key; light use and caching are what its tile
-    policy asks for), which the apps tone down to the theme.
+  talk to Kern (your IP address isn't sent to the map provider). Sources (MAP_SOURCES, picked in
+  Settings → Mail → Package map): OpenStreetMap (no key; toned down by the apps), Esri's grey
+  canvas (no key; dark and light), MapTiler, Stadia Maps, Thunderforest and Mapbox (free keys;
+  dark and light styles), or your own tile server.
 
 SECURITY: both fetch fixed https hosts only; nothing from the request picks a host.
 """
@@ -23,6 +22,7 @@ import time
 import urllib.error
 import urllib.parse
 import urllib.request
+from dataclasses import dataclass, field
 from pathlib import Path
 
 from django.conf import settings
@@ -33,11 +33,46 @@ log = logging.getLogger(__name__)
 
 UA = "Kern-Mail/1 (self-hosted mail client; package map)"
 NOMINATIM = "https://nominatim.openstreetmap.org/search"
-OSM_URL = "https://tile.openstreetmap.org/{z}/{x}/{y}.png"
-MAPTILER_URL = "https://api.maptiler.com/maps/{style}/256/{z}/{x}/{y}.png?key={key}"
-MAPTILER_STYLES = {"dark": "dataviz-dark", "light": "dataviz"}
 THEMES = ("dark", "light")
+TILES_REV = 2  # bump to make every app fetch tiles afresh
 TILE_MAX_AGE = 30 * 86400
+
+
+@dataclass(frozen=True)
+class MapSource:
+    """A tile service. url has {z} {x} {y}, {style} (from styles, per theme) and {key}."""
+
+    name: str
+    url: str
+    attribution: str
+    styles: dict = field(default_factory=lambda: {"dark": "", "light": ""})
+    needs_key: bool = False
+    tone: bool = False  # one colourful style for both themes: the apps grey it down (dark: inverted)
+    signup: str = ""
+
+
+MAP_SOURCES = {
+    "osm": MapSource("OpenStreetMap", "https://tile.openstreetmap.org/{z}/{x}/{y}.png", "© OpenStreetMap contributors",
+                     tone=True),
+    "esri": MapSource("Esri grey canvas", "https://services.arcgisonline.com/ArcGIS/rest/services/Canvas/{style}/MapServer/tile/{z}/{y}/{x}",
+                      "Tiles © Esri — Esri, HERE, Garmin, © OpenStreetMap contributors",
+                      {"dark": "World_Dark_Gray_Base", "light": "World_Light_Gray_Base"}),
+    "maptiler": MapSource("MapTiler", "https://api.maptiler.com/maps/{style}/256/{z}/{x}/{y}.png?key={key}",
+                          "© MapTiler © OpenStreetMap contributors", {"dark": "dataviz-dark", "light": "dataviz"},
+                          needs_key=True, signup="https://cloud.maptiler.com/account/keys/"),
+    "stadia": MapSource("Stadia Maps", "https://tiles.stadiamaps.com/tiles/{style}/{z}/{x}/{y}.png?api_key={key}",
+                        "© Stadia Maps © OpenMapTiles © OpenStreetMap contributors",
+                        {"dark": "alidade_smooth_dark", "light": "alidade_smooth"}, needs_key=True,
+                        signup="https://client.stadiamaps.com/signup/"),
+    "thunderforest": MapSource("Thunderforest", "https://tile.thunderforest.com/{style}/{z}/{x}/{y}.png?apikey={key}",
+                               "Maps © Thunderforest, Data © OpenStreetMap contributors",
+                               {"dark": "transport-dark", "light": "atlas"}, needs_key=True,
+                               signup="https://manage.thunderforest.com/users/sign_up"),
+    "mapbox": MapSource("Mapbox", "https://api.mapbox.com/styles/v1/mapbox/{style}/tiles/256/{z}/{x}/{y}?access_token={key}",
+                        "© Mapbox © OpenStreetMap contributors", {"dark": "dark-v11", "light": "light-v11"},
+                        needs_key=True, signup="https://account.mapbox.com/access-tokens/"),
+    "custom": MapSource("Your own tile server", "", "", {"dark": "", "light": ""}),
+}
 
 _lock = threading.Lock()
 _last_lookup = 0.0
@@ -107,13 +142,16 @@ def _map_cfg() -> dict:
     from .models import Preferences
 
     row = Preferences.objects.filter(pk=1).first()
-    return dict(((row.data if row else None) or {}).get("map") or {})
+    m = dict(((row.data if row else None) or {}).get("map") or {})
+    if m.get("key_enc"):  # saved before there was a choice: a MapTiler key
+        m = {"provider": "maptiler", "keys": {"maptiler": m["key_enc"]}}
+    return m
 
 
-def _maptiler_key() -> str:
+def _secret(m: dict, name: str) -> str:
     from kern import secretbox
 
-    enc = _map_cfg().get("key_enc")
+    enc = (m.get("keys") or {}).get(name)
     if not enc:
         return ""
     try:
@@ -122,68 +160,150 @@ def _maptiler_key() -> str:
         return ""
 
 
+def _active(m: dict | None = None) -> tuple[str, dict]:
+    """(source name, its settings) in use; OpenStreetMap when the chosen one isn't usable."""
+    m = _map_cfg() if m is None else m
+    name = m.get("provider") or "osm"
+    src = MAP_SOURCES.get(name)
+    if src is None or (src.needs_key and not _secret(m, name)) or (name == "custom" and not (m.get("custom") or {}).get("light")):
+        return "osm", m
+    return name, m
+
+
 def map_json() -> dict:
-    """What the apps need to draw the map: whose tiles, and the credit line they must show."""
-    if _maptiler_key():
-        return {"provider": "maptiler", "attribution": "© MapTiler © OpenStreetMap contributors"}
-    return {"provider": "osm", "attribution": "© OpenStreetMap contributors"}
+    """What the apps need to draw the map: whose tiles, the credit line, whether to tone them."""
+    m = _map_cfg()
+    name, _ = _active(m)
+    src = MAP_SOURCES[name]
+    custom = m.get("custom") or {}
+    attribution = (custom.get("attribution") or "Map tiles: your server") if name == "custom" else src.attribution
+    import hashlib
+
+    # In the tile addresses (?v=…), so a browser or phone that cached another source's tiles
+    # doesn't keep showing them after a switch.
+    version = hashlib.sha256(f"{name}|{custom.get('light', '')}|{custom.get('dark', '')}|{TILES_REV}".encode()).hexdigest()[:10]
+    return {
+        "provider": name, "chosen": m.get("provider") or "osm", "attribution": attribution, "tone": src.tone, "version": version,
+        "keys": {n: bool(_secret(m, n)) for n, x in MAP_SOURCES.items() if x.needs_key},
+        "custom": {"light": custom.get("light", ""), "dark": custom.get("dark", ""), "attribution": custom.get("attribution", "")},
+        "sources": [{"id": n, "name": x.name, "needsKey": x.needs_key, "signup": x.signup} for n, x in MAP_SOURCES.items()],
+    }
 
 
-def set_maptiler_key(key: str | None) -> dict:
-    """Save (after trying it) or forget the MapTiler key."""
+def _url(name: str, m: dict, theme: str, z: int, x: int, y: int) -> str:
+    if name == "custom":
+        custom = m.get("custom") or {}
+        tpl = custom.get(theme) or custom.get("light") or ""
+        return tpl.replace("{z}", str(z)).replace("{x}", str(x)).replace("{y}", str(y))
+    src = MAP_SOURCES[name]
+    return src.url.format(style=src.styles.get(theme, ""), z=z, x=x, y=y, key=urllib.parse.quote(_secret(m, name)))
+
+
+def _check_template(url: str) -> str:
+    url = url.strip()
+    if not url:
+        return ""
+    parts = urllib.parse.urlsplit(url.replace("{z}", "0").replace("{x}", "0").replace("{y}", "0"))
+    if parts.scheme != "https" or not parts.hostname or parts.username or parts.password or not all(
+            p in url for p in ("{z}", "{x}", "{y}")):
+        raise ValueError("A tile address looks like https://tiles.example.com/{z}/{x}/{y}.png")
+    from . import hosts
+
+    try:
+        hosts.check(parts.hostname, parts.port or 443)
+    except hosts.HostNotAllowed as exc:
+        raise ValueError(str(exc)) from exc
+    return url[:500]
+
+
+def configure_map(provider: str, key: str | None = None, custom: dict | None = None) -> dict:
+    """Pick the tile source; a key (or tile address) is tried with one tile before it's saved."""
     from kern import secretbox
 
     from .models import Preferences
 
+    if provider not in MAP_SOURCES:
+        raise ValueError("Unknown map source.")
+    m = _map_cfg()
+    src = MAP_SOURCES[provider]
+    keys = m.setdefault("keys", {})
+    if key is not None and src.needs_key:
+        key = key.strip()
+        if len(key) > 300 or any(c.isspace() for c in key):
+            raise ValueError("That doesn't look like a key.")
+        if key:
+            keys[provider] = secretbox.encrypt(key)
+        else:
+            keys.pop(provider, None)
+    if custom is not None and provider == "custom":
+        m["custom"] = {"light": _check_template(str(custom.get("light") or "")),
+                       "dark": _check_template(str(custom.get("dark") or "")),
+                       "attribution": " ".join(str(custom.get("attribution") or "").split())[:200]}
+    if src.needs_key and not _secret(m, provider):
+        raise ValueError(f"Paste your {src.name} key.")
+    if provider == "custom" and not (m.get("custom") or {}).get("light"):
+        raise ValueError("Enter your tile server's address.")
+    if provider not in ("osm", "esri"):  # try it before switching
+        try:
+            _fetch(_url(provider, m, "light", 0, 0, 0))
+        except urllib.error.HTTPError as e:
+            raise ValueError(f"{src.name} refused the key." if e.code in (401, 403) else f"{src.name} answered {e.code}.") from e
+        except OSError as e:
+            raise ValueError(f"Couldn't get a map tile from {src.name}.") from e
+    m["provider"] = provider
     row, _ = Preferences.objects.get_or_create(pk=1, defaults={"data": {}})
     data = dict(row.data or {})
-    if key:
-        key = key.strip()
-        if len(key) > 200 or any(c.isspace() for c in key):
-            raise ValueError("That doesn't look like a MapTiler key.")
-        url = MAPTILER_URL.format(style=MAPTILER_STYLES["dark"], z=0, x=0, y=0, key=urllib.parse.quote(key))
-        try:
-            with urllib.request.urlopen(urllib.request.Request(url, headers={"User-Agent": UA}), timeout=15) as r:  # noqa: S310
-                r.read(1)
-        except urllib.error.HTTPError as e:
-            raise ValueError("MapTiler refused the key." if e.code in (401, 403) else f"MapTiler answered {e.code}.") from e
-        except (urllib.error.URLError, TimeoutError, OSError) as e:
-            raise ValueError("Couldn't reach MapTiler.") from e
-        data["map"] = {"key_enc": secretbox.encrypt(key)}
-    else:
-        data.pop("map", None)
+    data["map"] = m
     row.data = data
     row.save(update_fields=["data", "updated"])
     return map_json()
 
 
+def set_maptiler_key(key: str | None) -> dict:
+    """Kept for the earlier settings call: a key switches to MapTiler, none to OpenStreetMap."""
+    return configure_map("maptiler", key) if key else configure_map("osm")
+
+
+def _fetch(url: str) -> bytes:
+    if not url.startswith("https://"):
+        raise OSError("tiles come over https only")
+    with urllib.request.urlopen(urllib.request.Request(url, headers={"User-Agent": UA}), timeout=15) as r:  # noqa: S310
+        data = r.read(2_000_000)
+    if not (data.startswith(b"\x89PNG") or data.startswith(b"\xff\xd8") or data[8:12] == b"WEBP"):
+        raise OSError("not a map tile")
+    return data
+
+
+def image_type(data: bytes) -> str:
+    return "image/jpeg" if data.startswith(b"\xff\xd8") else "image/webp" if data[8:12] == b"WEBP" else "image/png"
+
+
 def _tile_path(source: str, z: int, x: int, y: int) -> Path:
-    return Path(settings.DATA_DIR) / "cache" / "maptiles" / source / str(z) / str(x) / f"{y}.png"
+    return Path(settings.DATA_DIR) / "cache" / "maptiles" / source / str(z) / str(x) / f"{y}.img"
 
 
 def tile(theme: str, z: int, x: int, y: int) -> bytes:
-    """A 256 px map tile (PNG; the apps draw one zoom level deeper at half size for sharp
-    screens). Raises ValueError for a bad address, OSError when unavailable."""
+    """A 256 px map tile (PNG, JPEG or WebP; the apps draw one zoom level deeper at half size for
+    sharp screens). Raises ValueError for a bad address, OSError when unavailable."""
     if theme not in THEMES or not 0 <= z <= 18 or not (0 <= x < 2 ** z and 0 <= y < 2 ** z):
         raise ValueError("No such tile.")
-    key = _maptiler_key()
-    if key:
-        source = "maptiler-" + MAPTILER_STYLES[theme]
-        url = MAPTILER_URL.format(style=MAPTILER_STYLES[theme], z=z, x=x, y=y, key=urllib.parse.quote(key))
+    name, m = _active()
+    src = MAP_SOURCES[name]
+    if name == "custom":
+        import hashlib
+
+        template = (m.get("custom") or {}).get(theme) or (m.get("custom") or {}).get("light")
+        _check_template(template)  # again: DNS may have changed
+        source = "custom-" + hashlib.sha256(template.encode()).hexdigest()[:12]
     else:
-        source = "osm"  # one style for both themes; the apps tone it down
-        url = OSM_URL.format(z=z, x=x, y=y)
+        source = name + ("-" + src.styles.get(theme, "") if src.styles.get(theme) else "")
     path = _tile_path(source, z, x, y)
     try:
         if time.time() - path.stat().st_mtime < TILE_MAX_AGE:
             return path.read_bytes()
     except OSError:
         pass
-    req = urllib.request.Request(url, headers={"User-Agent": UA})
-    with urllib.request.urlopen(req, timeout=15) as r:  # noqa: S310 - fixed https host
-        data = r.read(2_000_000)
-    if not data.startswith(b"\x89PNG"):
-        raise OSError("not a map tile")
+    data = _fetch(_url(name, m, theme, z, x, y))
     path.parent.mkdir(parents=True, exist_ok=True)
     tmp = path.with_suffix(".tmp")
     tmp.write_bytes(data)

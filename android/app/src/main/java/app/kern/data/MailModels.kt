@@ -91,7 +91,7 @@ data class MailPackages(val active: List<MailPackage> = emptyList(), val deliver
 
 /** Whose map tiles the server hands out (backend/mail/geo.py) and the credit line to show. */
 @Serializable
-data class MailMapInfo(val provider: String = "osm", val attribution: String = "© OpenStreetMap contributors")
+data class MailMapInfo(val provider: String = "osm", val attribution: String = "© OpenStreetMap contributors", val tone: Boolean = true, val version: String = "")
 
 @Serializable
 data class MailIdentity(val address: String = "", val name: String = "")

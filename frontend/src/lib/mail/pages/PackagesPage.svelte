@@ -34,8 +34,8 @@
     {#if parcels.loaded && !parcels.tracking?.hasKey}
       <div class="tip">
         <Icon name="truck" size={16} />
-        <span>Shops rarely email when something is delivered. Turn on <b>live tracking</b> (Parcels, free for 300 packages a
-          month) to get the carrier's real status, a map of where the package is and its latest scans.</span>
+        <span>Shops rarely email when something is delivered. Turn on <b>live tracking</b> (built in, no account needed; or
+          Parcels or TrackingMore) to get the carrier's real status, a map of where the package is and its latest scans.</span>
         <a class="btn small" href="/settings?s=mail#tracking">Set up</a>
       </div>
     {:else if parcels.tracking?.lastError}

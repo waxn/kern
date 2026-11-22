@@ -7,6 +7,7 @@ from django.utils import timezone
 
 from mail import geo, tracking
 from mail.models import ChangeEvent, GeoPlace, Shipment
+from mail.trackers import parcels as parcels_mod, scraper as scraper_mod, trackingmore as tm_mod
 
 USPS = "9400111202555842332669"
 
@@ -22,7 +23,7 @@ def no_network(monkeypatch):
     """Places resolve from a little table; tiles are fake PNGs. Nothing leaves the test."""
     where = {"Portland, OR, United States": (45.52, -122.68), "Austin, TX, United States": (30.27, -97.74)}
     monkeypatch.setattr(geo, "lookup", lambda name, budget=None: where.get(geo.clean_place(name)))
-    monkeypatch.setattr(tracking, "POLL_WAIT", 0)
+    monkeypatch.setattr(parcels_mod, "POLL_WAIT", 0)
 
 
 def delivered(number=USPS):
@@ -50,7 +51,7 @@ def fake(monkeypatch):
             return hit
         return {"request_id": "r1", "done": True, "results": []}
 
-    monkeypatch.setattr(tracking, "_call", call)
+    monkeypatch.setattr(parcels_mod, "_call", call)
     return calls, answers
 
 
@@ -63,12 +64,12 @@ def test_off_without_a_key(ship, fake):
 
 def test_key_is_stored_encrypted(db):
     out = tracking.configure("parcels", "PK_live_123", country="se")
-    assert out["provider"] == "parcels" and out["hasKey"] and out["country"] == "SE"
+    assert out["provider"] == "parcels" and out["hasKey"] and out["country"] == "SE" and out["keys"]["parcels"]
     assert out["allowance"] == {"limit": 300, "used": 0, "left": 300, "month": timezone.localdate().strftime("%Y-%m"), "exact": False}
     from mail.models import Preferences
 
     assert "PK_live_123" not in str(Preferences.objects.get(pk=1).data)
-    assert tracking._key() == "PK_live_123"
+    assert tracking.secret("parcels") == "PK_live_123"
     with pytest.raises(tracking.TrackingError):
         tracking.configure("parcels", "has spaces in it")
     with pytest.raises(tracking.TrackingError):
@@ -133,6 +134,7 @@ def test_allowance_is_respected(db, fake):
     tracking.refresh()
     assert len(calls[0][3]["shipments"]) == 2  # only as many new numbers as are left
     assert tracking.allowance()["left"] == 0
+    assert "used up" in tracking.settings_json()["lastError"]
     # Numbers already counted this cycle stay free to ask about again.
     Shipment.objects.update(checked_at=None)
     calls.clear()
@@ -143,7 +145,7 @@ def test_allowance_is_respected(db, fake):
 def test_exact_quota_from_parcels(ship, fake):
     _, answers = fake
     tracking.configure("parcels", "KEY")
-    err = tracking._error(402, {"code": "SUBSCRIPTION_LIMIT_REACHED", "limit": 300, "current": 299, "available": 1})
+    err = parcels_mod._error(402, {"error": {"code": "SUBSCRIPTION_LIMIT_REACHED", "limit": 300, "current": 299, "available": 1}})
     answers[("POST", "/trackings")] = err
     assert tracking.refresh() == 0
     a = tracking.allowance()
@@ -154,7 +156,7 @@ def test_exact_quota_from_parcels(ship, fake):
 def test_bad_key(ship, fake):
     _, answers = fake
     tracking.configure("parcels", "KEY")
-    answers[("POST", "/trackings")] = tracking._error(401, {"code": "INVALID_API_KEY", "message": "x"})
+    answers[("POST", "/trackings")] = parcels_mod._error(401, {"error": {"code": "INVALID_API_KEY", "message": "x"}})
     tracking.refresh()
     assert tracking.settings_json()["lastError"] == "Parcels refused the API key."
     with pytest.raises(tracking.TrackingError):
@@ -229,7 +231,8 @@ def test_tiles_are_checked_and_cached(api, monkeypatch, settings, tmp_path):
     r = api.get("/api/mail/maptiles/dark/3/2/1.png")
     assert r.status_code == 200 and r["Content-Type"] == "image/png" and r.content.startswith(b"\x89PNG")
     assert got[0] == "https://tile.openstreetmap.org/3/2/1.png"  # no key: OpenStreetMap
-    assert api.get("/api/mail/packages/map").json()["provider"] == "osm"
+    m = api.get("/api/mail/packages/map").json()
+    assert m["provider"] == "osm" and m["tone"] is True and {x["id"] for x in m["sources"]} >= {"osm", "esri", "stadia", "mapbox", "custom"}
     api.get("/api/mail/maptiles/dark/3/2/1.png")
     assert len(got) == 1  # cached
     assert api.get("/api/mail/maptiles/dark/3/9/1.png").status_code == 404  # off the map
@@ -264,3 +267,165 @@ def test_maptiler_key(api, monkeypatch, settings, tmp_path):
     api.get("/api/mail/maptiles/light/2/1/1.png")
     assert seen[-1] == "https://api.maptiler.com/maps/dataviz/256/2/1/1.png?key=good"
     assert api.post("/api/mail/packages/map", {"key": ""}).json()["provider"] == "osm"
+    # The other keyed sources: the key goes in their own parameter.
+    for provider, frag in (("stadia", "tiles.stadiamaps.com/tiles/alidade_smooth/2/1/1.png?api_key=good"),
+                           ("thunderforest", "tile.thunderforest.com/atlas/2/1/1.png?apikey=good"),
+                           ("mapbox", "api.mapbox.com/styles/v1/mapbox/light-v11/tiles/256/2/1/1?access_token=good")):
+        r = api.post("/api/mail/packages/map", {"provider": provider, "key": "good"})
+        assert r.status_code == 200 and r.json()["provider"] == provider, r.content
+        api.get("/api/mail/maptiles/light/2/1/1.png")
+        assert seen[-1].endswith(frag), seen[-1]
+    # Esri needs no key and has its own dark style (and x/y the other way round).
+    assert api.post("/api/mail/packages/map", {"provider": "esri"}).json()["tone"] is False
+    api.get("/api/mail/maptiles/dark/2/1/3.png")
+    assert seen[-1].endswith("Canvas/World_Dark_Gray_Base/MapServer/tile/2/3/1")
+    # Your own server: https only, a public host, {z}/{x}/{y} in it.
+    bad = api.post("/api/mail/packages/map", {"provider": "custom", "custom": {"light": "http://tiles.example.com/{z}/{x}/{y}.png"}})
+    assert bad.status_code == 400
+    monkeypatch.setattr(geo, "_check_template", lambda u: u.strip())
+    ok = api.post("/api/mail/packages/map", {"provider": "custom", "custom": {"light": "https://tiles.example.com/{z}/{x}/{y}.png", "attribution": "Mine"}})
+    assert ok.json()["provider"] == "custom" and ok.json()["attribution"] == "Mine"
+    api.get("/api/mail/maptiles/dark/2/1/1.png")
+    assert seen[-1] == "https://tiles.example.com/2/1/1.png"
+
+
+# --- TrackingMore --------------------------------------------------------------------------
+
+
+@pytest.fixture
+def tm(monkeypatch):
+    calls, answers = [], {}
+
+    def call(key, method, path, body=None):
+        calls.append((key, method, path, body))
+        hit = answers.get((method, path.split("?")[0]))
+        if isinstance(hit, Exception):
+            raise hit
+        return hit if hit is not None else {"meta": {"code": 200}, "data": []}
+
+    monkeypatch.setattr(tm_mod, "_call", call)
+    return calls, answers
+
+
+TM_ITEM = {"tracking_number": USPS, "courier_code": "usps", "delivery_status": "transit",
+           "origin_info": {"trackinfo": [
+               {"checkpoint_date": "2026-11-20T07:15:00-06:00", "tracking_detail": "Out for Delivery", "location": "Austin, TX, United States"},
+               {"checkpoint_date": "2026-11-17T14:30:00-07:00", "tracking_detail": "Accepted", "location": "Portland, OR, United States"}]}}
+
+
+def test_trackingmore_creates_once_then_reads(ship, tm):
+    calls, answers = tm
+    tracking.configure("trackingmore", "TMKEY")
+    assert tracking.allowance()["limit"] == 50
+    answers[("POST", "/trackings/create")] = {"meta": {"code": 200}, "data": TM_ITEM}
+    assert tracking.refresh() == 1
+    ship.refresh_from_db()
+    assert ship.status == "out_for_delivery" and ship.location == "Austin, TX, United States"
+    assert calls[0][1:] == ("POST", "/trackings/create", {"tracking_number": USPS, "courier_code": "usps"})
+    assert tracking.allowance()["used"] == 1
+    # Next time: a free read, not another credit.
+    Shipment.objects.update(checked_at=None)
+    calls.clear()
+    answers[("GET", "/trackings/get")] = {"meta": {"code": 200}, "data": [{**TM_ITEM, "delivery_status": "delivered"}]}
+    tracking.refresh()
+    assert [c[1:3] for c in calls] == [("GET", "/trackings/get?tracking_numbers=9400111202555842332669&courier_code=usps")]
+    ship.refresh_from_db()
+    assert ship.status == "delivered"
+
+
+def test_trackingmore_detects_unknown_carriers(db, tm):
+    calls, answers = tm
+    Shipment.objects.create(carrier="dhl", number="1234567890", status="in_transit", status_at=timezone.now())
+    tracking.configure("trackingmore", "TMKEY")
+    answers[("POST", "/couriers/detect")] = {"meta": {"code": 200}, "data": [{"courier_code": "dhl"}]}
+    answers[("POST", "/trackings/create")] = {"meta": {"code": 200}, "data": {**TM_ITEM, "tracking_number": "1234567890"}}
+    tracking.refresh()
+    assert [c[2] for c in calls] == ["/couriers/detect", "/trackings/create"]
+    assert calls[1][3]["courier_code"] == "dhl"
+
+
+def test_trackingmore_errors(ship, tm):
+    _, answers = tm
+    tracking.configure("trackingmore", "TMKEY")
+    answers[("POST", "/trackings/create")] = tm_mod._error(401, {"meta": {"code": 401, "message": "Unauthorized"}})
+    tracking.refresh()
+    assert tracking.settings_json()["lastError"] == "TrackingMore refused the API key."
+
+
+# --- Universal Parcel Scraper ------------------------------------------------------------------
+
+SCRAPED = {"carrier": "usps", "source": "usps", "attempts": [], "result": {
+    "current_stage": "out_for_delivery", "expected_delivery": "2026-11-20",
+    "events": [
+        {"time": "2026-11-20T07:15:00-06:00", "instant": "2026-11-20T13:15:00Z", "description": "Out for Delivery",
+         "location": "Austin, TX, United States", "stage": "out_for_delivery", "stage_source": "map"},
+        {"time": "2026-11-17T14:30:00", "instant": None, "description": "Accepted at USPS Origin Facility",
+         "location": "Portland, OR, United States", "stage": "accepted", "stage_source": "map"}]}}
+
+
+def test_scraper_built_in(ship, monkeypatch):
+    import json
+    import subprocess
+
+    ran = []
+
+    class Done:
+        returncode = 0
+        stdout = json.dumps(SCRAPED).encode()
+        stderr = b""
+
+    def run(cmd, **kw):
+        ran.append((cmd, kw["env"]))
+        return Done()
+
+    monkeypatch.setattr(scraper_mod, "binary", lambda: "/opt/parcel-scraper/bin/parcel-scraper")
+    monkeypatch.setattr(subprocess, "run", run)
+    out = tracking.configure("scraper", scraper={"fallbacks": ["UPU", "17TRACK", "nonsense"]})
+    assert out["hasKey"] and out["allowance"] is None and out["scraper"]["builtIn"]
+    assert tracking.refresh() == 1
+    cmd, env = ran[0]
+    assert cmd == ["/opt/parcel-scraper/bin/parcel-scraper", "track", USPS, "--carrier", "usps"]
+    assert env["SCRAPER_PROVIDERS"] == "UPU,17TRACK" and "Kern" in env["SCRAPER_USER_AGENT"]
+    ship.refresh_from_db()
+    assert ship.status == "out_for_delivery" and len(ship.route["points"]) == 2
+    assert ship.live_events[0]["at"] == "2026-11-20T07:15:00-06:00"
+
+
+def test_scraper_without_a_copy(ship, monkeypatch):
+    monkeypatch.setattr(scraper_mod, "binary", lambda: "")
+    tracking.configure("scraper")
+    assert not tracking.enabled()
+    assert tracking.refresh() == 0
+    with pytest.raises(tracking.TrackingError):
+        tracking.check_key()
+
+
+def test_scraper_your_own_server(ship, monkeypatch):
+    seen = []
+    monkeypatch.setattr(scraper_mod, "binary", lambda: "")
+    monkeypatch.setattr(scraper_mod.Scraper, "http_json",
+                        staticmethod(lambda url, **kw: seen.append((url, kw.get("body"), kw.get("headers"))) or SCRAPED))
+    from mail import hosts
+
+    with pytest.raises(tracking.TrackingError):  # private addresses need the administrator's OK
+        tracking.configure("scraper", scraper={"url": "http://127.0.0.1:8080"})
+    monkeypatch.setattr(hosts, "check", lambda h, p: None)
+    with pytest.raises(tracking.TrackingError):
+        tracking.configure("scraper", scraper={"url": "ftp://parcels.example.com"})
+    tracking.configure("scraper", key="tok", scraper={"url": "https://parcels.example.com/"})
+    assert tracking.refresh() == 1
+    url, payload, headers = seen[0]
+    assert url == "https://parcels.example.com/v1/track"
+    assert payload == {"number": USPS, "carrier": "usps"} and headers == {"Authorization": "Bearer tok"}
+
+
+def test_old_parcels_settings_still_work(db):
+    from kern import secretbox
+    from mail.models import Preferences
+
+    Preferences.objects.update_or_create(pk=1, defaults={"data": {"tracking": {
+        "provider": "parcels", "key_enc": secretbox.encrypt("OLD"), "limit": 120,
+        "sent": {"month": timezone.localdate().strftime("%Y-%m"), "numbers": ["A"]}}}})
+    assert tracking.secret("parcels") == "OLD"
+    a = tracking.allowance()
+    assert a["limit"] == 120 and a["used"] == 1

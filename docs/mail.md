@@ -81,16 +81,28 @@ on the local network** (off by default, see Security).
   scheduled sends.
 - **Packages** are detected from shipping emails by rules (tracking-number formats with check
   digits, status words) and shown small at the top of the Inbox and on the Packages page (web and
-  Android). **Live tracking** (opt-in, Settings → Mail → Package tracking) asks Parcels
-  (parcelsapp.com, API v5; free for 300 packages a month) for the carrier's real status about every
-  90 minutes (25 on delivery day) from the mail worker (`backend/mail/tracking.py`); only tracking
-  numbers, and your country for numbers that need one, are sent. Each package counts once a month
-  however often it's checked; Kern counts what it sent (Parcels has no usage endpoint) and shows
-  what's left next to the key, using Parcels' own figures when it reports them. A **map** on each
-  package draws a line through its scans (places looked up once with OpenStreetMap's Nominatim,
-  `backend/mail/geo.py`) on CARTO tiles matching the theme, fetched and cached by the server, so
-  no key is needed and the browser never contacts them. Without live tracking, a package with no
-  news two days after it was due counts as "probably delivered" instead of staying on the way.
+  Android). **Live tracking** (opt-in, Settings → Mail → Package tracking) asks a tracking
+  service for the carrier's real status about every 90 minutes (25 on delivery day) from the mail
+  worker (`backend/mail/tracking.py`, services in `backend/mail/trackers/`):
+  - **Universal Parcel Scraper** (Peek's open-source engine) reads each carrier's own site with
+    no account or key. It's built into Kern's Docker image (Node plus the npm package, pinned in
+    `backend/Dockerfile`; the mail worker runs it per lookup), or point Kern at one you run (its
+    `parcel-scraper serve` / Docker image, which has Chromium for the carriers that need a
+    browser). Fallback trackers (UPU on by default; ParcelsApp, Ship24, 17TRACK… opt-in) each
+    receive the number. Licence: Apache-2.0 up to 0.1293.2 (the pinned version), PolyForm
+    Noncommercial after.
+  - **Parcels** (parcelsapp.com, API v5): API key, free for 300 packages a month.
+  - **TrackingMore** (trackingmore.com, API v4): API key, one credit when a package is added,
+    free re-checks.
+  For metered services Kern counts each package once a month (as they bill) and shows what's left
+  next to the key, using the service's own figures when it reports them. Only tracking numbers,
+  and your country for numbers that need one, are sent.
+- A **map** on each package draws a line through its scans (places looked up once with
+  OpenStreetMap's Nominatim, `backend/mail/geo.py`) on tiles the server fetches and caches, so the
+  browser never contacts the map service. Sources (Settings → Mail → Package map): OpenStreetMap
+  (no key, toned to the theme), Esri's grey canvas (no key, dark and light), MapTiler, Stadia Maps,
+  Thunderforest or Mapbox (free keys, dark and light styles), or your own tile server. Without
+  live tracking, a package with no news two days after it was due counts as "probably delivered".
 - **Send mail as** (Settings → Mail): other addresses you send from, e.g. a Gmail that forwards to
   this mailbox. With the address's own SMTP server (Gmail: smtp.gmail.com, an app password) mail
   goes out through it and one copy is saved in Sent here; replies default to the address the
@@ -150,9 +162,12 @@ Mail makes Kern a much more valuable target, so these are deliberate:
 - Desktop notifications say only "New mail", never the sender or subject (Android shows them
   only when unlocked, if you allow it). A conversation read anywhere else takes its Android
   notification away within about a second.
-- **Live package tracking** sends tracking numbers (and your country) to Parcels, only after you
-  add a key; the key is encrypted like mail passwords. The map sends scan place names to
-  Nominatim and fetches tiles from CARTO, from the server only. **Send-as** passwords are too, and their SMTP
+- **Live package tracking** sends tracking numbers (and your country) to the service you pick,
+  only after you turn it on: the carriers themselves (built-in scraper, plus any fallback you
+  tick), Parcels or TrackingMore. Keys and tokens are encrypted like mail passwords; a scraper or
+  tile server you point Kern at must be public unless an administrator allows local servers. The
+  map sends scan place names to Nominatim and fetches tiles from the chosen source, from the
+  server only. **Send-as** passwords are too, and their SMTP
   hosts must be public like the account's.
 
 **Read carefully** if you review the code: `backend/mail/sanitize.py`,

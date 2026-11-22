@@ -451,7 +451,7 @@ fun MailPackagesScreen(ws: Workspace, nav: Nav) {
             else -> PullToRefreshBox(isRefreshing = refreshing, onRefresh = { scope.launch { refreshing = true; load(); refreshing = false } }) {
                 LazyColumn(Modifier.fillMaxSize(), contentPadding = androidx.compose.foundation.layout.PaddingValues(start = 16.dp, end = 16.dp, bottom = 32.dp)) {
                     if (d.tracking?.hasKey != true) item {
-                        Text("Live tracking is off: shops rarely email when something arrives. Turn it on (Parcels, free for 300 packages a month) in Kern's web app, Settings → Mail → Package tracking.",
+                        Text("Live tracking is off: shops rarely email when something arrives. Turn it on in Kern's web app, Settings → Mail → Package tracking (built in with no account, or Parcels or TrackingMore).",
                             style = MaterialTheme.typography.bodySmall, color = kern.text3, modifier = Modifier.padding(bottom = 12.dp))
                     }
                     if (d.active.isEmpty() && d.delivered.isEmpty()) item { EmptyState(Icons.Outlined.LocalShipping, "No packages", "Shipping emails with a tracking number show up here.") }
@@ -503,9 +503,9 @@ private fun PackageMap(points: List<Pair<Double, Double>>, delivered: Boolean, m
         val size = tile / 2
         val n = 1 shl zt
         val base = ctx.app.api.base
-        // OpenStreetMap's colourful map, greyed down (and turned dark in the dark theme) like the web app does.
+        // A source with one colourful style (OpenStreetMap): greyed down, and turned dark in the dark theme, like the web app.
         val tone = when {
-            map.provider == "maptiler" -> androidx.compose.ui.graphics.ColorFilter.colorMatrix(androidx.compose.ui.graphics.ColorMatrix().apply { setToSaturation(0.7f) })
+            !map.tone -> androidx.compose.ui.graphics.ColorFilter.colorMatrix(androidx.compose.ui.graphics.ColorMatrix().apply { setToSaturation(0.7f) })
             k.dark -> androidx.compose.ui.graphics.ColorFilter.colorMatrix(androidx.compose.ui.graphics.ColorMatrix(floatArrayOf(
                 -0.22f, -0.43f, -0.08f, 0f, 228f,
                 -0.22f, -0.43f, -0.08f, 0f, 228f,
@@ -517,7 +517,7 @@ private fun PackageMap(points: List<Pair<Double, Double>>, delivered: Boolean, m
             if (ty < 0 || ty >= n) continue
             for (tx in Math.floor(ox * 2 / tile).toInt()..Math.floor((ox + w) * 2 / tile).toInt()) {
                 val x = ((tx % n) + n) % n
-                coil.compose.AsyncImage(model = "$base/api/mail/maptiles/$theme/$zt/$x/$ty.png", contentDescription = null, colorFilter = tone,
+                coil.compose.AsyncImage(model = "$base/api/mail/maptiles/$theme/$zt/$x/$ty.png?v=${map.version}", contentDescription = null, colorFilter = tone,
                     modifier = Modifier.offset((tx * size - ox).dp, (ty * size - oy).dp).size(size.dp))
             }
         }

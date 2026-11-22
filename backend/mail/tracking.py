@@ -1,35 +1,30 @@
-"""Live package tracking with Parcels (parcelsapp.com, API v5).
+"""Live package tracking: the carrier's real status, scans and a map, from a tracking service.
 
 Shipping emails only say what the shop knew when it wrote them, so a package delivered without a
-"delivered" email would stay "on the way" forever. With a Parcels API key (Settings → Mail →
-Package tracking) the mail worker asks for each package's real carrier status every so often:
-status, expected day, where it is, the latest scans and, for the map, where those scans were
+"delivered" email would stay "on the way" forever. With live tracking on (Settings → Mail →
+Package tracking) the mail worker asks a tracking service about each package every so often and
+updates its status, expected day, latest scans and, for the map, where those scans were
 (mail/geo.py).
 
-How the API works (https://parcelsapp.com/developers/docs):
+The services (mail/trackers/):
 
-* ``POST /trackings`` with ``shipments: [{tracking_number, carrier_hint | destination_country}]``
-  starts one asynchronous lookup and returns ``request_id``, ``done`` and ``results``; results
-  already fresh in Parcels' cache come back at once. ``GET /trackings/{request_id}`` is polled
-  until ``done`` (records live about 30 minutes). For later checks, POST again.
-* Quota: each unique tracking number counts once per billing cycle, however often it's asked
-  about again. There is no endpoint that reports usage, so Kern counts the numbers it sent this
-  month itself, and takes the exact figures whenever Parcels states them (``SUBSCRIPTION_LIMIT_
-  REACHED`` carries limit / current / available). Nothing is sent once the allowance is used up,
-  except numbers already counted this cycle (they're free).
-* v5 scan times are the carrier's local time; ``utcOffset`` is given only when known.
+* ``parcels``      Parcels (parcelsapp.com), API key; free for 300 packages a month.
+* ``trackingmore`` TrackingMore (trackingmore.com), API key; credits per package.
+* ``scraper``      Universal Parcel Scraper (Peek's open-source engine), built into Kern's image:
+                   asks each carrier's own site, no account or key. Or point Kern at one you run
+                   yourself (its HTTP server, ``POST /v1/track``).
+
+Each returns the same normalized ``Result``; everything after that (status, scans, map, events,
+how often to ask, the monthly allowance for paid services) is here, shared.
 
 Opt-in on purpose: only tracking numbers (and your country, for numbers that need one) are sent.
-The key is stored encrypted like mail passwords.
+Keys are stored encrypted like mail passwords.
 """
 
 from __future__ import annotations
 
-import json
 import logging
-import time
-import urllib.error
-import urllib.request
+from dataclasses import dataclass, field
 from datetime import date, datetime, timedelta, timezone as dt_tz
 
 from django.utils import timezone
@@ -41,37 +36,36 @@ from .models import Preferences, Shipment
 
 log = logging.getLogger(__name__)
 
-API = "https://parcelsapp.com/api/v5"
-TIMEOUT = 25
 BATCH = 40
 EVERY = timedelta(minutes=90)
 EVERY_SOON = timedelta(minutes=25)  # out for delivery / due today: check more often
 MAX_AGE = timedelta(days=60)  # stop asking about packages this old
-POLL_TRIES, POLL_WAIT = 6, 2.5  # wait up to ~15 s for a lookup to finish, then pick it up next round
-FREE_LIMIT = 300
-
-# Our carrier ids (mail/packages.py) -> Parcels' tracking slugs. Without one, Parcels needs the
-# destination country to find the carrier.
-CARRIER_HINTS = {
-    "ups": "ups", "usps": "usps", "fedex": "fedex", "royalmail": "royal-mail", "postnord": "sweden-post",
-    "bring": "bring", "gls": "gls", "amazon": "amazon-logistics",
-}
-
-# Parcels' shipment.status (free text, e.g. "delivered", "transit") -> ours.
-STATUS_WORDS = [
-    ("delivered", "delivered"),
-    ("out_for_delivery", "out_for_delivery"), ("out for delivery", "out_for_delivery"),
-    ("pickup", "ready_for_pickup"), ("ready", "ready_for_pickup"), ("arrived", "ready_for_pickup"),
-    ("exception", "exception"), ("fail", "exception"), ("undeliver", "exception"), ("return", "exception"),
-    ("transit", "in_transit"), ("shipped", "in_transit"),
-    ("pending", "ordered"), ("info", "ordered"), ("created", "ordered"),
-]
 
 
 class TrackingError(Exception):
     def __init__(self, message: str, code: str = "", status: int = 0):
         super().__init__(message)
         self.code, self.status = code, status
+
+
+@dataclass
+class Scan:
+    utc: datetime | None  # for ordering
+    at: str | None  # what to show: the carrier's time, with its offset when known
+    text: str
+    where: str = ""
+
+
+@dataclass
+class Result:
+    """One package as a service reports it, in Kern's terms."""
+
+    status: str | None = None  # mail/packages.py STATUS_LABEL keys, or None when unknown
+    scans: list[Scan] = field(default_factory=list)
+    expected: date | None = None
+    origin: str = ""
+    destination: str = ""
+    pending: bool = False  # still being looked up: ask again next round
 
 
 # --- settings --------------------------------------------------------------------------
@@ -83,7 +77,17 @@ def _row() -> Preferences:
 
 
 def _cfg() -> dict:
-    return dict((_row().data or {}).get("tracking") or {})
+    t = dict((_row().data or {}).get("tracking") or {})
+    # Settings saved before there was a choice of services: one Parcels key at the top level.
+    if t.get("key_enc"):
+        t.setdefault("keys", {})[t.get("provider") or "parcels"] = t.pop("key_enc")
+        if t.get("limit"):
+            t.setdefault("limits", {})["parcels"] = t.pop("limit")
+        if t.get("sent"):
+            t["sent"] = {"parcels": t["sent"]} if "month" in t["sent"] else t["sent"]
+        if t.get("exact") and "month" in t["exact"]:
+            t["exact"] = {"parcels": t["exact"]}
+    return t
 
 
 def _save(t: dict) -> None:
@@ -98,15 +102,37 @@ def _month() -> str:
     return timezone.localdate().strftime("%Y-%m")
 
 
-def allowance(t: dict | None = None) -> dict:
-    """How many new packages can still be tracked this cycle."""
+def tracker(name: str | None = None):
+    from .trackers import TRACKERS
+
+    t = _cfg()
+    return TRACKERS.get(name if name is not None else t.get("provider", ""))
+
+
+def secret(name: str, t: dict | None = None) -> str:
+    """The stored key (or token) for one service, decrypted; "" when none."""
+    enc = ((t if t is not None else _cfg()).get("keys") or {}).get(name)
+    if not enc:
+        return ""
+    try:
+        return secretbox.decrypt(enc)
+    except Exception:  # noqa: BLE001 - a key saved on another server can't be read here
+        return ""
+
+
+def allowance(t: dict | None = None, name: str | None = None) -> dict | None:
+    """How many new packages a metered service can still take this cycle (None: not metered)."""
     t = _cfg() if t is None else t
-    limit = int(t.get("limit") or FREE_LIMIT)
+    name = name or t.get("provider", "")
+    tr = tracker(name)
+    if tr is None or not tr.METERED:
+        return None
+    limit = int((t.get("limits") or {}).get(name) or tr.FREE_LIMIT)
     month = _month()
-    sent = t.get("sent") or {}
+    sent = (t.get("sent") or {}).get(name) or {}
     used = len(sent.get("numbers") or []) if sent.get("month") == month else 0
-    exact = t.get("exact") or {}
-    if exact.get("month") == month:  # Parcels told us; our own count can only have grown since
+    exact = (t.get("exact") or {}).get(name) or {}
+    if exact.get("month") == month:  # the service told us; our own count can only have grown since
         limit = int(exact.get("limit") or limit)
         used = max(used, int(exact.get("current") or 0))
     return {"limit": limit, "used": used, "left": max(0, limit - used), "month": month,
@@ -114,59 +140,70 @@ def allowance(t: dict | None = None) -> dict:
 
 
 def settings_json() -> dict:
+    from .trackers import TRACKERS
+
     t = _cfg()
-    return {"provider": t.get("provider", ""), "hasKey": bool(t.get("key_enc")), "country": t.get("country", ""),
-            "lastError": t.get("last_error", ""), "lastChecked": t.get("last_checked"),
-            "allowance": allowance(t) if t.get("key_enc") else None}
+    name = t.get("provider", "")
+    tr = TRACKERS.get(name)
+    return {
+        "provider": name,
+        "hasKey": bool(tr and (not tr.NEEDS_KEY or secret(name, t))),
+        "keys": {n: bool(secret(n, t)) for n in TRACKERS},
+        "country": t.get("country", ""),
+        "scraper": {"url": (t.get("scraper") or {}).get("url", ""), "fallbacks": (t.get("scraper") or {}).get("fallbacks", ["UPU"]),
+                    "builtIn": TRACKERS["scraper"].built_in()},
+        "lastError": t.get("last_error", ""), "lastChecked": t.get("last_checked"),
+        "allowance": allowance(t, name) if tr else None,
+        "services": [{"id": n, "name": x.LABEL, "needsKey": x.NEEDS_KEY, "metered": x.METERED} for n, x in TRACKERS.items()],
+    }
 
 
-def configure(provider: str, key: str | None, country: str | None = None, limit: int | None = None) -> dict:
-    """provider "" turns live tracking off (and forgets the key); "parcels" with a key turns it on.
-    key None keeps the stored one."""
-    if provider not in ("", "parcels"):
+def configure(provider: str, key: str | None = None, country: str | None = None, limit: int | None = None,
+              scraper: dict | None = None) -> dict:
+    """provider "" turns live tracking off (stored keys stay, for turning it back on); otherwise it
+    picks the service. key None keeps the stored one; key "" forgets it."""
+    from .trackers import TRACKERS
+
+    if provider and provider not in TRACKERS:
         raise TrackingError("Unknown tracking service.")
     t = _cfg()
-    if not provider:
-        _save({})
-        return settings_json()
-    if t.get("provider") != provider:
-        t = {}
     t["provider"] = provider
-    if key is not None:
-        key = key.strip()
-        if not key or len(key) > 300 or any(c.isspace() for c in key):
-            raise TrackingError("That doesn't look like an API key.")
-        t["key_enc"] = secretbox.encrypt(key)
-        t.pop("exact", None)
-    if not t.get("key_enc"):
-        raise TrackingError("Paste your API key.")
-    if country is not None:
-        c = country.strip().upper()
-        if c and (len(c) != 2 or not c.isalpha()):
-            raise TrackingError("Pick your country (two letters, like US or SE).")
-        t["country"] = c
-    if limit is not None:
-        t["limit"] = max(1, min(1_000_000, int(limit)))
+    if provider:
+        tr = TRACKERS[provider]
+        keys = t.setdefault("keys", {})
+        if key is not None:
+            key = key.strip()
+            if key and (len(key) > 300 or any(c.isspace() for c in key)):
+                raise TrackingError("That doesn't look like an API key.")
+            if key:
+                keys[provider] = secretbox.encrypt(key)
+            else:
+                keys.pop(provider, None)
+            (t.get("exact") or {}).pop(provider, None)
+        if country is not None:
+            c = country.strip().upper()
+            if c and (len(c) != 2 or not c.isalpha()):
+                raise TrackingError("Pick your country (two letters, like US or SE).")
+            t["country"] = c
+        if limit is not None:
+            t.setdefault("limits", {})[provider] = max(1, min(1_000_000, int(limit)))
+        if scraper is not None:
+            t["scraper"] = tr.clean_settings(scraper, t.get("scraper") or {}) if provider == "scraper" else t.get("scraper")
+        if tr.NEEDS_KEY and not keys.get(provider):
+            raise TrackingError("Paste your API key.")
     t["last_error"] = ""
+    t.pop("pending", None)
     _save(t)
     return settings_json()
 
 
-def _key() -> str:
-    t = _cfg()
-    if t.get("provider") != "parcels" or not t.get("key_enc"):
-        return ""
-    try:
-        return secretbox.decrypt(t["key_enc"])
-    except Exception:  # noqa: BLE001 - a key from another server can't be read here
-        return ""
-
-
 def enabled() -> bool:
-    return bool(_key())
+    t = _cfg()
+    tr = tracker(t.get("provider", ""))
+    return bool(tr and (not tr.NEEDS_KEY or secret(t["provider"], t)) and tr.available(t))
 
 
-def _note(error: str = "", **changes) -> None:
+def note(error: str = "", **changes) -> None:
     t = _cfg()
     if not t:
         return
@@ -176,165 +213,97 @@ def _note(error: str = "", **changes) -> None:
     _save(t)
 
 
-def _count_sent(numbers: list[str]) -> None:
+def record_exact(name: str, limit, current) -> None:
+    """The service stated its own usage figures (e.g. with a 'limit reached' error)."""
     t = _cfg()
-    month = _month()
-    sent = t.get("sent") or {}
-    have = set(sent.get("numbers") or []) if sent.get("month") == month else set()
-    have |= set(numbers)
-    t["sent"] = {"month": month, "numbers": sorted(have)}
+    t.setdefault("exact", {})[name] = {"month": _month(), "limit": limit, "current": current}
     _save(t)
 
 
-def _counted(number: str) -> bool:
-    sent = _cfg().get("sent") or {}
+def count_sent(name: str, numbers: list[str]) -> None:
+    t = _cfg()
+    month = _month()
+    sent = (t.get("sent") or {}).get(name) or {}
+    have = set(sent.get("numbers") or []) if sent.get("month") == month else set()
+    have |= set(numbers)
+    t.setdefault("sent", {})[name] = {"month": month, "numbers": sorted(have)}
+    _save(t)
+
+
+def counted(name: str, number: str) -> bool:
+    sent = (_cfg().get("sent") or {}).get(name) or {}
     return sent.get("month") == _month() and number in (sent.get("numbers") or [])
 
 
-# --- the service -------------------------------------------------------------------------
-
-
-def _call(key: str, method: str, path: str, payload: dict | None = None) -> dict:
-    req = urllib.request.Request(
-        API + path, method=method, data=json.dumps(payload).encode() if payload is not None else None,
-        headers={"Authorization": f"Bearer {key}", "Content-Type": "application/json", "Accept": "application/json",
-                 "User-Agent": "Kern-Mail/1"},
-    )
-    try:
-        with urllib.request.urlopen(req, timeout=TIMEOUT) as r:  # noqa: S310 - fixed https URL
-            return json.loads(r.read(5_000_000).decode("utf-8", "replace"))
-    except urllib.error.HTTPError as e:
-        try:
-            err = (json.loads(e.read(200_000).decode("utf-8", "replace")) or {}).get("error") or {}
-        except ValueError:
-            err = {}
-        raise _error(e.code, err) from e
-    except (urllib.error.URLError, TimeoutError, OSError, ValueError) as e:
-        raise TrackingError("Couldn't reach Parcels.") from e
-
-
-def _error(status: int, err: dict) -> TrackingError:
-    e = _error_text(status, err)
-    e.code, e.status = err.get("code") or "", status
-    return e
-
-
-def _error_text(status: int, err: dict) -> TrackingError:
-    code = err.get("code") or ""
-    if code == "SUBSCRIPTION_LIMIT_REACHED":
-        _note("", exact={"month": _month(), "limit": err.get("limit"), "current": err.get("current"),
-                         "available": err.get("available")})
-        return TrackingError(f"This month's Parcels allowance is used up ({err.get('current')} of {err.get('limit')}).")
-    friendly = {
-        "MISSING_API_KEY": "Parcels didn't get an API key.",
-        "INVALID_API_KEY": "Parcels refused the API key.",
-        "UNCONFIRMED_ACCOUNT": "Confirm your Parcels account (check your email), then try again.",
-        "SUBSCRIPTION_NOT_FOUND": "That key has no Parcels subscription.",
-        "SUBSCRIPTION_INACTIVE": "The Parcels subscription is inactive.",
-        "INVALID_SUBSCRIPTION_STATE": "The Parcels subscription can't track right now.",
-        "FORBIDDEN": "Tracking is turned off for this Parcels account.",
-        "RATE_LIMITED": "Parcels says: too many requests. Trying again later.",
-        "BUSY": "Parcels is busy. Trying again later.",
-    }
-    if code in friendly:
-        return TrackingError(friendly[code])
-    if status in (401, 403):
-        return TrackingError("Parcels refused the API key.")
-    return TrackingError(err.get("message") or f"Parcels answered {status}.")
-
-
 def check_key() -> None:
-    """A free call (no quota) that fails when the key is wrong."""
-    key = _key()
-    if not key:
-        raise TrackingError("Paste your API key.")
-    _call(key, "GET", "/tracking-carriers?query=ups&limit=1")
-
-
-def _item(s: Shipment, country: str) -> dict | None:
-    hint = CARRIER_HINTS.get(s.carrier)
-    if hint:
-        return {"tracking_number": s.number, "carrier_hint": hint}
-    if country:
-        return {"tracking_number": s.number, "destination_country": country}
-    return None  # Parcels can't find the carrier without one or the other
+    """A check that the chosen service answers (with a key: that it's accepted). Uses no quota."""
+    t = _cfg()
+    tr = tracker(t.get("provider", ""))
+    if tr is None:
+        return
+    tr.check(t)
 
 
 # --- reading a result ------------------------------------------------------------------------
 
 
-def _when(e: dict) -> tuple[datetime | None, str | None]:
-    """(UTC instant for ordering, the time to show) for a v5 event."""
-    raw = str(e.get("date") or "")
+def parse_when(raw: str | None, offset: str | None = None) -> tuple[datetime | None, str | None]:
+    """(UTC instant, the time to show) for a scan time that may carry an offset, or come with one
+    separately, or have none (then it's the carrier's local clock, shown as written)."""
+    raw = str(raw or "").strip()
     if not raw:
         return None, None
     try:
-        local = datetime.fromisoformat(raw.replace("Z", ""))
+        d = datetime.fromisoformat(raw.replace("Z", "+00:00").replace(" ", "T", 1))
     except ValueError:
         return None, None
-    off = e.get("utcOffset")
-    if off:
+    if d.tzinfo is None and offset:
         try:
-            sign = 1 if off[0] == "+" else -1
-            h, m = int(off[1:3]), int(off[4:6])
-            aware = local.replace(tzinfo=dt_tz(sign * timedelta(hours=h, minutes=m)))
-            return aware.astimezone(dt_tz.utc), aware.isoformat()
+            sign = 1 if offset[0] == "+" else -1
+            d = d.replace(tzinfo=dt_tz(sign * timedelta(hours=int(offset[1:3]), minutes=int(offset[4:6]))))
         except (ValueError, IndexError):
             pass
-    # Offset unknown: Parcels never guesses one. Order by it as if local, show it as written.
-    return timezone.make_aware(local), local.isoformat()
+    if d.tzinfo is not None:
+        return d.astimezone(dt_tz.utc), d.isoformat()
+    return timezone.make_aware(d), d.isoformat()
 
 
-def _status(api_status: str, latest_text: str) -> str | None:
+def status_from(words: list[tuple[str, str]], api_status: str, latest_text: str) -> str | None:
+    """Our status from a service's status word and the newest scan's wording."""
     from .packages import detect_status
 
     a = (api_status or "").lower()
-    if "deliver" in a and "out" not in a and "un" not in a:
+    if "deliver" in a and not any(x in a for x in ("out", "un", "fail", "attempt")):
         return "delivered"
-    words = detect_status("", latest_text or "") if latest_text else None
-    if words in ("delivered", "out_for_delivery", "ready_for_pickup", "exception"):
-        return words
-    for needle, ours in STATUS_WORDS:
+    said = detect_status("", latest_text or "") if latest_text else None
+    if said in ("delivered", "out_for_delivery", "ready_for_pickup", "exception"):
+        return said
+    for needle, ours in words:
         if needle in a:
             return ours
-    return words if latest_text else None
+    return said if latest_text else None
 
 
-def apply(s: Shipment, shipment: dict, estimate: dict | None = None) -> bool:
-    """Update a shipment from one Parcels result. Returns whether its status changed."""
+def apply(s: Shipment, r: Result) -> bool:
+    """Update a shipment from a service's result. Returns whether its status changed."""
     from . import geo
 
-    if shipment.get("error"):
-        s.checked_at = timezone.now()
-        return False
-    scans = []
-    for e in (shipment.get("states") or [])[:60]:
-        utc, shown = _when(e)
-        text = " ".join(str(e.get("state") or "").split())[:300]
-        if text:
-            scans.append({"at": shown, "utc": utc, "text": text, "where": " ".join(str(e.get("location") or "").split())[:120]})
-    scans.sort(key=lambda x: x["utc"] or datetime.min.replace(tzinfo=dt_tz.utc), reverse=True)
+    scans = sorted(r.scans, key=lambda x: x.utc or datetime.min.replace(tzinfo=dt_tz.utc), reverse=True)
     latest = scans[0] if scans else None
-    status = _status(str(shipment.get("status") or ""), latest["text"] if latest else "")
     changed = False
-    if status and status != s.status:
-        s.status, changed = status, True
-        s.status_at = (latest and latest["utc"]) or timezone.now()
-    elif latest and latest["utc"] and (s.status_at is None or latest["utc"] > s.status_at):
-        s.status_at = latest["utc"]
-    window = ((estimate or {}).get("estimate") or {}).get("estimated_delivery_at") or {}
-    exp = window.get("to") or window.get("from")
-    if exp and s.status != "delivered":
-        try:
-            s.expected, s.expected_text = date.fromisoformat(str(exp)[:10]), ""
-        except ValueError:
-            pass
+    if r.status and r.status != s.status:
+        s.status, changed = r.status, True
+        s.status_at = (latest and latest.utc) or timezone.now()
+    elif latest and latest.utc and (s.status_at is None or latest.utc > s.status_at):
+        s.status_at = latest.utc
+    if r.expected and s.status != "delivered":
+        s.expected, s.expected_text = r.expected, ""
     if s.status == "delivered":
         s.expected, s.expected_text = None, ""
-    s.live_events = [{k: v for k, v in x.items() if k != "utc"} for x in scans[:30]]
-    s.location = latest["where"] if latest else ""
-    places = [x["where"] for x in reversed(scans) if x["where"]]
-    s.route = {"origin": str(shipment.get("origin") or "")[:120], "destination": str(shipment.get("destination") or "")[:120],
+    s.live_events = [{"at": x.at, "text": x.text[:300], "where": x.where[:120]} for x in scans[:30]]
+    s.location = latest.where[:120] if latest else ""
+    places = [x.where for x in reversed(scans) if x.where]
+    s.route = {"origin": r.origin[:120], "destination": r.destination[:120],
                "points": geo.route_points(places) if places else []}
     s.live = True
     s.checked_at = timezone.now()
@@ -351,114 +320,57 @@ def _due(now) -> list[Shipment]:
     return out[:BATCH]
 
 
-def _absorb(res: dict, by_number: dict[str, Shipment]) -> tuple[int, list[str]]:
-    """Apply completed results. Returns (status changes, numbers still processing)."""
-    changed, waiting = 0, []
-    for r in res.get("results") or []:
-        s = by_number.get(r.get("tracking_number"))
-        if s is None:
-            continue
-        if r.get("state") != "completed" or not r.get("shipment"):
-            waiting.append(s.number)
-            continue
-        before = s.status
-        moved = apply(s, r["shipment"], r.get("delivery_estimate"))
-        s.save()
-        if moved:
-            changed += 1
-            events.emit("package", id=s.pk, status=s.status, thread=s.thread_id, before=before)
-    for r in res.get("rejected") or []:
-        s = by_number.get(r.get("tracking_number"))
-        if s is not None:
-            s.checked_at = timezone.now()
+def store(s: Shipment, r: Result | None, now) -> int:
+    """Save one answer; 1 when the package's status changed."""
+    if r is None or r.pending:
+        if s.checked_at is None or s.checked_at < now:
+            s.checked_at = now
             s.save(update_fields=["checked_at"])
-    return changed, waiting
-
-
-def _poll(key: str, request_id: str, by_number: dict[str, Shipment], tries: int) -> tuple[int, bool]:
-    changed = 0
-    for _ in range(tries):
-        time.sleep(POLL_WAIT)
-        try:
-            res = _call(key, "GET", f"/trackings/{request_id}")
-        except TrackingError as e:
-            if e.status == 404 or e.code == "NO_REQUEST_FOUND":
-                return changed, True  # the record expired: the next round asks again
-            raise
-        n, waiting = _absorb(res, by_number)
-        changed += n
-        if res.get("done") or not waiting:
-            return changed, True
-    return changed, False
+        return 0
+    before = s.status
+    moved = apply(s, r)
+    s.save()
+    if moved:
+        events.emit("package", id=s.pk, status=s.status, thread=s.thread_id, before=before)
+    return int(moved)
 
 
 def refresh(shipments: list[Shipment] | None = None, *, force: bool = False) -> int:
-    """Ask Parcels about due (or the given) shipments. Returns how many changed status."""
-    key = _key()
-    if not key:
-        return 0
+    """Ask the chosen service about due (or the given) shipments. Returns how many changed status."""
     t = _cfg()
+    name = t.get("provider", "")
+    tr = tracker(name)
+    if tr is None or (tr.NEEDS_KEY and not secret(name, t)) or not tr.available(t):
+        return 0
     now = timezone.now()
-    changed = 0
+    items = shipments if shipments is not None else _due(now)
+    if not items and not t.get("pending"):
+        return 0
     try:
-        # A lookup left processing last time.
-        pending = t.get("pending") or {}
-        if pending.get("request_id") and shipments is None:
-            by_number = {s.number: s for s in Shipment.objects.filter(number__in=pending.get("numbers") or [])}
-            n, finished = _poll(key, pending["request_id"], by_number, 1)
-            changed += n
-            if finished or now.timestamp() - float(pending.get("at") or 0) > 1800:
-                t = _cfg()
-                t.pop("pending", None)
-                _save(t)
-        items = shipments if shipments is not None else _due(now)
-        if not items:
-            return changed
-        left = allowance()["left"]
-        country = _cfg().get("country", "")
-        ask, new = [], 0
+        ask, warning = items, ""
+        a = allowance(t, name)
+        if a is not None:  # a metered service: new numbers only while the allowance lasts
+            left, ask = a["left"], []
+            for s in items:
+                if counted(name, s.number):
+                    ask.append(s)
+                elif left > 0:
+                    left -= 1
+                    ask.append(s)
+            if items and len(ask) < len(items):
+                warning = "This month's allowance is used up. New packages are tracked from emails until it resets."
+        results, said = tr.lookup(ask, t) if ask or t.get("pending") else ({}, "")
+        changed = sum(store(s, results.get(s.number), now) for s in ask)
         for s in items:
-            item = _item(s, country)
-            if item is None:
-                continue
-            if not _counted(s.number):
-                if new >= left:
-                    continue  # out of allowance: only numbers already counted this cycle are free
-                new += 1
-            ask.append((s, item))
-        if not ask:
-            if any(_item(s, country) is None for s in items):
-                _note("Set your country so Parcels can find the carrier for some packages.")
-            elif items and left <= 0:
-                _note("This month's allowance is used up. Packages are tracked from emails until it resets.")
-            for s in items:  # don't look at them again every round
-                s.checked_at = now
-                s.save(update_fields=["checked_at"])
-            return changed
-        by_number = {s.number: s for s, _ in ask}
-        res = _call(key, "POST", "/trackings", {"language": "en", "shipments": [i for _, i in ask]})
-        rejected = {r.get("tracking_number") for r in res.get("rejected") or []}
-        _count_sent([n for n in by_number if n not in rejected])
-        n, waiting = _absorb(res, by_number)
-        changed += n
-        if waiting and not res.get("done") and res.get("request_id"):
-            n, finished = _poll(key, res["request_id"], by_number, POLL_TRIES)
-            changed += n
-            if not finished:
-                t = _cfg()
-                t["pending"] = {"request_id": res["request_id"], "numbers": waiting, "at": now.timestamp()}
-                _save(t)
-        for s in by_number.values():  # asked even if nothing came back yet: wait a round
-            if s.checked_at is None or s.checked_at < now:
-                s.checked_at = now
-                s.save(update_fields=["checked_at"])
-        _note("")
+            if s not in ask:
+                store(s, None, now)
+        note(said or warning)
+        return changed
     except TrackingError as e:
-        log.info("package tracking: %s", e)
-        _note(str(e))
+        log.info("package tracking (%s): %s", name, e)
+        note(str(e))
         if force:
             raise
-        for s in shipments if shipments is not None else _due(now):  # don't hammer a failing service
-            s.checked_at = now
-            s.save(update_fields=["checked_at"])
-    return changed
+        for s in items:  # don't hammer a failing service
+            store(s, None, now)
+        return 0

@@ -45,13 +45,20 @@
   let mapKey = $state('');
   let mapBusy = $state(false);
   let mapMsg = $state(null);
-  async function saveMap(key) {
+  // The map source being set up (may differ from the one in use until it's saved).
+  let mapPick = $state('');
+  let customTiles = $state({ light: '', dark: '', attribution: '' });
+  const mapSource = $derived((mapInfo?.sources || []).find((x) => x.id === (mapPick || mapInfo?.chosen || 'osm')));
+  async function saveMap(provider, key) {
     mapBusy = true;
     mapMsg = null;
     try {
-      mapInfo = await api.post('/packages/map', { key });
+      mapInfo = await api.post('/packages/map', { provider, ...(key !== undefined ? { key } : {}),
+        ...(provider === 'custom' ? { custom: customTiles } : {}) });
       mapKey = '';
-      mapMsg = { ok: true, text: mapInfo.provider === 'maptiler' ? 'MapTiler maps are on.' : 'Back to OpenStreetMap.' };
+      mapPick = '';
+      const name = mapInfo.sources.find((x) => x.id === mapInfo.provider)?.name || mapInfo.provider;
+      mapMsg = { ok: true, text: `The map uses ${name}.` };
       loadPackages();
     } catch (e) {
       mapMsg = { ok: false, text: e.message };
@@ -140,20 +147,39 @@
     await api.del(`/identities/${i.id}`);
     idents = idents.filter((x) => x.id !== i.id);
   }
+
+  // The tracking service being set up (may differ from the one in use until it's saved).
+  let trackPick = $state('');
+  let scraperUrl = $state(null);
+  let scraperFallbacks = $state(null);
+  const FALLBACKS = ['UPU', 'ParcelsApp', 'Ship24', '17TRACK', 'Ordertracker', 'Postal Ninja', 'Track718'];
+  const service = $derived(trackPick || tracking?.provider || '');
+  const serviceInfo = $derived((tracking?.services || []).find((x) => x.id === service));
+  const isOn = $derived(!!tracking?.provider && service === tracking.provider);
   async function saveTracking(provider, extra = {}) {
     trackBusy = true;
     trackMsg = null;
     try {
-      tracking = await api.post('/packages/tracking', provider
-        ? { provider, key: trackKey || undefined, country: countryPick || tracking?.country || trackCountry || '', ...extra }
-        : { provider: '' });
+      const body = { provider };
+      if (provider) {
+        if (trackKey) body.key = trackKey;
+        body.country = countryPick || tracking?.country || trackCountry || '';
+        if (provider === 'scraper') body.scraper = { url: scraperUrl ?? tracking?.scraper?.url ?? '', fallbacks: scraperFallbacks ?? tracking?.scraper?.fallbacks ?? ['UPU'] };
+      }
+      tracking = await api.post('/packages/tracking', { ...body, ...extra });
       trackKey = '';
-      trackMsg = provider ? (tracking.lastError ? { ok: false, text: tracking.lastError } : { ok: true, text: 'Connected. Packages update from the carrier from now on.' }) : null;
+      trackPick = '';
+      scraperUrl = scraperFallbacks = null;
+      trackMsg = provider ? (tracking.lastError ? { ok: false, text: tracking.lastError } : { ok: true, text: 'On. Packages update from the carrier from now on.' }) : null;
     } catch (e) {
       trackMsg = { ok: false, text: e.message };
     } finally {
       trackBusy = false;
     }
+  }
+  function toggleFallback(f) {
+    const cur = scraperFallbacks ?? tracking?.scraper?.fallbacks ?? ['UPU'];
+    scraperFallbacks = cur.includes(f) ? cur.filter((x) => x !== f) : [...cur, f];
   }
 
   function pick(p) {
@@ -400,12 +426,28 @@
     <div class="group">
       <div class="item col">
         <div><b>Live tracking</b><span>Shipping emails only say what the shop knew when it wrote them, so a package delivered without a
-          “delivered” email would stay on the way. With live tracking the mail service asks Parcels for each package's real status,
-          scans and a map of where it is, about every 90 minutes (more often on delivery day). Only tracking numbers are sent, and
-          your country for numbers that need one. Parcels' free plan covers 300 packages a month (each package counts once a month,
-          however often it's checked): sign up at <a href="https://parcelsapp.com/dashboard" target="_blank" rel="noopener noreferrer">parcelsapp.com</a>
-          and copy the API key.</span></div>
-        {#if tracking?.hasKey}
+          “delivered” email would stay on the way. With live tracking, the mail service checks each package with the carrier about
+          every 90 minutes (more often on delivery day) for its real status, scans and a map. Only tracking numbers are sent, and
+          your country for numbers that need one.</span></div>
+        <div class="providers" role="radiogroup" aria-label="Tracking service">
+          {#each [['', 'Off'], ...((tracking?.services || []).map((x) => [x.id, x.name]))] as [id, name] (id)}
+            <button class="prov" class:on={service === id} role="radio" aria-checked={service === id}
+                    onclick={() => { trackPick = id; trackMsg = null; if (!id && tracking?.provider) saveTracking(''); }}>{name}{#if id && tracking?.provider === id} ✓{/if}</button>
+          {/each}
+        </div>
+        {#if service === 'parcels'}
+          <p class="hint">Parcels' free plan covers 300 packages a month; each package counts once a month however often it's
+            checked. Sign up at <a href="https://parcelsapp.com/dashboard" target="_blank" rel="noopener noreferrer">parcelsapp.com</a> and copy the API key.</p>
+        {:else if service === 'trackingmore'}
+          <p class="hint">TrackingMore charges one credit when a package is first added; checking it again is free. Get a key at
+            <a href="https://www.trackingmore.com/signup.html" target="_blank" rel="noopener noreferrer">trackingmore.com</a> (Developer → API key).</p>
+        {:else if service === 'scraper'}
+          <p class="hint">Peek's open-source <a href="https://github.com/plhery/universal-parcel-scraper" target="_blank" rel="noopener noreferrer">Universal
+            Parcel Scraper</a> reads each carrier's own tracking site: no account, no key, no limit. {tracking?.scraper?.builtIn
+              ? 'It\'s built into this Kern.' : 'This Kern has no built-in copy (rebuild the Docker image), so enter the address of one you run.'}
+            Carriers that only answer a browser need its Docker image (it has Chromium) at an address below.</p>
+        {/if}
+        {#if isOn}
           {@const a = tracking.allowance}
           <div class="allow">
             <span class="test" class:good={!tracking.lastError} class:bad={!!tracking.lastError}>{#if tracking.lastError}<CircleAlert size={13} /> {tracking.lastError}{:else}<CircleCheck size={13} /> On{#if tracking.lastChecked} · checked {when(tracking.lastChecked)}{/if}{/if}</span>
@@ -413,35 +455,74 @@
               <div class="meter" role="meter" aria-valuemin="0" aria-valuemax={a.limit} aria-valuenow={a.used} aria-label="Packages tracked this month">
                 <span style:width="{Math.min(100, (a.used / a.limit) * 100)}%" class:low={a.left < a.limit * 0.1}></span>
               </div>
-              <span class="faint"><b class="inline">{a.left.toLocaleString()}</b> of {a.limit.toLocaleString()} left this month{a.exact ? ' (from Parcels)' : ' (counted here)'}</span>
+              <span class="faint"><b class="inline">{a.left.toLocaleString()}</b> of {a.limit.toLocaleString()} left this month{a.exact ? ' (from the service)' : ' (counted here)'}</span>
             {/if}
           </div>
         {/if}
-        <div class="row">
-          <input class="input wide" type="password" bind:value={trackKey} autocomplete="off" placeholder={tracking?.hasKey ? 'Key saved. Paste a new one to replace it.' : 'Parcels API key'} aria-label="Parcels API key" />
-          <select class="input sel" value={countryPick || tracking?.country || trackCountry} onchange={(e) => (countryPick = e.currentTarget.value)} aria-label="Your country" title="Where your packages are delivered">
-            <option value="">Country…</option>
-            {#each COUNTRIES as [code, name] (code)}<option value={code}>{name}</option>{/each}
-          </select>
-          <button class="btn primary" disabled={trackBusy || (!trackKey && !tracking?.hasKey)} onclick={() => saveTracking('parcels')}>{trackBusy ? 'Checking…' : tracking?.hasKey && !trackKey ? 'Save' : 'Connect'}</button>
-          {#if tracking?.hasKey}<button class="btn ghost" disabled={trackBusy} onclick={() => saveTracking('')}>Turn off</button>{/if}
-        </div>
-        {#if tracking?.hasKey}
-          <div class="row lim"><span class="faint">Packages a month on your plan</span><input class="input port" type="number" min="1" value={tracking.allowance?.limit ?? 300}
-            onchange={(e) => saveTracking('parcels', { limit: Number(e.currentTarget.value) || 300 })} aria-label="Packages a month on your plan" /></div>
+        {#if service}
+          <div class="row">
+            {#if serviceInfo?.needsKey}
+              <input class="input wide" type="password" bind:value={trackKey} autocomplete="off"
+                     placeholder={tracking?.keys?.[service] ? 'Key saved. Paste a new one to replace it.' : `${serviceInfo.name} API key`} aria-label="{serviceInfo.name} API key" />
+            {/if}
+            {#if service === 'parcels'}
+              <select class="input sel" value={countryPick || tracking?.country || trackCountry} onchange={(e) => (countryPick = e.currentTarget.value)} aria-label="Your country" title="Where your packages are delivered">
+                <option value="">Country…</option>
+                {#each COUNTRIES as [code, name] (code)}<option value={code}>{name}</option>{/each}
+              </select>
+            {/if}
+            {#if service === 'scraper'}
+              <input class="input wide" value={scraperUrl ?? tracking?.scraper?.url ?? ''} oninput={(e) => (scraperUrl = e.currentTarget.value)}
+                     placeholder={tracking?.scraper?.builtIn ? 'Built in (or your scraper, https://…)' : 'https://parcels.example.com:8080'} aria-label="Scraper address" />
+              <input class="input" type="password" bind:value={trackKey} autocomplete="off" placeholder="Token (optional)" aria-label="Scraper token" style="width:150px" />
+            {/if}
+            <button class="btn primary" disabled={trackBusy || (serviceInfo?.needsKey && !trackKey && !tracking?.keys?.[service])}
+                    onclick={() => saveTracking(service)}>{trackBusy ? 'Checking…' : isOn ? 'Save' : 'Turn on'}</button>
+          </div>
+          {#if service === 'scraper'}
+            <div class="fallbacks"><span class="faint">When the carrier's own site has nothing, also ask:</span>
+              {#each FALLBACKS as f (f)}
+                {@const on = (scraperFallbacks ?? tracking?.scraper?.fallbacks ?? ['UPU']).includes(f)}
+                <label class="fb"><input type="checkbox" checked={on} onchange={() => toggleFallback(f)} /> {f}</label>
+              {/each}
+              <span class="faint small">Each one you tick receives the tracking number.</span>
+            </div>
+          {/if}
+          {#if isOn && serviceInfo?.metered}
+            <div class="row lim"><span class="faint">Packages a month on your plan</span><input class="input port" type="number" min="1" value={tracking.allowance?.limit}
+              onchange={(e) => saveTracking(service, { limit: Number(e.currentTarget.value) || undefined })} aria-label="Packages a month on your plan" /></div>
+          {/if}
         {/if}
         {#if trackMsg}<span class="test" class:good={trackMsg.ok} class:bad={!trackMsg.ok}>{#if trackMsg.ok}<CircleCheck size={13} />{:else}<CircleAlert size={13} />{/if} {trackMsg.text}</span>{/if}
       </div>
       <div class="item col">
-        <div><b>Package map</b><span>Each package shows a line through its scans. Places are looked up on OpenStreetMap and map
-          tiles are fetched by your Kern server, so your browser never contacts them. Without a key the map is OpenStreetMap's own,
-          toned to the theme; with a free <a href="https://cloud.maptiler.com/account/keys/" target="_blank" rel="noopener noreferrer">MapTiler</a>
-          key it uses MapTiler's quieter dark and light maps.</span></div>
-        <div class="row">
-          <input class="input wide" type="password" bind:value={mapKey} autocomplete="off" placeholder={mapInfo?.provider === 'maptiler' ? 'MapTiler key saved' : 'MapTiler API key (optional)'} aria-label="MapTiler API key" />
-          <button class="btn" disabled={mapBusy || !mapKey} onclick={() => saveMap(mapKey)}>{mapBusy ? 'Checking…' : 'Use MapTiler'}</button>
-          {#if mapInfo?.provider === 'maptiler'}<button class="btn ghost" disabled={mapBusy} onclick={() => saveMap('')}>Use OpenStreetMap</button>{/if}
+        <div><b>Package map</b><span>Each package shows a line through its scans. Places are looked up on OpenStreetMap, and map tiles
+          are fetched by your Kern server, so your browser never contacts the map service.</span></div>
+        <div class="providers" role="radiogroup" aria-label="Map source">
+          {#each mapInfo?.sources || [] as x (x.id)}
+            <button class="prov" class:on={(mapPick || mapInfo.chosen) === x.id} role="radio" aria-checked={(mapPick || mapInfo.chosen) === x.id}
+                    onclick={() => { mapPick = x.id; mapMsg = null; if (!x.needsKey && x.id !== 'custom') saveMap(x.id); }}>{x.name}{#if mapInfo.provider === x.id} ✓{/if}</button>
+          {/each}
         </div>
+        {#if mapSource?.id === 'osm'}
+          <p class="hint">OpenStreetMap's own map, greyed down to fit the theme. No key.</p>
+        {:else if mapSource?.id === 'esri'}
+          <p class="hint">Esri's quiet grey canvas, with a dark and a light version that match the theme. No key.</p>
+        {:else if mapSource?.needsKey}
+          <p class="hint">{mapSource.name} has dark and light maps that match the theme, and a free plan. Get a key at
+            <a href={mapSource.signup} target="_blank" rel="noopener noreferrer">{new URL(mapSource.signup).hostname}</a>.</p>
+          <div class="row">
+            <input class="input wide" type="password" bind:value={mapKey} autocomplete="off"
+                   placeholder={mapInfo?.keys?.[mapSource.id] ? 'Key saved. Paste a new one to replace it.' : `${mapSource.name} key`} aria-label="{mapSource.name} key" />
+            <button class="btn" disabled={mapBusy || (!mapKey && !mapInfo?.keys?.[mapSource.id])} onclick={() => saveMap(mapSource.id, mapKey || undefined)}>{mapBusy ? 'Checking…' : 'Use ' + mapSource.name}</button>
+          </div>
+        {:else if mapSource?.id === 'custom'}
+          <p class="hint">Any tile server: an address with {'{z}'}, {'{x}'} and {'{y}'} in it, over https. Add a second one for the dark theme if it has one.</p>
+          <div class="row"><input class="input wide" value={customTiles.light || mapInfo?.custom?.light || ''} oninput={(e) => (customTiles.light = e.currentTarget.value)} placeholder="https://tiles.example.com/{'{z}'}/{'{x}'}/{'{y}'}.png" aria-label="Tile address" /></div>
+          <div class="row"><input class="input wide" value={customTiles.dark || mapInfo?.custom?.dark || ''} oninput={(e) => (customTiles.dark = e.currentTarget.value)} placeholder="Dark theme tiles (optional)" aria-label="Dark tile address" />
+            <input class="input wide" value={customTiles.attribution || mapInfo?.custom?.attribution || ''} oninput={(e) => (customTiles.attribution = e.currentTarget.value)} placeholder="Credit line, e.g. © OpenStreetMap contributors" aria-label="Map credit line" /></div>
+          <div class="row"><button class="btn" disabled={mapBusy} onclick={() => saveMap('custom')}>{mapBusy ? 'Checking…' : 'Use these tiles'}</button></div>
+        {/if}
         {#if mapMsg}<span class="test" class:good={mapMsg.ok} class:bad={!mapMsg.ok}>{#if mapMsg.ok}<CircleCheck size={13} />{:else}<CircleAlert size={13} />{/if} {mapMsg.text}</span>{/if}
       </div>
     </div>
@@ -555,6 +636,9 @@
   .meter span { display: block; height: 100%; border-radius: 3px; background: var(--accent); }
   .meter span.low { background: var(--danger); }
   .lim { align-items: center; }
+  .fallbacks { display: flex; flex-wrap: wrap; align-items: center; gap: 4px 12px; font-size: 12.5px; }
+  .fb { display: inline-flex; align-items: center; gap: 4px; color: var(--text-2) !important; }
+  .small { font-size: 12px; width: 100%; }
   .identform { display: grid; gap: 8px; padding: 10px; border: 1px dashed var(--border-strong); border-radius: var(--radius); }
   .inline { display: inline !important; }
 </style>

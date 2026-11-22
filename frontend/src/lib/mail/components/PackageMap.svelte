@@ -1,9 +1,9 @@
 <script>
   // @ts-nocheck: plain JavaScript (like the rest of mail).
   // A small map of where a package has been: a line through its scans, oldest to newest, and a
-  // marker where it is now. Tiles come through Kern's server (backend/mail/geo.py): MapTiler's
-  // dark or light map with a key, else OpenStreetMap's, toned to the theme here. The math is plain
-  // Web Mercator, so there's no map library to load.
+  // marker where it is now. Tiles come through Kern's server (backend/mail/geo.py), dark or light
+  // with the theme; a source with one colourful style (OpenStreetMap) is toned down here. The math
+  // is plain Web Mercator, so there's no map library to load.
   import { resolvedTheme } from '#lib/state/prefs.svelte.ts';
   import { mapView } from '../mapView.js';
 
@@ -14,10 +14,10 @@
   const view = $derived(width ? mapView(points, width, height) : null);
 </script>
 
-<div class="map" class:light={theme === 'light'} class:osm={map?.provider !== 'maptiler'} style:height="{height}px" bind:clientWidth={width} aria-hidden="true">
+<div class="map" class:light={theme === 'light'} class:osm={map ? map.tone : true} style:height="{height}px" bind:clientWidth={width} aria-hidden="true">
   {#if view}
     {#each view.tiles as t (t.key)}
-      <img src="/api/mail/maptiles/{theme}/{t.z}/{t.x}/{t.y}.png" alt="" draggable="false"
+      <img src="/api/mail/maptiles/{theme}/{t.z}/{t.x}/{t.y}.png?v={map?.version || ''}" alt="" draggable="false"
            style:left="{t.left}px" style:top="{t.top}px" style:width="{view.tileSize}px" style:height="{view.tileSize}px" />
     {/each}
     <svg width={width} height={height} viewBox="0 0 {width} {height}">
