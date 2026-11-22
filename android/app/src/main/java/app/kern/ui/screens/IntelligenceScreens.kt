@@ -1,5 +1,9 @@
 package app.kern.ui.screens
 
+import androidx.compose.foundation.layout.fillMaxHeight
+import androidx.compose.foundation.layout.IntrinsicSize
+import androidx.compose.foundation.rememberScrollState
+import androidx.compose.foundation.horizontalScroll
 import androidx.compose.material.icons.outlined.Close
 import androidx.compose.material.icons.outlined.BookmarkBorder
 import androidx.compose.material.icons.outlined.Email
@@ -140,6 +144,62 @@ fun markdown(text: String, k: KernColors): AnnotatedString = buildAnnotatedStrin
         inline(line, k)
         if (h != null) addStyle(SpanStyle(fontWeight = FontWeight.SemiBold, fontSize = if (h.groupValues[1].length <= 2) androidx.compose.ui.unit.TextUnit(18f, androidx.compose.ui.unit.TextUnitType.Sp) else androidx.compose.ui.unit.TextUnit.Unspecified), start, length)
         if (li < lines.lastIndex) append('\n')
+    }
+}
+
+/** Markdown with tables: text runs as styled text, tables as a scrollable grid. */
+@Composable
+fun MarkdownText(text: String, modifier: Modifier = Modifier, style: androidx.compose.ui.text.TextStyle = MaterialTheme.typography.bodyLarge) {
+    val k = kern
+    val blocks = remember(text) { app.kern.data.markdownBlocks(text) }
+    Column(modifier, verticalArrangement = Arrangement.spacedBy(8.dp)) {
+        blocks.forEach { b ->
+            when (b) {
+                is app.kern.data.MdBlock.Text -> Text(remember(b.text, k) { markdown(b.text, k) }, style = style, color = k.text)
+                is app.kern.data.MdBlock.Table -> MdTable(b, style)
+            }
+        }
+    }
+}
+
+@Composable
+private fun MdTable(t: app.kern.data.MdBlock.Table, style: androidx.compose.ui.text.TextStyle) {
+    val k = kern
+    val cellStyle = style.copy(fontSize = style.fontSize * 0.88f, lineHeight = style.lineHeight * 0.9f)
+    // Column width from its longest cell, so short columns stay narrow and long ones wrap.
+    val natural = remember(t) {
+        t.head.indices.map { c ->
+            val longest = (listOf(t.head[c]) + t.rows.map { it[c] }).maxOf { it.length }
+            (longest * 7.5f + 24f).coerceIn(72f, 240f)
+        }
+    }
+    fun align(c: Int) = when (t.align[c]) { "center" -> androidx.compose.ui.text.style.TextAlign.Center; "right" -> androidx.compose.ui.text.style.TextAlign.End; else -> androidx.compose.ui.text.style.TextAlign.Start }
+    androidx.compose.foundation.layout.BoxWithConstraints(Modifier.fillMaxWidth()) {
+    // Fit the screen when every column can keep ~96dp; wider tables scroll sideways instead.
+    val room = maxWidth.value - 2f - (t.head.size - 1)
+    val total = natural.sum()
+    val widths = (if (total > room && room / t.head.size >= 96f) natural.map { it * room / total } else natural).map { it.dp }
+    Box(Modifier.fillMaxWidth().clip(RoundedCornerShape(10.dp)).border(1.dp, k.border, RoundedCornerShape(10.dp)).horizontalScroll(rememberScrollState())) {
+        Column {
+            Row(Modifier.background(k.surface2).height(IntrinsicSize.Min)) {
+                t.head.forEachIndexed { c, h ->
+                    if (c > 0) Box(Modifier.fillMaxHeight().width(1.dp).background(k.border))
+                    Text(remember(h, k) { markdown(h, k) }, style = cellStyle, fontWeight = FontWeight.SemiBold, color = k.text, textAlign = align(c),
+                        modifier = Modifier.width(widths[c]).padding(horizontal = 10.dp, vertical = 8.dp))
+                }
+            }
+            t.rows.forEach { r ->
+                Box(Modifier.fillMaxWidth().height(1.dp).background(k.border))
+                Row(Modifier.height(IntrinsicSize.Min)) {
+                    r.forEachIndexed { c, cell ->
+                        if (c > 0) Box(Modifier.fillMaxHeight().width(1.dp).background(k.border))
+                        Text(remember(cell, k) { markdown(cell, k) }, style = cellStyle, color = k.text, textAlign = align(c),
+                            modifier = Modifier.width(widths[c]).padding(horizontal = 10.dp, vertical = 8.dp))
+                    }
+                }
+            }
+        }
+    }
     }
 }
 
@@ -362,7 +422,7 @@ private fun Bubble(m: ChatMessage, nav: Nav, openUrl: (String) -> Unit) {
             Text(m.text, style = MaterialTheme.typography.bodyLarge, color = k.text,
                 modifier = Modifier.widthIn(max = 320.dp).clip(RoundedCornerShape(18.dp, 18.dp, 4.dp, 18.dp)).background(k.surface2).padding(horizontal = 14.dp, vertical = 10.dp))
         } else {
-            Text(remember(m.text, k) { markdown(m.text, k) }, style = MaterialTheme.typography.bodyLarge, color = k.text, modifier = Modifier.padding(horizontal = 6.dp))
+            MarkdownText(m.text, Modifier.padding(horizontal = 6.dp))
             if (m.actions.isNotEmpty()) Column(Modifier.padding(top = 8.dp, start = 6.dp), verticalArrangement = Arrangement.spacedBy(4.dp)) {
                 m.actions.forEach { a ->
                     val verb = a.str("verb") ?: a.str("kind") ?: ""

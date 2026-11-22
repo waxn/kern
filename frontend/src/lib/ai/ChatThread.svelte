@@ -148,6 +148,12 @@
 	.prose :global(h4) { margin: 10px 0 4px; font-size: 14.5px; }
 	.prose :global(pre) { margin: 0 0 8px; padding: 10px 12px; border-radius: 8px; background: var(--code-bg); overflow-x: auto; font: 12.5px/1.5 var(--font-mono); }
 	.prose :global(pre code) { background: none; padding: 0; color: inherit; }
+	.prose :global(.table-wrap) { margin: 4px 0 10px; overflow-x: auto; border: 1px solid var(--border); border-radius: 8px; }
+	.prose :global(table) { width: 100%; border-collapse: collapse; font-size: 13px; line-height: 1.45; }
+	.prose :global(th), .prose :global(td) { padding: 7px 10px; text-align: left; vertical-align: top; border-bottom: 1px solid var(--border); }
+	.prose :global(th) { font-weight: 600; color: var(--text); background: var(--surface-2, var(--hover)); white-space: nowrap; }
+	.prose :global(tr:last-child td) { border-bottom: 0; }
+	.prose :global(td + td), .prose :global(th + th) { border-left: 1px solid var(--border); }
 	.ask { padding: 10px 12px; border-radius: 10px; border: 1px solid color-mix(in srgb, var(--accent) 40%, var(--border)); background: color-mix(in srgb, var(--accent) 6%, var(--surface)); }
 	.ask-head { display: flex; align-items: center; gap: 7px; font-weight: 600; }
 	.ask-head :global(svg) { color: var(--accent); flex: none; }

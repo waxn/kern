@@ -188,7 +188,7 @@ fun RepoScreen(ws: Workspace, nav: Nav, name: String, path: String, ref: String?
                         Column(Modifier.padding(16.dp).fillMaxWidth().clip(RoundedCornerShape(12.dp)).background(kern.surface).padding(16.dp)) {
                             Text(rd.name, style = MaterialTheme.typography.labelSmall, color = kern.text3)
                             Spacer(Modifier.height(8.dp))
-                            Text(markdown(rd.text, kern), style = MaterialTheme.typography.bodyMedium)
+                            MarkdownText(rd.text, style = MaterialTheme.typography.bodyMedium)
                         }
                     }
                 }
@@ -210,7 +210,7 @@ fun BlobScreen(ws: Workspace, nav: Nav, name: String, path: String, ref: String?
             b == null -> Loading()
             b.binary || b.text == null -> EmptyState(Icons.AutoMirrored.Outlined.InsertDriveFile, "Binary file", "Open it in the web app to download.")
             path.endsWith(".md", true) -> Column(Modifier.verticalScroll(rememberScrollState()).padding(20.dp)) {
-                SelectionContainer { Text(markdown(b.text, kern), style = MaterialTheme.typography.bodyMedium) }
+                SelectionContainer { MarkdownText(b.text, style = MaterialTheme.typography.bodyMedium) }
             }
             else -> Box(Modifier.fillMaxSize().verticalScroll(rememberScrollState()).horizontalScroll(rememberScrollState()).padding(12.dp)) {
                 SelectionContainer {
