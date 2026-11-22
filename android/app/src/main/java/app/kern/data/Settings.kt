@@ -111,12 +111,49 @@ class Settings(context: Context) {
         }?.toMap()
         set(v) = p.edit().putString("web_unseen", v?.entries?.joinToString("\n") { "${it.key}:${it.value}" }).apply()
 
+    // ---- Kern Mail ------------------------------------------------------------
+    /** Instant notifications: keep a connection to the server open (MailPushService). */
+    var mailPush: Boolean
+        get() = p.getBoolean("mail_push", true)
+        set(v) = p.edit().putBoolean("mail_push", v).apply()
+
+    /** Sender and subject in new-mail notifications (the lock screen always shows only "New mail"). */
+    var mailShowDetails: Boolean
+        get() = p.getBoolean("mail_details", true)
+        set(v) = p.edit().putBoolean("mail_details", v).apply()
+
+    /** Dark email bodies in the dark theme (each message can switch back to its colors). */
+    var mailDarkEmails: Boolean
+        get() = p.getBoolean("mail_dark", true)
+        set(v) = p.edit().putBoolean("mail_dark", v).apply()
+
+    /** Last change-feed id the push service handled. */
+    var mailSince: Long?
+        get() = if (p.contains("mail_since")) p.getLong("mail_since", 0) else null
+        set(v) = p.edit().apply { if (v == null) remove("mail_since") else putLong("mail_since", v) }.apply()
+
+    /** How long the server may hold a push request (grows while the network path allows it). */
+    var mailWait: Int
+        get() = p.getInt("mail_wait", 50)
+        set(v) = p.edit().putInt("mail_wait", v).apply()
+
+    /** Conversations with a notification showing (so reading them elsewhere clears it). */
+    var mailNotified: Set<Long>
+        get() = p.getStringSet("mail_notified", emptySet())!!.mapNotNull { it.toLongOrNull() }.toSet()
+        set(v) = p.edit().putStringSet("mail_notified", v.map { it.toString() }.toSet()).apply()
+
+    /** The Inbox's first page as last seen, shown at once on the next start. */
+    var mailInboxCache: String?
+        get() = p.getString("mail_inbox", null)
+        set(v) = p.edit().putString("mail_inbox", v).apply()
+
     var recentSearches: List<String>
         get() = p.getString("recent_searches", "")!!.split("\n").filter { it.isNotBlank() }
         set(v) = p.edit().putString("recent_searches", v.take(8).joinToString("\n")).apply()
 
     fun clearAccount() {
         p.edit().remove("user").remove("cache_tasks").remove("cache_due").remove("cache_new")
-            .remove("cache_docs").remove("cache_at").remove("recent_searches").remove("web_unseen").apply()
+            .remove("cache_docs").remove("cache_at").remove("recent_searches").remove("web_unseen")
+            .remove("mail_unread").remove("mail_since").remove("mail_notified").remove("mail_inbox").remove("mail_wait").apply()
     }
 }

@@ -13,6 +13,8 @@
   import PackageCard from './PackageCard.svelte';
   import { api as kernApi } from '#lib/api.ts';
   import { goto } from '$app/navigation';
+  import { ai } from '#lib/ai/ai.svelte.ts';
+  import Sparkle from '#lib/ai/Sparkle.svelte';
 
   let { reading } = $props();
   let expanded = $state(new Set());
@@ -193,6 +195,8 @@
         <button class="icon-btn" title="Nudge me if nobody replies" aria-label="Nudge me if nobody replies" onclick={() => (ui.dialog = { type: 'nudge', threadId: t.id })}><Icon name="bell" /></button>
       {/if}
       <button class="icon-btn" title="Make a task (t)" aria-label="Make a task" onclick={makeTask}><Icon name="task" /></button>
+      <button class="icon-btn intel" class:on={ai.popupOpen} title="Ask Intelligence about this email" aria-label="Ask Intelligence about this email"
+              aria-pressed={ai.popupOpen} onclick={() => (ai.popupOpen = !ai.popupOpen)}><Sparkle size={16} /></button>
       {#if t.snoozeUntil}
         <button class="btn small" title="Bring back to Inbox now" onclick={() => act('unsnooze')}><Icon name="inbox" size={15} /> Unsnooze</button>
       {:else if !inTrash}
@@ -423,4 +427,6 @@
     .thread { padding: 12px 10px 120px; }
     h1 { font-size: 23px; }
   }
+  .intel :global(.sparkle) { transition: transform .35s var(--ease); }
+  .intel:hover :global(.sparkle), .intel.on :global(.sparkle) { transform: rotate(45deg) scale(1.08); }
 </style>

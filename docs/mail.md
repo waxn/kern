@@ -36,8 +36,29 @@ on the local network** (off by default, see Security).
 - **One worker per mailbox.** `manage.py mail_worker` runs a supervisor that keeps one sync
   thread per connected account, each running as that user, and restarts it when the account's
   settings change. Without Docker, run it next to `runserver`.
-- **Live updates** in the browser: the page polls `/api/mail/changes` every few seconds while
-  visible (Kern is served by threaded WSGI, so there's no held-open event stream).
+- **New mail arrives in about a second.** The worker holds an IMAP IDLE connection on the
+  Inbox; when the server reports new mail it fetches just that (pushed mail jumps ahead of a
+  folder sweep that's in progress). The browser long-polls `/api/mail/changes?wait=20`: the
+  request is held until the worker stores something, then the list refreshes. The refresh
+  button asks the worker to check the mail server right away (`POST /api/mail/check`).
+- **The Inbox opens instantly.** `ThreadFolder` is a small per-folder index of conversations
+  (newest first, with an unread flag), kept up to date by `threads.refresh_thread()`, so a
+  folder's list and counts are an index read instead of a scan of every message. The browser
+  also keeps the last folder list and first page of each view on this device (cleared on sign
+  out) and shows them while the fresh copy loads. `threads.rebuild_thread_index()` rebuilds the
+  index if it ever needs repairing.
+- **Mail and Notes are two modes** (the switch at the top of the sidebar, Alt+M). Each has its
+  own sidebar; Home, Settings and Intelligence belong to both.
+- **Intelligence on an email** (the sparkle in a conversation): the assistant gets that
+  conversation's text, marked as untrusted data, from a two-factor session only. It can make
+  tasks, pages and flashcards from it; it has no way to send, move or delete mail.
+- **Dark emails**: in the dark theme HTML mail is inverted to light-on-dark (pictures keep their
+  colors; mail that's already dark is left alone). The sun button on a message shows its
+  original colors. Settings → Mail → Dark emails turns it off.
+- **Kern Mail for Android** (`android/`, the `mail` flavor) is a mail-only app with instant
+  notifications: a foreground service long-polls the same feed (holds of 50 s growing to about
+  4.5 min when nothing on the way cuts them short), so there's no Firebase. Notifications show
+  sender and subject (only "New mail" on the lock screen) with Archive and Mark read.
 - **Search** uses SQLite FTS5 (subject, people, attachment names, body) plus Gmail-style
   operators: `from:` `to:` `subject:` `in:` `label:` `has:attachment` `is:unread` `before:`
   `after:` `filename:` `"exact words"` `-word`.

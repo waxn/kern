@@ -10,6 +10,7 @@ import androidx.activity.viewModels
 import androidx.compose.runtime.collectAsState
 import androidx.compose.runtime.getValue
 import app.kern.ui.KernRoot
+import app.kern.ui.MailRoot
 import app.kern.ui.Workspace
 import app.kern.ui.theme.KernTheme
 import kotlinx.coroutines.flow.MutableStateFlow
@@ -33,7 +34,9 @@ class MainActivity : ComponentActivity() {
         if (savedInstanceState == null) handle(intent)
         setContent {
             val theme by app.settings.theme.collectAsState()
-            KernTheme(theme) { KernRoot(ws, launch) }
+            KernTheme(theme) {
+                if (BuildConfig.MAIL_APP) MailRoot(ws, launch) else KernRoot(ws, launch)
+            }
         }
     }
 

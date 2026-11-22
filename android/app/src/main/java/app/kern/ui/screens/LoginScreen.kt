@@ -111,10 +111,10 @@ fun LoginScreen(ws: Workspace) {
         Spacer(Modifier.height(48.dp))
         KernLogo(56.dp)
         Spacer(Modifier.height(16.dp))
-        Text(site?.siteName ?: "Kern", style = MaterialTheme.typography.headlineMedium, color = kern.text)
+        Text(if (app.kern.BuildConfig.MAIL_APP) "Kern Mail" else site?.siteName ?: "Kern", style = MaterialTheme.typography.headlineMedium, color = kern.text)
         Spacer(Modifier.height(4.dp))
         Text(
-            if (site == null) "Your knowledge base, in your pocket." else if (mode == "signin") "Sign in to continue" else "Create your account",
+            if (site == null) (if (app.kern.BuildConfig.MAIL_APP) "Your mail, on your own server." else "Your knowledge base, in your pocket.") else if (mode == "signin") "Sign in to continue" else "Create your account",
             style = MaterialTheme.typography.bodyMedium, color = kern.text2, textAlign = TextAlign.Center,
         )
         Spacer(Modifier.height(32.dp))

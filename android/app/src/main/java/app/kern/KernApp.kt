@@ -6,6 +6,7 @@ import app.kern.data.Api
 import app.kern.data.Kern
 import app.kern.data.Settings
 import app.kern.notify.Notifications
+import app.kern.notify.MailPushService
 import app.kern.notify.SyncWorker
 import coil.ImageLoader
 import coil.ImageLoaderFactory
@@ -21,7 +22,10 @@ class KernApp : Application(), ImageLoaderFactory {
         api = Api(this, settings)
         kern = Kern(api)
         Notifications.createChannels(this)
-        if (settings.user != null) SyncWorker.schedule(this)
+        if (settings.user != null) {
+            SyncWorker.schedule(this)
+            MailPushService.sync(this)
+        }
     }
 
     /** Images on the server (`/media/…`) need the session cookie, so Coil shares the API's client. */

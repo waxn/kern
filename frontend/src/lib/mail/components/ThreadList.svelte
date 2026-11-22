@@ -2,9 +2,9 @@
   // @ts-nocheck: plain JavaScript (ported from Manifest).
   import { navLink, navigate, route } from '../router.svelte.js';
   import {
-    agenda, clearedToday, contextFolder, syncProgress, errorToast, folderById, info, labelById, list, loadAgenda, loadFolders, loadThreads,
-    threadAction, toast, ui, viewTitle,
-  parcels, } from '../state.svelte.js';
+    agenda, checkNow, clearedToday, contextFolder, syncProgress, errorToast, folderById, info, labelById, list, loadAgenda, loadFolders, loadThreads,
+    mailbox, parcels, prefs, READING_MIN, savePrefs, threadAction, toast, ui, viewAction, viewTitle,
+  } from '../state.svelte.js';
   import { displayName, highlight, participantsLabel, searchWords, shortDate, snoozeLabel, timeGroup } from '../format.js';
   import { ago } from '../when.js';
   import { packageSummary } from '../packages.js';
@@ -17,10 +17,47 @@
   let { wide } = $props();
   let sentinel = $state();
 
+  // Refresh: spin while Kern asks the mail server, then a check mark.
+  let refreshing = $state('idle'); // idle | spin | done
+  let doneTimer;
+  async function refresh() {
+    if (refreshing === 'spin') return;
+    clearTimeout(doneTimer);
+    refreshing = 'spin';
+    const t0 = Date.now();
+    try {
+      await checkNow();
+    } catch {
+      /* the list shows its own error */
+    }
+    await new Promise((r) => setTimeout(r, Math.max(0, 550 - (Date.now() - t0))));
+    refreshing = 'done';
+    doneTimer = setTimeout(() => (refreshing = 'idle'), 1600);
+  }
+
+  // Layout: split (list + conversation) or full width (Gmail's default).
+  function toggleLayout() {
+    prefs.readingPane = !prefs.readingPane;
+    savePrefs();
+  }
+
   const ctx = $derived(folderById(contextFolder()));
   const role = $derived(ctx?.role || '');
-  const selecting = $derived(list.selected.size > 0);
-  const allSelected = $derived(list.threads.length > 0 && list.selected.size === list.threads.length);
+  const selecting = $derived(list.selected.size > 0 || list.selectedAll);
+  const allSelected = $derived(list.selectedAll || (list.threads.length > 0 && list.selected.size === list.threads.length));
+  // How many conversations "select all" would reach, when the server told us.
+  const viewTotal = $derived.by(() => {
+    if (ctx) return list.unreadOnly ? ctx.unread : ctx.total;
+    if (route.view === 'starred') return mailbox.starred;
+    return null;
+  });
+  const canSelectAllInView = $derived(allSelected && !list.selectedAll && !!list.next);
+  let selMenu = $state(false);
+  function selectWhere(pred) {
+    list.selectedAll = false;
+    list.selected = new Set(list.threads.filter(pred).map((t) => t.id));
+    selMenu = false;
+  }
   const unreadHere = $derived(list.threads.filter((t) => t.unread > 0).length);
 
   // Infinite scroll.
@@ -63,12 +100,20 @@
   }
   function toggle(t, e) {
     e.stopPropagation();
+    list.selectedAll = false;
     const s = new Set(list.selected);
     s.has(t.id) ? s.delete(t.id) : s.add(t.id);
     list.selected = s;
   }
   function toggleAll() {
-    list.selected = allSelected ? new Set() : new Set(list.threads.map((t) => t.id));
+    if (allSelected) {
+      list.selected = new Set();
+      list.selectedAll = false;
+    } else list.selected = new Set(list.threads.map((t) => t.id));
+  }
+  function clearSelection() {
+    list.selected = new Set();
+    list.selectedAll = false;
   }
   function star(t, e) {
     e.stopPropagation();
@@ -78,7 +123,12 @@
     e.stopPropagation();
     threadAction([t.id], action).catch(() => {});
   }
+  const VIEW_ACTIONS = new Set(['read', 'unread', 'archive', 'trash', 'star', 'unstar', 'inbox']);
   function bulk(action, extra) {
+    if (list.selectedAll && VIEW_ACTIONS.has(action)) {
+      viewAction(action).catch(() => {});
+      return;
+    }
     threadAction([...list.selected], action, extra).catch(() => {});
   }
   function folderChips(t) {
@@ -142,29 +192,36 @@
 <div class="head">
   {#if selecting}
     <div class="bulk">
-      <input type="checkbox" checked={allSelected} indeterminate={!allSelected} onchange={toggleAll} aria-label="Select all" />
-      <span class="n num">{list.selected.size} selected</span>
+      {@render selectBox()}
+      <span class="n num">{list.selectedAll ? `All${viewTotal != null ? ' ' + viewTotal.toLocaleString() : ''}` : list.selected.size} selected</span>
       <div class="acts">
         {#if role !== 'archive' && !isTrash}<button class="icon-btn" title="Archive (e)" aria-label="Archive" onclick={() => bulk('archive')}><Icon name="archive" /></button>{/if}
         {#if role !== 'snoozed' && !isTrash}<button class="icon-btn" title="Snooze (b)" aria-label="Snooze" onclick={() => (ui.dialog = { type: 'snooze', ids: [...list.selected] })}><Icon name="clock" /></button>{/if}
-        {#if role === 'junk'}
+        {#if list.selectedAll}
+          <!-- whole-view actions only: the rest need conversations picked one page at a time -->
+        {:else if role === 'junk'}
           <button class="btn small" onclick={() => bulk('not_spam')}>Not spam</button>
         {:else}
           <button class="icon-btn" title="Report spam (!)" aria-label="Report spam" onclick={() => (ui.dialog = { type: 'spam', ids: [...list.selected] })}><Icon name="spam" /></button>
         {/if}
-        {#if isTrash}
+        {#if isTrash && list.selectedAll}
+          <!-- delete forever: pick conversations explicitly -->
+        {:else if isTrash}
           <button class="btn small danger" onclick={() => (ui.dialog = { type: 'confirm', title: 'Delete forever?', body: `${list.selected.size} conversation(s) will be permanently deleted from the server. This can't be undone.`, action: 'Delete forever', danger: true, submit: () => bulk('delete_forever') })}>Delete forever</button>
         {:else}
           <button class="icon-btn" title="Trash (#)" aria-label="Move to Trash" onclick={() => bulk('trash')}><Icon name="trash" /></button>
         {/if}
         <button class="icon-btn" title="Mark read" aria-label="Mark read" onclick={() => bulk('read', { silent: true })}><Icon name="mailOpen" /></button>
         <button class="icon-btn" title="Mark unread" aria-label="Mark unread" onclick={() => bulk('unread')}><Icon name="mail" /></button>
-        <button class="icon-btn" title="Move (v)" aria-label="Move" onclick={() => (ui.dialog = { type: 'move', ids: [...list.selected] })}><Icon name="move" /></button>
-        <button class="icon-btn" title="Label (l)" aria-label="Label" onclick={() => (ui.dialog = { type: 'label', ids: [...list.selected] })}><Icon name="label" /></button>
+        {#if !list.selectedAll}
+          <button class="icon-btn" title="Move (v)" aria-label="Move" onclick={() => (ui.dialog = { type: 'move', ids: [...list.selected] })}><Icon name="move" /></button>
+          <button class="icon-btn" title="Label (l)" aria-label="Label" onclick={() => (ui.dialog = { type: 'label', ids: [...list.selected] })}><Icon name="label" /></button>
+        {/if}
       </div>
-      <button class="icon-btn" aria-label="Clear selection" onclick={() => (list.selected = new Set())}><Icon name="close" /></button>
+      <button class="icon-btn" aria-label="Clear selection" onclick={clearSelection}><Icon name="close" /></button>
     </div>
   {:else}
+    {#if list.threads.length}{@render selectBox()}{/if}
     <div class="titles">
       <h2 class="display">{viewTitle()}</h2>
       <span class="ledger sub">{#each subtitle as part, i}{#if i}<span class="sep">·</span>{/if}{#if part.href}<a class="sublink" href={part.href} use:navLink>{part.text}</a>{:else}<span>{part}</span>{/if}{/each}</span>
@@ -178,9 +235,49 @@
     {#if ctx && unreadHere > 0}
       <button class="icon-btn" title="Mark all as read" aria-label="Mark all as read" onclick={markAllRead}><Icon name="mailOpen" size={17} /></button>
     {/if}
-    <button class="icon-btn" title="Refresh" aria-label="Refresh" onclick={() => loadThreads()}><Icon name="refresh" size={17} /></button>
+    {#if wide && typeof innerWidth === 'number' && innerWidth >= READING_MIN}
+      <button class="icon-btn" title={prefs.readingPane ? 'Full-width inbox' : 'Split view'} aria-label={prefs.readingPane ? 'Switch to full-width inbox' : 'Switch to split view'}
+              onclick={toggleLayout}><Icon name={prefs.readingPane ? 'full' : 'split'} size={17} /></button>
+    {/if}
+    <span class="checked-note" class:show={refreshing === 'done'} aria-live="polite">{refreshing === 'done' ? 'Up to date' : ''}</span>
+    <button class="icon-btn refresh" class:spin={refreshing === 'spin'} class:done={refreshing === 'done'} disabled={refreshing === 'spin'}
+            title="Check for new mail" aria-label="Check for new mail" onclick={refresh}>
+      {#key refreshing === 'done'}<span class="ricon"><Icon name={refreshing === 'done' ? 'check' : 'refresh'} size={17} /></span>{/key}
+    </button>
   {/if}
 </div>
+
+{#snippet selectBox()}
+  <div class="selbox">
+    <input type="checkbox" checked={allSelected && list.threads.length > 0} indeterminate={selecting && !allSelected} onchange={toggleAll}
+           aria-label={allSelected ? 'Select none' : 'Select all'} title={allSelected ? 'Select none' : 'Select all'} />
+    <button class="selmenu" aria-label="Select…" aria-haspopup="menu" aria-expanded={selMenu} onclick={() => (selMenu = !selMenu)}><Icon name="chevronDown" size={13} /></button>
+    {#if selMenu}
+      <!-- svelte-ignore a11y_no_static_element_interactions a11y_click_events_have_key_events -->
+      <div class="selscrim" onclick={() => (selMenu = false)}></div>
+      <div class="menu" role="menu">
+        <button role="menuitem" onclick={() => selectWhere(() => true)}>All</button>
+        <button role="menuitem" onclick={() => selectWhere(() => false)}>None</button>
+        <button role="menuitem" onclick={() => selectWhere((t) => !t.unread)}>Read</button>
+        <button role="menuitem" onclick={() => selectWhere((t) => t.unread > 0)}>Unread</button>
+        <button role="menuitem" onclick={() => selectWhere((t) => t.starred)}>Starred</button>
+        <button role="menuitem" onclick={() => selectWhere((t) => !t.starred)}>Unstarred</button>
+      </div>
+    {/if}
+  </div>
+{/snippet}
+
+{#if canSelectAllInView}
+  <div class="allbar" role="status">
+    All {list.threads.length} conversations on this page are selected.
+    <button class="linkish" onclick={() => (list.selectedAll = true)}>Select all{viewTotal != null ? ` ${viewTotal.toLocaleString()}` : ''} conversations in {viewTitle()}</button>
+  </div>
+{:else if list.selectedAll}
+  <div class="allbar" role="status">
+    All{viewTotal != null ? ` ${viewTotal.toLocaleString()}` : ''} conversations in {viewTitle()} are selected.
+    <button class="linkish" onclick={clearSelection}>Clear selection</button>
+  </div>
+{/if}
 
 {#if isTrash && list.threads.length && !selecting}
   <div class="notice">
@@ -358,7 +455,8 @@
   .bulk { display: flex; align-items: center; gap: 8px; flex: 1; min-width: 0; }
   .bulk input { accent-color: var(--accent); }
   .bulk .n { font-size: 12px; white-space: nowrap; }
-  .bulk .acts { display: flex; align-items: center; gap: 2px; flex: 1; overflow-x: auto; }
+  .bulk .acts { display: flex; align-items: center; gap: 2px; flex: 1; overflow-x: auto; scrollbar-width: none; }
+  .bulk .acts::-webkit-scrollbar { display: none; }
   .notice { font-size: 12px; padding: 8px 22px; border-bottom: 1px dashed var(--line-strong); color: var(--text-3); font-style: italic; }
   .rows { flex: 1; }
   .sub { display: flex; flex-wrap: wrap; gap: 0 6px; }
@@ -464,4 +562,28 @@
     text-transform: uppercase; letter-spacing: .06em;
   }
   .sentinel { height: 60px; display: grid; place-items: center; }
+  .selbox { position: relative; display: flex; align-items: center; gap: 0; flex: none; margin-right: 4px; }
+  .selbox input { accent-color: var(--accent); width: 15px; height: 15px; margin: 0; }
+  .selmenu { border: 0; background: none; color: var(--text-3); cursor: pointer; display: grid; place-items: center; width: 18px; height: 22px; border-radius: 4px; padding: 0; }
+  .selmenu:hover { background: var(--bg-hover); color: var(--text); }
+  .selscrim { position: fixed; inset: 0; z-index: 40; }
+  .menu {
+    position: absolute; top: calc(100% + 4px); left: 0; z-index: 41; min-width: 140px; display: grid; padding: 4px;
+    background: var(--bg-elev); border: var(--card-border); border-radius: var(--radius); box-shadow: var(--shadow-lg); animation: rise .12s var(--ease);
+  }
+  .menu button { border: 0; background: none; text-align: left; padding: 6px 10px; border-radius: var(--radius-sm); cursor: pointer; color: var(--text); font-size: 13px; }
+  .menu button:hover { background: var(--bg-hover); }
+  .allbar { display: flex; flex-wrap: wrap; align-items: center; justify-content: center; gap: 6px; padding: 8px 16px; font-size: 12.5px; color: var(--text-2); background: var(--bg-sunken); border-bottom: 1px solid var(--line); }
+  .linkish { border: 0; background: none; padding: 0; color: var(--accent-ink); font-weight: 600; cursor: pointer; font-size: inherit; }
+  .linkish:hover { text-decoration: underline; }
+  .refresh .ricon { display: grid; place-items: center; }
+  .refresh.spin .ricon { animation: kern-spin .7s linear infinite; }
+  .refresh.done { color: var(--ok); }
+  .refresh.done .ricon { animation: kern-pop .38s var(--ease); }
+  .refresh:disabled { opacity: 1; cursor: progress; }
+  .checked-note { font-size: 11.5px; color: var(--ok); white-space: nowrap; opacity: 0; transform: translateX(6px); transition: opacity .2s, transform .2s var(--ease); pointer-events: none; }
+  .checked-note.show { opacity: 1; transform: none; }
+  @keyframes kern-spin { to { transform: rotate(360deg); } }
+  @keyframes kern-pop { 0% { transform: scale(.4) rotate(-40deg); opacity: 0; } 70% { transform: scale(1.18); opacity: 1; } 100% { transform: scale(1); } }
+  @media (prefers-reduced-motion: reduce) { .refresh.spin .ricon, .refresh.done .ricon { animation: none; } }
 </style>

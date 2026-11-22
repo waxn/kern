@@ -160,6 +160,26 @@ class Message(models.Model):
         ]
 
 
+class ThreadFolder(models.Model):
+    """Which folders a conversation has messages in: a small index kept by
+    threads.refresh_thread(), so a folder's list ("Inbox", newest first) and
+    its counts are an index range read instead of a scan over every thread
+    and message. Rebuildable from Message at any time (rebuild_thread_index)."""
+
+    thread = models.ForeignKey(Thread, on_delete=models.CASCADE, related_name="in_folders")
+    folder = models.ForeignKey(Folder, on_delete=models.CASCADE, related_name="thread_rows")
+    last_date = models.DateTimeField(null=True)  # copy of Thread.last_date: the sort key
+    unread = models.BooleanField(default=False)  # an unseen message of the thread is in this folder
+
+    class Meta:
+        constraints = [models.UniqueConstraint(fields=["folder", "thread"], name="threadfolder_unique")]
+        indexes = [
+            models.Index(fields=["folder", "-last_date", "-thread"], name="threadfolder_list"),
+            models.Index(fields=["folder", "unread", "-last_date", "-thread"], name="threadfolder_unread"),
+            models.Index(fields=["thread"], name="threadfolder_thread"),
+        ]
+
+
 class MessageReference(models.Model):
     """Reverse index of References/In-Reply-To for threading."""
 

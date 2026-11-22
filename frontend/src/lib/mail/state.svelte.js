@@ -8,7 +8,8 @@ import { inverseOf as undoInverse } from './undo.js';
 
 export const info = $state({ address: '', fromName: '', undoSeconds: 8, worker: { state: 'offline' }, pendingOps: 0, failedOps: 0, maxAttachmentBytes: 0 });
 export const mailbox = $state({ folders: [], labels: [], starred: 0, loaded: false });
-export const list = $state({ key: '', threads: [], next: null, loading: false, error: '', selected: new Set(), focusIndex: -1, unreadOnly: false });
+// selectedAll: every conversation in the view is selected, not only the loaded ones.
+export const list = $state({ key: '', threads: [], next: null, loading: false, error: '', selected: new Set(), selectedAll: false, focusIndex: -1, unreadOnly: false, checkedAt: 0 });
 export const current = $state({ thread: null, messages: [], packages: [], scheduled: [], tasks: [], loading: false, error: '' });
 // First-sync progress per folder id: {done, total}. Fed by SSE events.
 export const syncProgress = $state({});
@@ -63,9 +64,9 @@ export const READING_MIN = 960; // of the mail area (Kern's sidebar is outside i
 const SETTINGS_KEY = 'kern:mail.v1';
 function loadSettings() {
   try {
-    return { notifications: false, readingPane: true, ...JSON.parse(localStorage.getItem(SETTINGS_KEY) || '{}') };
+    return { notifications: false, readingPane: true, darkEmails: true, ...JSON.parse(localStorage.getItem(SETTINGS_KEY) || '{}') };
   } catch {
-    return { notifications: false, readingPane: true };
+    return { notifications: false, readingPane: true, darkEmails: true };
   }
 }
 export const prefs = $state(loadSettings());
@@ -92,6 +93,7 @@ export function errorToast(e) {
 }
 
 export function resetMail() {
+  dropMailCache();
   mailbox.folders = [];
   mailbox.loaded = false;
   list.threads = [];
@@ -165,12 +167,63 @@ function bumpCleared(n) {
   }
 }
 
-export async function loadFolders() {
-  const data = await api.get('/folders');
+// --- instant start: the last folder list and first page of each view are kept
+// on this device (cleared on sign-out with every other kern* key) and shown at
+// once, then refreshed from the server.
+const CACHE = 'kern:mail.cache.';
+const CACHE_VIEWS = 8;
+const memo = new Map();
+function readCache(key) {
+  if (memo.has(key)) return memo.get(key);
+  try {
+    const v = JSON.parse(localStorage.getItem(CACHE + key) || 'null');
+    if (v && v.v === 1) {
+      memo.set(key, v);
+      return v;
+    }
+  } catch {
+    /* unavailable or corrupt */
+  }
+  return null;
+}
+function writeCache(key, data) {
+  const v = { v: 1, at: Date.now(), ...data };
+  memo.set(key, v);
+  try {
+    localStorage.setItem(CACHE + key, JSON.stringify(v));
+    const views = Object.keys(localStorage).filter((k) => k.startsWith(CACHE + 'view:'));
+    if (views.length > CACHE_VIEWS) {
+      views.map((k) => [k, JSON.parse(localStorage.getItem(k) || '{}').at || 0]).sort((a, b) => a[1] - b[1])
+        .slice(0, views.length - CACHE_VIEWS).forEach(([k]) => localStorage.removeItem(k));
+    }
+  } catch {
+    /* storage full or unavailable: the in-memory copy still helps */
+  }
+}
+export function dropMailCache() {
+  memo.clear();
+  try {
+    for (const k of Object.keys(localStorage)) if (k.startsWith(CACHE)) localStorage.removeItem(k);
+  } catch {
+    /* ignore */
+  }
+}
+
+function applyFolders(data) {
   mailbox.folders = data.folders;
   mailbox.labels = data.labels;
   mailbox.starred = data.starred;
   mailbox.loaded = true;
+}
+if (typeof window !== 'undefined') {
+  const f = readCache('folders');
+  if (f) applyFolders(f);
+}
+
+export async function loadFolders() {
+  const data = await api.get('/folders');
+  applyFolders(data);
+  writeCache('folders', { folders: data.folders, labels: data.labels, starred: data.starred });
 }
 
 export function folderByRole(role) {
@@ -183,6 +236,16 @@ export function folderById(id) {
 
 export function labelById(id) {
   return mailbox.labels.find((l) => l.id === id);
+}
+
+// Folder roles the server resolves itself (?view=inbox), so the list can load
+// before (or without) the folder list.
+const ROLE_VIEWS = new Set(['inbox', 'snoozed', 'drafts', 'sent', 'archive', 'junk', 'trash']);
+
+// The view to ask /threads for: a role name when it is one, else the folder/label id.
+export function listView(view = route.view) {
+  if (ROLE_VIEWS.has(view)) return view;
+  return apiView(view);
 }
 
 // Resolve the route's view key ("inbox", "f12", "starred", ...) for the API.
@@ -216,9 +279,22 @@ function listKey() {
 let listSeq = 0;
 export async function loadThreads({ more = false, quiet = false } = {}) {
   const key = listKey();
-  const view = route.view === 'search' ? null : apiView();
+  const view = route.view === 'search' ? null : listView();
   if (route.view !== 'search' && !view) return;
   const seq = ++listSeq;
+  if (!more && key !== list.key && route.view !== 'search') {
+    // Show what this device saw last time right away; the server answer replaces it.
+    const cached = readCache(key);
+    if (cached) {
+      list.threads = cached.threads;
+      list.next = cached.next;
+      list.key = key;
+      list.selected = new Set();
+      list.selectedAll = false;
+      list.focusIndex = -1;
+      quiet = true;
+    }
+  }
   if (!quiet) list.loading = true;
   list.error = '';
   try {
@@ -232,8 +308,10 @@ export async function loadThreads({ more = false, quiet = false } = {}) {
     } else {
       if (key !== list.key) {
         list.selected = new Set();
+        list.selectedAll = false;
         list.focusIndex = -1;
       }
+      if (route.view !== 'search') writeCache(key, { threads: data.threads, next: data.next });
       // Quiet refresh keeps already-loaded extra pages (only when the fresh
       // first page isn't the whole list; otherwise it is the truth).
       if (quiet && key === list.key && data.next && list.threads.length > data.threads.length) {
@@ -309,6 +387,52 @@ function patchListLocal(ids, action) {
     if (action === 'mute') current.thread.muted = true;
     if (action === 'unmute') current.thread.muted = false;
   }
+}
+
+// "Select all N conversations in <view>": the server applies it to the whole view.
+export async function viewAction(action) {
+  const scope = route.view === 'search' ? { view: 'all', q: route.q } : { view: listView(), unread: list.unreadOnly };
+  const ids = list.threads.map((t) => t.id);
+  patchListLocal(ids, action);
+  list.selected = new Set();
+  list.selectedAll = false;
+  try {
+    const res = await api.post('/threads/actions', { all: scope, action, context: contextFolder() });
+    const n = res.count === 1 ? '1 conversation' : `${(res.count || 0).toLocaleString()} conversations`;
+    toast({ read: `Marked ${n} as read`, unread: `Marked ${n} as unread`, archive: `${n} archived`, trash: `${n} moved to Trash`,
+      star: `Starred ${n}`, unstar: `Unstarred ${n}` }[action] || 'Done');
+    loadFolders().catch(() => {});
+    loadThreads({ quiet: true });
+    return res;
+  } catch (e) {
+    errorToast(e);
+    loadThreads({ quiet: true });
+    throw e;
+  }
+}
+
+// The refresh button: ask the server to check for new mail now, and reload.
+// Resolves when the worker reports back (or after a few seconds).
+let checkWaiters = [];
+export function noteChecked() {
+  list.checkedAt = Date.now();
+  const w = checkWaiters;
+  checkWaiters = [];
+  w.forEach((f) => f());
+}
+export async function checkNow() {
+  const folder = contextFolder();
+  const done = new Promise((resolve) => {
+    checkWaiters.push(resolve);
+    setTimeout(resolve, info.worker?.state === 'idle' ? 6000 : 2500);
+  });
+  await Promise.all([
+    api.post('/check', folder ? { folder } : {}).catch(() => {}),
+    loadThreads({ quiet: true }),
+    loadFolders().catch(() => {}),
+  ]);
+  await done;
+  await loadThreads({ quiet: true });
 }
 
 export async function threadAction(ids, action, extra = {}) {

@@ -130,6 +130,10 @@ class SyncEngine:
                                   self.failures[key])
             for tid in to_refresh:
                 refresh_thread(tid)
+            if to_refresh and not initial:
+                # The "message" events went out before the conversation summaries
+                # were recomputed; this one tells clients the list is ready.
+                events.emit("update", threads=sorted(t for t in to_refresh if t))
             if initial:
                 events.emit("sync_progress", folder=folder.pk, done=stats["new"], total=len(new))
 
@@ -174,11 +178,15 @@ class SyncEngine:
             events.emit("folder_synced", folder=folder.pk)
         return stats
 
-    def sync_all(self) -> None:
+    def sync_all(self, between=None) -> None:
+        """Sync every folder, Inbox first. `between()` runs before each folder,
+        so pushed Inbox mail (IDLE) isn't stuck behind a long sweep."""
         folders = self.sync_folder_list()
         # Inbox first, then the rest.
         folders.sort(key=lambda f: (f.role != "inbox", f.role == "", f.name))
         for folder in folders:
+            if between is not None:
+                between()
             try:
                 self.sync_folder(folder)
             except ServerError as exc:

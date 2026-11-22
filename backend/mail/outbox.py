@@ -60,6 +60,7 @@ class Executor:
         self.server = server
         self.sender = sender
         self.touched_folders: set[int] = set()
+        self.checked = False  # a "check now" ran: the worker reports when the sync is done
 
     # -- driver ---------------------------------------------------------
     def run_pending(self, limit: int = 200) -> int:
@@ -104,6 +105,13 @@ class Executor:
             op.save(update_fields=["status", "finished"])
             done += 1
         return done
+
+    def op_check(self, op):
+        """"Check for new mail now" (the refresh button): sync a folder right away."""
+        folder = Folder.objects.filter(pk=op.payload.get("folder"), selectable=True, exists_on_server=True).first()
+        if folder:
+            self.touched_folders.add(folder.pk)
+        self.checked = True
 
     def _fail(self, op: OutboxOp, error: str) -> None:
         op.status = OpStatus.FAILED

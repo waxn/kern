@@ -1,0 +1,36 @@
+<?xml version="1.0" encoding="utf-8"?>
+<manifest xmlns:android="http://schemas.android.com/apk/res/android">
+
+    <!-- To leave new-mail notifications to Kern Mail when it is installed. -->
+    <queries>
+        <package android:name="app.kern.mail" />
+    </queries>
+
+    <application>
+        <activity android:name=".MainActivity" android:exported="true">
+            <intent-filter>
+                <action android:name="android.intent.action.SEND" />
+                <category android:name="android.intent.category.DEFAULT" />
+                <data android:mimeType="text/plain" />
+            </intent-filter>
+            <meta-data android:name="android.app.shortcuts" android:resource="@xml/shortcuts" />
+        </activity>
+
+        <receiver android:name=".widget.TasksWidgetReceiver" android:exported="true" android:label="@string/widget_tasks">
+            <intent-filter><action android:name="android.appwidget.action.APPWIDGET_UPDATE" /></intent-filter>
+            <meta-data android:name="android.appwidget.provider" android:resource="@xml/widget_tasks" />
+        </receiver>
+        <receiver android:name=".widget.CardsWidgetReceiver" android:exported="true" android:label="@string/widget_cards">
+            <intent-filter><action android:name="android.appwidget.action.APPWIDGET_UPDATE" /></intent-filter>
+            <meta-data android:name="android.appwidget.provider" android:resource="@xml/widget_cards" />
+        </receiver>
+        <receiver android:name=".widget.CaptureWidgetReceiver" android:exported="true" android:label="@string/widget_capture">
+            <intent-filter><action android:name="android.appwidget.action.APPWIDGET_UPDATE" /></intent-filter>
+            <meta-data android:name="android.appwidget.provider" android:resource="@xml/widget_capture" />
+        </receiver>
+        <receiver android:name=".widget.RecentWidgetReceiver" android:exported="true" android:label="@string/widget_recent">
+            <intent-filter><action android:name="android.appwidget.action.APPWIDGET_UPDATE" /></intent-filter>
+            <meta-data android:name="android.appwidget.provider" android:resource="@xml/widget_recent" />
+        </receiver>
+    </application>
+</manifest>

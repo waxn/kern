@@ -42,5 +42,5 @@ if [ "$#" -gt 0 ]; then
 fi
 
 python manage.py kern_boot
-exec gunicorn kern.wsgi:application --bind 0.0.0.0:8000 --workers 2 --threads 4 --timeout 600 \
+exec gunicorn kern.wsgi:application --bind 0.0.0.0:8000 --workers 2 --threads 12 --timeout 600 \
 	--no-control-socket --access-logfile - --error-logfile -

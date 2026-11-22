@@ -119,3 +119,17 @@ data class MailDraft(val id: Long, val status: String = "")
 
 @Serializable
 data class MailOpen(val threadId: Long)
+
+/** One entry of /mail/changes (backend/mail/events.py). */
+@Serializable
+data class MailEvent(
+    val id: Long = 0,
+    val kind: String = "",
+    val folder: Long? = null,
+    val thread: Long? = null,
+    val threads: List<Long> = emptyList(),
+    val new: Boolean = false,
+)
+
+@Serializable
+data class MailChanges(val last: Long = 0, val events: List<MailEvent> = emptyList(), val more: Boolean = false, val reset: Boolean = false)

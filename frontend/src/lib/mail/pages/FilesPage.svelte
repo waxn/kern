@@ -52,7 +52,7 @@
   const ICON = { image: 'image', pdf: 'file', doc: 'file', media: 'play', archive: 'archive', other: 'clip' };
 </script>
 
-<div class="page scroll">
+<div class="mail-page scroll">
   <div class="inner">
     <h1 class="display">Files</h1>
     <p class="ledger sub">Every attachment in your mail, newest first · Trash and Junk left out</p>
@@ -116,7 +116,7 @@
 </div>
 
 <style>
-  .page { flex: 1; }
+  .mail-page { flex: 1; min-height: 0; width: 100%; }
   .inner { max-width: 860px; margin: 0 auto; padding: 18px 20px 80px; }
   h1 { font-size: 36px; margin: 6px 0 4px; }
   .sub { color: var(--text-3); margin: 0 0 18px; }

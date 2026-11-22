@@ -7,7 +7,11 @@
   import Icon from './Icon.svelte';
   import { dropTarget } from '../dnd.js';
 
-  let { wide } = $props();
+  import { ui as kernUi } from '#lib/state/ui.svelte.ts';
+
+  // embedded: inside Kern's sidebar slot in Mail mode (MailSide.svelte), which
+  // also does the phone drawer.
+  let { wide, embedded = false } = $props();
 
   const ROLE_ICON = { inbox: 'inbox', snoozed: 'clock', drafts: 'file', sent: 'send', archive: 'archive', junk: 'spam', trash: 'trash' };
   const system = $derived(mailbox.folders.filter((f) => f.role && f.role !== 'all'));
@@ -22,6 +26,7 @@
   }
   function close() {
     ui.sidebarOpen = false;
+    kernUi.mobileNav = false;
   }
   // What dropping conversations on a folder does.
   function folderDrop(f) {
@@ -85,7 +90,7 @@
   <button class="scrim" aria-label="Close menu" onclick={close}></button>
 {/if}
 
-<nav class="sidebar mail-sidebar" class:open class:drawer={!wide} aria-label="Mailboxes">
+<nav class="sidebar mail-sidebar" class:open class:drawer={!wide && !embedded} class:embedded aria-label="Mailboxes">
   <div class="top">
     <button class="btn primary compose" onclick={() => { openCompose(); close(); }}>
       <Icon name="pencil" size={16} /> <span>Compose</span>
@@ -220,6 +225,7 @@
     border-right: 1px solid var(--line);
     background: var(--bg-side);
   }
+  .sidebar.embedded { background: transparent; }
   .sidebar.drawer {
     position: absolute;
     z-index: 80;

@@ -9,7 +9,7 @@ export interface ChatSummary { id: string; title: string; updated_at: string }
 export interface Chat extends ChatSummary { messages: ChatMessage[] }
 
 /** Send one message (creating the chat first if needed); refreshes whatever the assistant changed. */
-export async function sendChat(chat: Chat | null, text: string, page?: string | null, onCreated?: (c: Chat) => void): Promise<Chat> {
+export async function sendChat(chat: Chat | null, text: string, page?: string | null, onCreated?: (c: Chat) => void, mailThread?: number | null): Promise<Chat> {
 	// Save the open page first, so the assistant reads (and snapshots) what is on screen.
 	if (page) await releaseDoc(page, true);
 	let target = chat;
@@ -17,7 +17,7 @@ export async function sendChat(chat: Chat | null, text: string, page?: string | 
 		target = await api.post<Chat>('/chats', {});
 		onCreated?.(target);
 	}
-	const updated = await api.post<Chat>(`/chats/${target.id}/message`, { text, page: page ?? null });
+	const updated = await api.post<Chat>(`/chats/${target.id}/message`, mailThread ? { text, page: null, mail_thread: mailThread } : { text, page: page ?? null });
 	const last = updated.messages[updated.messages.length - 1];
 	if (last?.actions?.length) {
 		// Pages it changed reload in place wherever they are open.

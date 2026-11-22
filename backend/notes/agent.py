@@ -590,7 +590,7 @@ def context_note(page_id) -> str:
     return note
 
 
-def chat_turn(chat: Chat, text: str, page_id=None) -> Chat:
+def chat_turn(chat: Chat, text: str, page_id=None, mail_thread=None) -> Chat:
     cfg = ai.config()
     if not ai.public_config()["configured"]:
         raise ai.AIError("The AI assistant is not set up yet. Choose a provider in Settings → AI.", 409)
@@ -601,7 +601,12 @@ def chat_turn(chat: Chat, text: str, page_id=None) -> Chat:
                         ([{"role": t["role"], "content": t["text"]}] if t.get("text") else [])]
     chat.provider = provider_family
     run = Run()
-    user_msg = f"<context>{context_note(page_id)}</context>\n\n{text}"
+    note = context_note(page_id)
+    if mail_thread is not None:
+        from mail.aicontext import context_note as mail_note
+
+        note += mail_note(mail_thread)
+    user_msg = f"<context>{note}</context>\n\n{text}"
     if provider_family == "anthropic":
         reply = _anthropic_loop(chat, cfg, user_msg, run)
     else:

@@ -1,4 +1,5 @@
 <script lang="ts">
+	import TabCorner from '#lib/components/TabCorner.svelte';
 	import { afterNavigate } from '$app/navigation';
 	import { page } from '$app/state';
 	import { ChevronRight, CloudOff, Ellipsis, FileText, Image, Layers, Maximize2, Minimize2, PanelRight, Smile, Star } from '@lucide/svelte';
@@ -160,12 +161,14 @@
 				<span class="grow"></span>
 				<button class="icon-btn exit-focus" title="Exit focus mode (Esc)" onclick={() => (ui.focusMode = false)}><Minimize2 size={15} /></button>
 			{:else}
+			{#if prefs.tabs.length <= 1}<TabCorner location={false} plus={false} />{/if}
 			<nav class="crumbs">
 				{#each crumbs as c (c.id)}
 					<a class="crumb truncate" href="/doc/{c.id}" onclick={(e) => { e.preventDefault(); open(`/doc/${c.id}`, e); }}>{c.icon} {c.title || 'Untitled'}</a>
 					<ChevronRight size={12} class="faint" />
 				{/each}
 				<span class="crumb current truncate">{meta?.icon ?? ''} {meta?.title || 'Untitled'}</span>
+				{#if prefs.tabs.length <= 1}<TabCorner location={false} menu={false} />{/if}
 			</nav>
 			<span class="save" class:show={doc.saveState !== 'saved'} class:err={doc.saveState === 'error'} aria-live="polite">
 				{#if doc.conflict}<CloudOff size={13} /> Not saved — conflict

@@ -13,6 +13,7 @@ import androidx.core.app.NotificationManagerCompat
 import androidx.core.content.ContextCompat
 import app.kern.MainActivity
 import app.kern.R
+import app.kern.app
 import app.kern.data.Task
 import java.time.LocalDate
 
@@ -23,6 +24,12 @@ object Notifications {
     const val CH_WEB = "web"
     const val CH_MAIL = "mail"
     const val ID_MAIL = 5
+    // Kern Mail
+    const val CH_MAIL_NEW = "mail_new"
+    const val CH_PUSH = "mail_push"
+    const val ID_PUSH = 6
+    private const val GROUP_MAIL = "app.kern.MAIL"
+    private const val ID_MAIL_SUMMARY = 7
     private const val GROUP_TASKS = "app.kern.TASKS"
     const val ID_CARDS = 2
     const val ID_TASK_SUMMARY = 3
@@ -31,6 +38,21 @@ object Notifications {
 
     fun createChannels(ctx: Context) {
         val nm = ctx.getSystemService(NotificationManager::class.java)
+        if (app.kern.BuildConfig.MAIL_APP) {
+            nm.createNotificationChannels(
+                listOf(
+                    NotificationChannel(CH_MAIL_NEW, "New mail", NotificationManager.IMPORTANCE_HIGH).apply {
+                        description = "Each new conversation in your Inbox, as it arrives"
+                        lockscreenVisibility = NotificationCompat.VISIBILITY_PRIVATE
+                    },
+                    NotificationChannel(CH_PUSH, "Connection", NotificationManager.IMPORTANCE_MIN).apply {
+                        description = "The quiet notice Android shows while instant notifications are on. Turn this off to hide it."
+                        setShowBadge(false)
+                    },
+                )
+            )
+            return
+        }
         nm.createNotificationChannels(
             listOf(
                 NotificationChannel(CH_TASKS, "Tasks due", NotificationManager.IMPORTANCE_DEFAULT).apply {
@@ -163,6 +185,115 @@ object Notifications {
             .setContentIntent(openIntent(ctx, "mail", 70))
             .build()
         try { NotificationManagerCompat.from(ctx).notify(ID_MAIL, n) } catch (_: SecurityException) {}
+    }
+
+    // ---- Kern Mail --------------------------------------------------------------
+
+    fun mailId(thread: Long) = 2_000_000 + (thread % 1_000_000_000).toInt()
+
+    /** The silent notice for the push connection (Android requires one while it runs). */
+    fun pushStatus(ctx: Context): android.app.Notification =
+        NotificationCompat.Builder(ctx, CH_PUSH)
+            .setSmallIcon(R.drawable.ic_stat_mail)
+            .setColor(ACCENT)
+            .setContentTitle("Instant notifications are on")
+            .setContentText("Long-press to hide this notice")
+            .setOngoing(true)
+            .setSilent(true)
+            .setShowWhen(false)
+            .setPriority(NotificationCompat.PRIORITY_MIN)
+            .setCategory(NotificationCompat.CATEGORY_SERVICE)
+            .setContentIntent(openIntent(ctx, "mail", 80))
+            .build()
+
+    private fun mailAction(ctx: Context, action: String, thread: Long, code: Int): PendingIntent =
+        PendingIntent.getBroadcast(
+            ctx, code,
+            Intent(ctx, MailActionReceiver::class.java).setAction(action).putExtra(MailActionReceiver.EXTRA_THREAD, thread),
+            PendingIntent.FLAG_IMMUTABLE or PendingIntent.FLAG_UPDATE_CURRENT,
+        )
+
+    private fun sender(t: app.kern.data.MailThread): String =
+        t.participants.firstOrNull { it.name.isNotBlank() }?.name ?: t.participants.firstOrNull()?.addr ?: "New mail"
+
+    /**
+     * One notification per new conversation (grouped), with Archive and Mark read. With
+     * "show sender and subject" off, or on a locked screen, it only says "New mail".
+     */
+    fun showMailThreads(ctx: Context, threads: List<app.kern.data.MailThread>) {
+        if (!allowed(ctx) || threads.isEmpty()) return
+        val s = ctx.app.settings
+        val details = s.mailShowDetails
+        val nm = NotificationManagerCompat.from(ctx)
+        val notified = s.mailNotified.toMutableSet()
+        try {
+            for (t in threads.take(8)) {
+                val id = mailId(t.id)
+                val generic = NotificationCompat.Builder(ctx, CH_MAIL_NEW)
+                    .setSmallIcon(R.drawable.ic_stat_mail)
+                    .setColor(ACCENT)
+                    .setContentTitle("New mail")
+                    .setContentText("Unlock to read")
+                    .build()
+                val b = NotificationCompat.Builder(ctx, CH_MAIL_NEW)
+                    .setSmallIcon(R.drawable.ic_stat_mail)
+                    .setColor(ACCENT)
+                    .setGroup(GROUP_MAIL)
+                    .setAutoCancel(true)
+                    .setCategory(NotificationCompat.CATEGORY_EMAIL)
+                    .setVisibility(NotificationCompat.VISIBILITY_PRIVATE)
+                    .setPublicVersion(generic)
+                    .setOnlyAlertOnce(true)
+                    .setContentIntent(openIntent(ctx, "mail/thread/${t.id}", id))
+                    .addAction(0, "Archive", mailAction(ctx, MailActionReceiver.ACTION_ARCHIVE, t.id, id + 1))
+                    .addAction(0, "Mark read", mailAction(ctx, MailActionReceiver.ACTION_READ, t.id, id + 2))
+                if (details) {
+                    val subject = t.subject.ifBlank { "(no subject)" }
+                    b.setContentTitle(sender(t))
+                        .setContentText(subject)
+                        .setStyle(NotificationCompat.BigTextStyle().bigText(subject + if (t.snippet.isNotBlank()) "\n" + t.snippet.take(300) else ""))
+                    t.lastDate?.let { d -> runCatching { java.time.OffsetDateTime.parse(d).toInstant().toEpochMilli() }.getOrNull()?.let { b.setWhen(it).setShowWhen(true) } }
+                } else {
+                    b.setContentTitle("New mail").setContentText("You have a new message.")
+                }
+                nm.notify(id, b.build())
+                notified += t.id
+            }
+            if (notified.size > 1) {
+                val summary = NotificationCompat.Builder(ctx, CH_MAIL_NEW)
+                    .setSmallIcon(R.drawable.ic_stat_mail)
+                    .setColor(ACCENT)
+                    .setContentTitle("${notified.size} new conversations")
+                    .setGroup(GROUP_MAIL)
+                    .setGroupSummary(true)
+                    .setAutoCancel(true)
+                    .setVisibility(NotificationCompat.VISIBILITY_PRIVATE)
+                    .setContentIntent(openIntent(ctx, "mail", 81))
+                    .build()
+                nm.notify(ID_MAIL_SUMMARY, summary)
+            }
+        } catch (_: SecurityException) {
+        }
+        s.mailNotified = notified
+    }
+
+    fun cancelMailThread(ctx: Context, thread: Long) {
+        val nm = NotificationManagerCompat.from(ctx)
+        nm.cancel(mailId(thread))
+        val s = ctx.app.settings
+        val left = s.mailNotified - thread
+        s.mailNotified = left
+        if (left.size <= 1) nm.cancel(ID_MAIL_SUMMARY)
+    }
+
+    /** Opened the app: the notifications have done their job. */
+    fun clearMail(ctx: Context) {
+        val nm = NotificationManagerCompat.from(ctx)
+        val s = ctx.app.settings
+        s.mailNotified.forEach { nm.cancel(mailId(it)) }
+        nm.cancel(ID_MAIL_SUMMARY)
+        nm.cancel(ID_MAIL)
+        s.mailNotified = emptySet()
     }
 
     fun webId(bookmark: Long) = 10_000 + (bookmark % 1_000_000).toInt()

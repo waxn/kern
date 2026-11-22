@@ -9,6 +9,8 @@
 	import { ui } from '../state/ui.svelte.ts';
 	import { ws } from '../state/workspace.svelte.ts';
 	import { ai } from './ai.svelte.ts';
+	// @ts-ignore: plain JavaScript module
+	import { current as mailCurrent } from '../mail/state.svelte.js';
 	import { sendChat, type Chat } from './chat.ts';
 	import ChatThread from './ChatThread.svelte';
 	import Sparkle from './Sparkle.svelte';
@@ -21,10 +23,16 @@
 	let input = $state<HTMLTextAreaElement>();
 	let scroller = $state<HTMLDivElement>();
 
-	// The page the popup is about: the document open in the current tab, if any.
+	// The page the popup is about: the document open in the current tab, if any,
+	// or the email conversation open in mail.
 	let pageId = $derived(page.url.pathname.match(/^\/doc\/([^/]+)/)?.[1] ?? null);
+	let mailThread = $derived(Number(page.url.pathname.match(/^\/mail\/[^/]+\/t\/(\d+)/)?.[1]) || null);
+	let mailSubject = $derived.by(() => {
+		const t = (mailCurrent as { thread: { id: number; subject: string } | null }).thread;
+		return mailThread && t?.id === mailThread ? t.subject || '(no subject)' : '';
+	});
 	let doc = $derived(pageId ? ws.docs[pageId] : undefined);
-	let scopeKey = $derived(`kern:intel-chat:${pageId ?? 'all'}`);
+	let scopeKey = $derived(`kern:intel-chat:${mailThread ? 'mail:' + mailThread : pageId ?? 'all'}`);
 	let configured = $derived(ai.config?.configured ?? true);
 	let web = $derived(!!ai.config?.web_search);
 
@@ -42,7 +50,15 @@
 		{ label: 'New group', text: 'Make a group for ' },
 		{ label: 'Plan my day', text: 'Look at my tasks and suggest a plan for today.' }
 	];
-	let ideas = $derived(pageId ? pageIdeas : globalIdeas);
+	const mailIdeas = [
+		{ label: 'Summarize', text: 'Summarize this email in two or three lines.' },
+		{ label: 'What do they want?', text: 'What is this email asking me to do, and by when?' },
+		{ label: 'Draft a reply', text: 'Draft a short, friendly reply to this email that I can copy.' },
+		{ label: 'Make a task', text: 'Make a task from this email, with the due date if it mentions one.' },
+		{ label: 'Is it legit?', text: 'Does anything about this email look like phishing or a scam? Explain briefly.' },
+		{ label: 'Save as a note', text: 'Save the useful parts of this email as a new page.' }
+	];
+	let ideas = $derived(mailThread ? mailIdeas : pageId ? pageIdeas : globalIdeas);
 
 	const remembered = (key: string) => {
 		try {
@@ -97,7 +113,7 @@
 		draft = '';
 		scrollDown();
 		try {
-			const updated = await sendChat(chat, text, pageId, (c) => remember(key, c.id));
+			const updated = await sendChat(chat, text, pageId, (c) => remember(key, c.id), mailThread);
 			if (loadedKey === key) chat = updated;
 		} catch (e) {
 			draft = text;
@@ -153,8 +169,8 @@
 	onkeydown={(e) => { if (e.key === 'Escape') ai.popupOpen = false; }}>
 	<header>
 		<span class="brand"><Sparkle size={15} />Intelligence</span>
-		<span class="scope truncate" title={pageId ? 'Answers are about this page' : 'Answers use your whole workspace'}>
-			{#if doc}{doc.icon ? doc.icon + ' ' : ''}{doc.title || 'Untitled'}{:else}Workspace{/if}
+		<span class="scope truncate" title={mailThread ? 'Answers are about this email' : pageId ? 'Answers are about this page' : 'Answers use your whole workspace'}>
+			{#if mailThread}✉ {mailSubject || 'This email'}{:else if doc}{doc.icon ? doc.icon + ' ' : ''}{doc.title || 'Untitled'}{:else}Workspace{/if}
 		</span>
 		<button class="icon-btn" title="New chat" onclick={fresh}><MessageSquarePlus size={14} /></button>
 		<button class="icon-btn" title="Open full page" onclick={expand}><Maximize2 size={14} /></button>
@@ -166,7 +182,7 @@
 			<ChatThread messages={chat?.messages ?? []} {sending} {pendingText} compact />
 		{:else}
 			<div class="hello">
-				<p class="muted">{pageId ? 'Ask about this page, have it edit it, quiz you, or look things up.' : 'Ask about your notes or have it change them.'}</p>
+				<p class="muted">{mailThread ? 'Ask about this email, draft a reply to copy, or turn it into a task or a note. It can read this conversation, never send or change mail.' : pageId ? 'Ask about this page, have it edit it, quiz you, or look things up.' : 'Ask about your notes or have it change them.'}</p>
 				{#if !configured}
 					<a class="btn primary" href="/settings?s=ai" onclick={() => (ai.popupOpen = false)}><Settings size={14} />Set up an AI provider</a>
 				{:else}

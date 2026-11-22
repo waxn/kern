@@ -19,6 +19,7 @@
 	import { ws } from '#lib/state/workspace.svelte.ts';
 	import { modKey } from '#lib/util.ts';
 	import TreeNode, { endTreeDrag, treeDragId } from './TreeNode.svelte';
+	import ModeSwitch from './ModeSwitch.svelte';
 
 	let roots = $derived(ws.children(null).filter((d) => d.kind !== 'group'));
 	onMount(() => watchMailToday());
@@ -125,6 +126,8 @@
 			<Logo size={20} />
 			Kern
 		</a>
+		<span class="grow"></span>
+		<ModeSwitch mode="notes" />
 		<button class="icon-btn" title="Hide sidebar ({modKey}+\)" onclick={() => { prefs.sidebarOpen = false; ui.mobileNav = false; }}>
 			<PanelLeft size={15} />
 		</button>
@@ -146,11 +149,6 @@
 		<a class="nav" class:active={path === '/tasks'} href="/tasks" onclick={(e) => nav(e, '/tasks')}>
 			<CircleCheck size={15} strokeWidth={1.75} /><span>Tasks</span>{#if counts.today}<em class="badge">{counts.today}</em>{/if}
 		</a>
-		{#if session.site?.allow_mail !== false}
-			<a class="nav" class:active={path.startsWith('/mail')} href="/mail/inbox" onclick={(e) => nav(e, '/mail/inbox')}>
-				<Mail size={15} strokeWidth={1.75} /><span>Mail</span>{#if mailToday.data?.unread}<em class="badge">{mailToday.data.unread}</em>{/if}
-			</a>
-		{/if}
 		<a class="nav" class:active={path === '/cards' || path === '/review'} href="/cards" onclick={(e) => nav(e, '/cards')}>
 			<Layers size={15} strokeWidth={1.75} /><span>Flashcards</span>{#if counts.due}<em class="badge">{counts.due}</em>{/if}
 		</a>
@@ -238,7 +236,8 @@
 
 <style>
 	.sidebar { position: relative; flex: none; display: flex; flex-direction: column; height: 100%; background: var(--bg-side); border-right: 1px solid var(--border); user-select: none; }
-	.head { display: flex; align-items: center; justify-content: space-between; height: 40px; padding: 0 8px 0 12px; }
+	.head { display: flex; align-items: center; gap: 6px; height: 40px; padding: 0 8px 0 12px; }
+	.grow { flex: 1; }
 	.brand { display: flex; align-items: center; gap: 7px; font-weight: 650; letter-spacing: -0.01em; text-decoration: none; }
 	.top, .foot { padding: 2px 6px; }
 	.foot { border-top: 1px solid var(--border); padding: 6px; }

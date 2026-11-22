@@ -33,7 +33,7 @@ jobs:
       - uses: gradle/actions/setup-gradle@v4
 
       - name: Unit tests
-        run: ./gradlew --no-daemon testDebugUnitTest
+        run: ./gradlew --no-daemon testKernDebugUnitTest testMailDebugUnitTest
 
       - name: Build APKs
         run: ./gradlew --no-daemon assembleDebug assembleRelease
@@ -43,8 +43,10 @@ jobs:
           ver="${GITHUB_REF_NAME#android-v}"
           [ "$GITHUB_REF_TYPE" = tag ] || ver="${GITHUB_SHA::7}"
           mkdir -p dist
-          cp app/build/outputs/apk/release/app-release.apk "dist/kern-$ver.apk"
-          cp app/build/outputs/apk/debug/app-debug.apk "dist/kern-$ver-debug.apk"
+          cp app/build/outputs/apk/kern/release/app-kern-release.apk "dist/kern-$ver.apk"
+          cp app/build/outputs/apk/kern/debug/app-kern-debug.apk "dist/kern-$ver-debug.apk"
+          cp app/build/outputs/apk/mail/release/app-mail-release.apk "dist/kern-mail-$ver.apk"
+          cp app/build/outputs/apk/mail/debug/app-mail-debug.apk "dist/kern-mail-$ver-debug.apk"
           ls -la dist
 
       - uses: actions/upload-artifact@v4

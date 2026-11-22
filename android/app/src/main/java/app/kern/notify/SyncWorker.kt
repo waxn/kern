@@ -29,11 +29,17 @@ class SyncWorker(ctx: Context, params: WorkerParameters) : CoroutineWorker(ctx, 
         val a = applicationContext.app
         if (a.settings.user == null) return Result.success()
         val notify = inputData.getBoolean(KEY_NOTIFY, true)
+        if (app.kern.BuildConfig.MAIL_APP) {
+            // Kern Mail: a backstop for the push connection (Doze, a killed service).
+            MailPushService.sync(applicationContext)
+            if (notify && !a.settings.mailPush) runCatching { checkMail(applicationContext) }
+            return Result.success()
+        }
         try {
             refresh(applicationContext)
             if (notify) remind(applicationContext)
             if (notify) runCatching { watchChanges(applicationContext) }
-            if (notify) runCatching { checkMail(applicationContext) }
+            if (notify && !mailAppInstalled(applicationContext)) runCatching { checkMail(applicationContext) }
         } catch (e: ApiError) {
             return if (e.status == 0) Result.retry() else Result.success()
         }
@@ -104,6 +110,11 @@ class SyncWorker(ctx: Context, params: WorkerParameters) : CoroutineWorker(ctx, 
                     else -> WebNotice(w.id, "$name changed", if (w.unseen > 1) "${w.unseen} changes since you last looked" else "Tap to see what changed")
                 }
             }
+
+        /** Kern Mail is installed: it notifies about mail, so Kern doesn't as well. */
+        fun mailAppInstalled(ctx: Context): Boolean = runCatching {
+            ctx.packageManager.getPackageInfo(app.kern.BuildConfig.OTHER_APP, 0); !app.kern.BuildConfig.MAIL_APP
+        }.getOrDefault(false)
 
         /** "New mail" when the Inbox has more unread conversations than at the last check. */
         suspend fun checkMail(ctx: Context) {

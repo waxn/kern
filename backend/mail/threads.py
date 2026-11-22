@@ -15,7 +15,7 @@ from datetime import timedelta
 from django.db import transaction
 from django.db.models import Q
 
-from .models import FolderRole, Message, MessageReference, Thread
+from .models import FolderRole, Message, MessageReference, Thread, ThreadFolder
 from .parsing import is_reply_subject
 
 SUBJECT_WINDOW = timedelta(days=45)
@@ -137,3 +137,40 @@ def refresh_thread(thread_id: int | None) -> None:
         risk_level=risk,
         label_ids=label_ids,
     )
+    _index_folders(thread_id, msgs, latest.sort_date)
+
+
+def _index_folders(thread_id: int, msgs: list[Message], last_date) -> None:
+    """Keep ThreadFolder in step: one row per folder the thread has mail in."""
+    want: dict[int, bool] = {}
+    for m in msgs:
+        want[m.folder_id] = want.get(m.folder_id, False) or not m.seen
+    have = {r.folder_id: r for r in ThreadFolder.objects.filter(thread_id=thread_id)}
+    gone = [fid for fid in have if fid not in want]
+    if gone:
+        ThreadFolder.objects.filter(thread_id=thread_id, folder_id__in=gone).delete()
+    new = []
+    for fid, unread in want.items():
+        row = have.get(fid)
+        if row is None:
+            new.append(ThreadFolder(thread_id=thread_id, folder_id=fid, last_date=last_date, unread=unread))
+        elif row.unread != unread or row.last_date != last_date:
+            ThreadFolder.objects.filter(pk=row.pk).update(unread=unread, last_date=last_date)
+    if new:
+        ThreadFolder.objects.bulk_create(new, ignore_conflicts=True)
+
+
+def rebuild_thread_index() -> int:
+    """Recreate every ThreadFolder row from the messages (repair tool; the
+    reprocess command and tests use it)."""
+    with transaction.atomic():
+        ThreadFolder.objects.all().delete()
+        dates = dict(Thread.objects.values_list("id", "last_date"))
+        rows: dict[tuple[int, int], bool] = {}
+        for tid, fid, seen in Message.objects.filter(thread__isnull=False).values_list("thread_id", "folder_id", "seen"):
+            rows[(fid, tid)] = rows.get((fid, tid), False) or not seen
+        ThreadFolder.objects.bulk_create(
+            [ThreadFolder(folder_id=f, thread_id=t, last_date=dates.get(t), unread=u) for (f, t), u in rows.items()],
+            batch_size=2000,
+        )
+    return len(rows)

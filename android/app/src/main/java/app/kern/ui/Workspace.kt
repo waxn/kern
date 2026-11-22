@@ -61,12 +61,15 @@ class Workspace(application: Application) : AndroidViewModel(application) {
         settings.user = user
         _session.value = Session.SignedIn(user)
         SyncWorker.schedule(getApplication())
+        app.kern.notify.MailPushService.sync(getApplication())
         refresh()
     }
 
     private fun onSignedOut() {
         if (_session.value is Session.SignedOut) return
+        app.kern.notify.Notifications.clearMail(getApplication())
         settings.clearAccount()
+        app.kern.notify.MailPushService.sync(getApplication())
         _session.value = Session.SignedOut
         _tree.value = emptyList()
         _treeLoaded.value = false

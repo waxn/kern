@@ -24,6 +24,10 @@ export interface Prefs {
 	sections: Record<string, boolean>;
 	tabs: string[];
 	activeTab: number;
+	// Notes or Mail (the switch at the top of the sidebar), and where each was left.
+	appMode: 'notes' | 'mail';
+	lastNotesPath: string;
+	lastMailPath: string;
 }
 
 const SYNCED: (keyof Prefs)[] = [
@@ -85,7 +89,10 @@ const defaults: Prefs = {
 	expanded: {},
 	sections: {},
 	tabs: ['/'],
-	activeTab: 0
+	activeTab: 0,
+	appMode: 'notes',
+	lastNotesPath: '/',
+	lastMailPath: '/mail/inbox'
 };
 
 function readLocal(): Prefs {

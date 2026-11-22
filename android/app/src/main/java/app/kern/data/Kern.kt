@@ -134,7 +134,8 @@ class Kern(val api: Api) {
     suspend fun chat(id: String): Chat = api.get("/chats/$id")
     suspend fun createChat(): Chat = api.post("/chats")
     suspend fun deleteChat(id: String) = api.delete("/chats/$id")
-    suspend fun sendChat(id: String, text: String, page: String? = null): Chat = api.post("/chats/$id/message", jsonOf("text" to text, "page" to page))
+    suspend fun sendChat(id: String, text: String, page: String? = null, mailThread: Long? = null): Chat =
+        api.post("/chats/$id/message", if (mailThread != null) jsonOf("text" to text, "mail_thread" to mailThread) else jsonOf("text" to text, "page" to page))
     suspend fun aiConfig(): JsonObject = api.get("/ai/config")
 
     // ---- bookmarks
@@ -168,6 +169,10 @@ class Kern(val api: Api) {
     suspend fun mailThreads(view: String, q: String? = null, cursor: String? = null, unread: Boolean = false): MailThreads =
         api.get("/mail/threads" + qs("view" to (if (q.isNullOrBlank()) view else null), "q" to q, "cursor" to cursor, "unread" to (if (unread) "1" else null)))
     suspend fun mailThread(id: Long): MailThreadDetail = api.get("/mail/threads/$id")
+    /** The change feed; with [wait] the server holds the request until something happens (long poll). */
+    suspend fun mailChanges(since: Long?, wait: Int? = null): MailChanges =
+        api.get("/mail/changes" + qs("since" to since, "wait" to wait))
+    suspend fun mailCheckNow(): JsonObject = api.post("/mail/check")
     suspend fun mailBody(id: Long): MailBody = api.get("/mail/messages/$id/body")
     suspend fun mailAction(ids: List<Long>, action: String, vararg extra: Pair<String, Any?>): JsonObject =
         api.post("/mail/threads/actions", jsonOf("ids" to ids, "action" to action, *extra))

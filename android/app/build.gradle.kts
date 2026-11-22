@@ -13,8 +13,26 @@ android {
         applicationId = "app.kern"
         minSdk = 26
         targetSdk = 35
-        versionCode = 1
-        versionName = "1.0"
+        versionCode = 2
+        versionName = "1.1"
+    }
+
+    // Two apps from one codebase: Kern (everything) and Kern Mail (mail only, with
+    // instant notifications; tasks and notes it makes open in Kern).
+    flavorDimensions += "app"
+    productFlavors {
+        create("kern") {
+            dimension = "app"
+            applicationId = "app.kern"
+            buildConfigField("boolean", "MAIL_APP", "false")
+            buildConfigField("String", "OTHER_APP", "\"app.kern.mail\"")
+        }
+        create("mail") {
+            dimension = "app"
+            applicationId = "app.kern.mail"
+            buildConfigField("boolean", "MAIL_APP", "true")
+            buildConfigField("String", "OTHER_APP", "\"app.kern\"")
+        }
     }
 
     buildTypes {
@@ -42,6 +60,7 @@ android {
     }
     buildFeatures {
         compose = true
+        buildConfig = true
     }
 }
 

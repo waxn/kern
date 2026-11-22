@@ -261,6 +261,35 @@
         "--strictPort"
       ],
       "port": 5253
+    },
+    {
+      "name": "kern-mailwork-backend",
+      "runtimeExecutable": "env",
+      "runtimeArgs": [
+        "KERN_DATA_DIR=/tmp/claude-1000/-home-linus-Documents-dev-kern/46131d3a-6a59-4230-80ac-fd85829f8528/scratchpad/mailwork",
+        "KERN_NO_AUTO_BACKUP=1",
+        "sh",
+        "-c",
+        "backend/.venv/bin/python /tmp/claude-1000/-home-linus-Documents-dev-kern/46131d3a-6a59-4230-80ac-fd85829f8528/scratchpad/bootstrap.py && (cd backend && .venv/bin/python manage.py demo --user demo &) && exec backend/.venv/bin/python backend/manage.py runserver 127.0.0.1:8531 --noreload"
+      ],
+      "port": 8531
+    },
+    {
+      "name": "kern-mailwork-frontend",
+      "runtimeExecutable": "env",
+      "runtimeArgs": [
+        "KERN_BACKEND=http://127.0.0.1:8531",
+        "npm",
+        "--prefix",
+        "frontend",
+        "run",
+        "dev",
+        "--",
+        "--port",
+        "5263",
+        "--strictPort"
+      ],
+      "port": 5263
     }
   ]
 }

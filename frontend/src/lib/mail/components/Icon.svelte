@@ -5,7 +5,7 @@
     AlarmClock, Archive, ArrowLeft, Ban, Bell, BellOff, Bold, Calendar, Check, ChevronDown, ChevronRight, Clock, Code,
     Copy, Download, Ellipsis, ExternalLink, Eye, File, Folder, FolderInput, Forward, Image, Inbox, Info, Italic,
     Keyboard, Link, List, ListOrdered, LogOut, Mail, MailOpen, MailX, Maximize2, Menu, Minimize2, Minus, Moon, Package,
-    Palette, Paperclip, Pencil, Pin, Play, Plus, Quote, RefreshCw, RemoveFormatting, Reply, ReplyAll, Rows3, Search, Send,
+    Columns2, PanelTop, Palette, Paperclip, Pencil, Pin, Play, Plus, Quote, RefreshCw, RemoveFormatting, Reply, ReplyAll, Rows3, Search, Send,
     Settings, Shield, ShieldAlert, Sparkles, SquareCheck, Star, StickyNote, Sun, Tag, Trash2, TriangleAlert, Truck,
     Underline, Undo2, X,
   } from '@lucide/svelte';
@@ -23,7 +23,7 @@
     keyboard: Keyboard, calendar: Calendar, pin: Pin, info: Info, eye: Eye, refresh: RefreshCw,
     chevronDown: ChevronDown, chevronRight: ChevronRight, package: Package, truck: Truck, copy: Copy,
     external: ExternalLink, mute: BellOff, bell: Bell, prompt: Sparkles, undo: Undo2, palette: Palette, clock: Clock,
-    alarm: AlarmClock, unsubscribe: MailX, play: Play,
+    alarm: AlarmClock, unsubscribe: MailX, play: Play, split: Columns2, full: PanelTop,
   };
   const C = $derived(MAP[name] || Info);
 </script>

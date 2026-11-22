@@ -4,16 +4,38 @@ A native Android client for a Kern server: Kotlin, Jetpack Compose (Material 3),
 colours and Inter typeface as the web app, light and dark themes. It talks to the normal
 `/api` with the same session cookie a browser uses, so nothing changes on the server.
 
+Two apps are built from this code (Gradle product flavors):
+
+- **Kern** (`kern`, `app.kern`): everything below.
+- **Kern Mail** (`mail`, `app.kern.mail`): mail only, with its own icon and instant
+  notifications. Tasks, pages and flashcards you make from an email (by hand or with
+  Intelligence) are saved to Kern; opening one hands over to the Kern app, or to the web app
+  when Kern isn't installed. With Kern Mail installed, Kern leaves mail notifications to it.
+
 ## Build
 
 Needs JDK 17 and the Android SDK (platform 35, build-tools 35).
 
 ```bash
 cd android
-./gradlew assembleDebug        # app/build/outputs/apk/debug/app-debug.apk
-./gradlew assembleRelease      # minified, app/build/outputs/apk/release/app-release.apk
-./gradlew testDebugUnitTest    # HTML ↔ markup and quick-add parser tests
+./gradlew assembleDebug           # app/build/outputs/apk/{kern,mail}/debug/app-*-debug.apk
+./gradlew assembleRelease         # minified, app/build/outputs/apk/{kern,mail}/release/
+./gradlew assembleMailRelease     # just Kern Mail
+./gradlew testKernDebugUnitTest   # HTML ↔ markup and quick-add parser tests
 ```
+
+### Kern Mail's instant notifications
+
+New mail shows within a second or two without Google's push service: a foreground service
+keeps one long-poll request open to your Kern server (`/api/mail/changes?wait=…`), which answers
+as soon as the mail worker (IMAP IDLE) stores a message. Each hold starts at 50 seconds and
+doubles up to about 4.5 minutes while nothing between the phone and the server (a proxy's
+timeout, a NAT) cuts requests short, so the radio wakes rarely. Android requires a notice while
+the service runs; it uses a silent "Connection" channel you can turn off by long-pressing it.
+Settings in the app turn instant notifications off (a 15-minute check stays as a backstop) or
+hide the sender and subject; the lock screen only ever shows "New mail". Behind nginx, raise
+`proxy_read_timeout` above 300 s (Caddy has no limit by default); otherwise the app settles on
+shorter holds by itself.
 
 The release build is signed with the debug key so it installs straight away; set up your
 own `signingConfig` in `app/build.gradle.kts` before distributing it.

@@ -1,4 +1,6 @@
 import { goto } from '$app/navigation';
+import { newPage } from '#lib/actions.ts';
+import { modeFor } from './mode.ts';
 import { prefs } from './prefs.svelte';
 import { ws } from './workspace.svelte';
 
@@ -12,7 +14,11 @@ export function tabInfo(path: string): { title: string; icon: string } {
 	if (tag) return { title: '#' + (ws.tagMap[tag[1]]?.name ?? 'tag'), icon: '' };
 	const repo = path.match(/^\/git\/([^/]+)/);
 	if (repo) return { title: repo[1], icon: '' };
-	if (path === '/mail' || path.startsWith('/mail/')) return { title: 'Mail', icon: '' };
+	if (path === '/mail' || path.startsWith('/mail/')) {
+		const view = path.split('/')[2] ?? 'inbox';
+		const pages: Record<string, string> = { packages: 'Packages', scheduled: 'Scheduled', files: 'Files', blocklist: 'Blocked senders', starred: 'Starred', all: 'All mail', search: 'Search', snoozed: 'Snoozed', drafts: 'Drafts', sent: 'Sent', archive: 'Archive', junk: 'Junk', trash: 'Trash' };
+		return { title: 'Mail · ' + (pages[view] ?? (view === 'inbox' ? 'Inbox' : 'Folder')), icon: '' };
+	}
 	const names: Record<string, string> = {
 		'/': 'Home', '/tags': 'Tags', '/trash': 'Trash', '/archive': 'Archive', '/settings': 'Settings',
 		'/templates': 'Templates', '/graph': 'Graph', '/tasks': 'Tasks', '/cards': 'Flashcards', '/review': 'Review',
@@ -79,4 +85,14 @@ export function closeTabsFor(ids: string[]) {
 	const i = prefs.tabs.indexOf(current);
 	prefs.activeTab = i >= 0 ? i : Math.min(prefs.activeTab, prefs.tabs.length - 1);
 	if (i < 0) goto(prefs.tabs[prefs.activeTab]);
+}
+
+/** The "+" next to where you are: a new tab (then the tab strip shows). In
+ *  Notes it is a new page; in Mail, Home (or the Inbox when Home is open). */
+export function newTab(path: string) {
+	if (modeFor(path) === 'notes') {
+		newPage(null, true);
+		return;
+	}
+	openTab(path === '/' ? '/mail/inbox' : '/');
 }

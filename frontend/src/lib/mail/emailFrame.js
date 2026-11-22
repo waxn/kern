@@ -39,14 +39,29 @@ const BASE_CSS = `
   a { color: #2f4ad0; }
 `;
 
-export function buildSrcdoc(html, origin) {
+// Dark emails: the whole page is inverted (light text on a dark page) and
+// pictures are inverted back so they keep their colors. Toggled by the
+// "kern-dark" class on <html>, so switching back to the original colors
+// doesn't reload the message.
+export const DARK_PAGE = '#ebebe9'; // inverted: #141416, next to Kern's dark surfaces
+const DARK_CSS = `
+  html.kern-dark { filter: invert(1) hue-rotate(180deg); background: ${DARK_PAGE}; }
+  html.kern-dark body { background-color: ${DARK_PAGE}; }
+  html.kern-dark img, html.kern-dark video, html.kern-dark picture, html.kern-dark svg image,
+  html.kern-dark [background], html.kern-dark [style*="background-image"], html.kern-dark [style*="background: url"] {
+    filter: invert(1) hue-rotate(180deg);
+  }
+  html.kern-dark [background] img, html.kern-dark [style*="background-image"] img { filter: none; }
+`;
+
+export function buildSrcdoc(html, origin, { dark = false } = {}) {
   const csp = frameCsp(origin).replace(/"/g, '&quot;');
   return (
-    '<!doctype html><html><head><meta charset="utf-8">' +
+    `<!doctype html><html${dark ? ' class="kern-dark"' : ''}><head><meta charset="utf-8">` +
     `<meta http-equiv="Content-Security-Policy" content="${csp}">` +
     '<meta name="referrer" content="no-referrer">' +
     '<base target="_blank">' +
-    `<style>${BASE_CSS}</style></head><body>` +
+    `<style>${BASE_CSS}${DARK_CSS}</style></head><body>` +
     html +
     '</body></html>'
   );
@@ -112,4 +127,56 @@ export function collapseQuotes(doc) {
   doc.head.append(style);
   body.classList.add('mf-collapsed');
   return true;
+}
+
+// --- is this email already dark? ------------------------------------------------
+// Inverting a dark newsletter would make it bright, so those keep their colors.
+export function parseColor(c) {
+  if (!c) return null;
+  c = String(c).trim().toLowerCase();
+  const named = { black: [0, 0, 0], white: [255, 255, 255] };
+  if (named[c]) return named[c];
+  let m = c.match(/^#([0-9a-f]{3}|[0-9a-f]{6})\b/);
+  if (m) {
+    const h = m[1].length === 3 ? m[1].replace(/./g, '$&$&') : m[1];
+    return [0, 2, 4].map((i) => parseInt(h.slice(i, i + 2), 16));
+  }
+  m = c.match(/^rgba?\(\s*(\d+)[\s,]+(\d+)[\s,]+(\d+)(?:[\s,/]+([\d.]+%?))?/);
+  if (m) {
+    if (m[4] !== undefined && parseFloat(m[4]) === 0) return null; // transparent
+    return [m[1], m[2], m[3]].map(Number);
+  }
+  return null;
+}
+
+function luminance([r, g, b]) {
+  return (0.2126 * r + 0.7152 * g + 0.0722 * b) / 255;
+}
+
+function bgOf(el) {
+  const attr = el.getAttribute?.('bgcolor');
+  if (attr) return parseColor(attr);
+  const st = el.style;
+  if (!st) return null;
+  return parseColor(st.backgroundColor) || parseColor((st.background || '').split(/\s+(?![^(]*\))/)[0]);
+}
+
+export function looksDark(html) {
+  try {
+    const d = new DOMParser().parseFromString(html, 'text/html');
+    const css = [...d.querySelectorAll('style')].map((x) => x.textContent || '').join('\n');
+    const bodyRule = css.match(/(?:^|[}\s,])body\s*\{[^}]*background(?:-color)?\s*:\s*([^;}]+)/i);
+    if (bodyRule) {
+      const c = parseColor(bodyRule[1]);
+      if (c) return luminance(c) < 0.4;
+    }
+    const candidates = [d.body, ...d.body.querySelectorAll(':scope > *, :scope > * > *, :scope > * > * > *')].slice(0, 30);
+    for (const el of candidates) {
+      const c = bgOf(el);
+      if (c) return luminance(c) < 0.4;
+    }
+  } catch {
+    /* not parseable: treat as light */
+  }
+  return false;
 }

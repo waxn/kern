@@ -1,4 +1,6 @@
 <?xml version="1.0" encoding="utf-8"?>
+<!-- Shared by both apps. Kern's widgets, shortcuts and share target are in src/kern;
+     Kern Mail's push service is in src/mail. -->
 <manifest xmlns:android="http://schemas.android.com/apk/res/android">
 
     <uses-permission android:name="android.permission.INTERNET" />
@@ -25,31 +27,8 @@
                 <action android:name="android.intent.action.MAIN" />
                 <category android:name="android.intent.category.LAUNCHER" />
             </intent-filter>
-            <intent-filter>
-                <action android:name="android.intent.action.SEND" />
-                <category android:name="android.intent.category.DEFAULT" />
-                <data android:mimeType="text/plain" />
-            </intent-filter>
-            <meta-data android:name="android.app.shortcuts" android:resource="@xml/shortcuts" />
         </activity>
 
         <receiver android:name=".notify.ActionReceiver" android:exported="false" />
-
-        <receiver android:name=".widget.TasksWidgetReceiver" android:exported="true" android:label="@string/widget_tasks">
-            <intent-filter><action android:name="android.appwidget.action.APPWIDGET_UPDATE" /></intent-filter>
-            <meta-data android:name="android.appwidget.provider" android:resource="@xml/widget_tasks" />
-        </receiver>
-        <receiver android:name=".widget.CardsWidgetReceiver" android:exported="true" android:label="@string/widget_cards">
-            <intent-filter><action android:name="android.appwidget.action.APPWIDGET_UPDATE" /></intent-filter>
-            <meta-data android:name="android.appwidget.provider" android:resource="@xml/widget_cards" />
-        </receiver>
-        <receiver android:name=".widget.CaptureWidgetReceiver" android:exported="true" android:label="@string/widget_capture">
-            <intent-filter><action android:name="android.appwidget.action.APPWIDGET_UPDATE" /></intent-filter>
-            <meta-data android:name="android.appwidget.provider" android:resource="@xml/widget_capture" />
-        </receiver>
-        <receiver android:name=".widget.RecentWidgetReceiver" android:exported="true" android:label="@string/widget_recent">
-            <intent-filter><action android:name="android.appwidget.action.APPWIDGET_UPDATE" /></intent-filter>
-            <meta-data android:name="android.appwidget.provider" android:resource="@xml/widget_recent" />
-        </receiver>
     </application>
 </manifest>

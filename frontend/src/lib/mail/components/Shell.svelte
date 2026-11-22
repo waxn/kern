@@ -3,13 +3,12 @@
   import { onDestroy, onMount, untrack } from 'svelte';
   import { navigate, route } from '../router.svelte.js';
   import {
-    current, folderByRole, info, list, net, loadAccountPrefs, loadAgenda, loadFolders, loadPackages, loadScheduled, loadInfo, loadThread, loadThreads, mailbox, prefs,
+    current, folderByRole, info, list, listView, net, loadAccountPrefs, loadAgenda, loadFolders, loadPackages, loadScheduled, loadInfo, loadThread, loadThreads, mailbox, prefs,
     READING_MIN, threadAction, ui, unreadInbox,
   } from '../state.svelte.js';
   import { startLive, stopLive, updateTitle } from '../live.js';
   import { installShortcuts } from '../shortcuts.js';
   import { closeCompose, openCompose, openReply, saveDraft } from '../compose.svelte.js';
-  import Sidebar from './Sidebar.svelte';
   import TopBar from './TopBar.svelte';
   import ThreadList from './ThreadList.svelte';
   import ThreadView from './ThreadView.svelte';
@@ -37,10 +36,13 @@
   });
   onDestroy(stopLive);
 
-  // Reload the list when the view changes.
+  // Reload the list when the view changes. Inbox and the other system folders
+  // load right away (the server knows them by role); custom folders and labels
+  // wait for the folder list (usually already here from this device's copy).
+  const listReady = $derived(route.page === 'mail' && (route.view === 'search' || !!listView()));
   $effect(() => {
-    const key = route.page + '|' + route.view + '|' + route.q + '|' + mailbox.loaded;
-    if (route.page === 'mail' && mailbox.loaded) {
+    const key = route.page + '|' + route.view + '|' + route.q;
+    if (listReady) {
       void key;
       untrack(() => loadThreads());
     }
@@ -235,7 +237,6 @@
 </script>
 
 <div class="shell" class:wide class:reading bind:clientWidth={width}>
-  <Sidebar {wide} />
   <div class="main">
     <TopBar {wide} />
     {#if !net.online}

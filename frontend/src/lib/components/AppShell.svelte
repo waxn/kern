@@ -8,6 +8,9 @@
 	import SearchModal from '#lib/components/SearchModal.svelte';
 	import Sidebar from '#lib/components/Sidebar.svelte';
 	import TabBar from '#lib/components/TabBar.svelte';
+	import TabCorner from '#lib/components/TabCorner.svelte';
+	import MailSide from '#lib/mail/MailSide.svelte';
+	import { modeFor, switchMode, trackMode } from '#lib/state/mode.ts';
 	import Toasts from '#lib/components/Toasts.svelte';
 	import CardEditor from '#lib/learn/CardEditor.svelte';
 	import { ai } from '#lib/ai/ai.svelte.ts';
@@ -71,7 +74,16 @@
 
 	$effect(() => persistPrefs());
 
-	afterNavigate(() => syncTabs(page.url.pathname));
+	afterNavigate(() => {
+		syncTabs(page.url.pathname);
+		trackMode(page.url.pathname, page.url.search);
+	});
+
+	const path = $derived(page.url.pathname);
+	const mode = $derived(modeFor(path));
+	// Pages with their own header put the corner control there (DocView, mail's top bar).
+	const ownHeader = $derived(path.startsWith('/doc/') || path === '/mail' || path.startsWith('/mail/'));
+	const showTabs = $derived(prefs.tabs.length > 1);
 
 	function hasTextSelection(): boolean {
 		const s = getSelection();
@@ -108,7 +120,7 @@
 			});
 		if (inText) return; // the rest would clash with typing
 		if (is('tasks')) return run(() => goto('/tasks'));
-		if (is('mail')) return run(() => goto('/mail/inbox'));
+		if (is('mail')) return run(() => switchMode(mode === 'mail' ? 'notes' : 'mail'));
 		if (is('review')) return run(() => goto('/review'));
 		if (is('home')) return run(() => goto('/'));
 	}
@@ -117,15 +129,16 @@
 <svelte:window onkeydown={keydown} />
 
 <div class="app" class:side-closed={!prefs.sidebarOpen || ui.focusMode} class:focus={ui.focusMode} class:mobile-nav={ui.mobileNav}>
-	<div class="side"><Sidebar /></div>
+	<div class="side">{#if mode === 'mail'}<MailSide />{:else}<Sidebar />{/if}</div>
 	<!-- svelte-ignore a11y_no_static_element_interactions a11y_click_events_have_key_events -->
 	<div class="scrim" onclick={() => (ui.mobileNav = false)}></div>
 	<main>
-		{#if !ui.focusMode}<TabBar />{/if}
+		{#if !ui.focusMode && showTabs}<TabBar />{/if}
 		{#if ws.offline && !ui.focusMode}
 			<div class="offline" role="status"><CloudOff size={14} />You're offline. Pages you've opened before are available, and your edits are kept on this device until you reconnect.</div>
 		{/if}
 		<div class="content">
+			{#if !ui.focusMode && !showTabs && !ownHeader}<div class="corner-float"><TabCorner /></div>{/if}
 			{#if ws.offline && !Object.keys(ws.docs).length}
 				<div class="page"><div class="empty"><b>Cannot reach the Kern server</b>Check that the backend container is running, then reload.
 					<div style="margin-top:12px"><button class="btn" onclick={() => ws.load().catch(() => {})}>Retry</button></div></div></div>
@@ -153,9 +166,10 @@
 	.content { flex: 1; min-height: 0; position: relative; }
 	.offline { flex: none; display: flex; align-items: center; gap: 8px; padding: 6px 14px; font-size: 12.5px; color: var(--text); background: color-mix(in srgb, var(--c-orange) 18%, var(--bg)); border-bottom: 1px solid var(--border); }
 	.scrim { display: none; }
+	.corner-float { position: absolute; z-index: 20; top: 6px; left: 10px; max-width: calc(100% - 20px); padding: 1px 2px; border-radius: var(--radius); background: color-mix(in srgb, var(--bg) 82%, transparent); backdrop-filter: blur(6px); }
 	@media (max-width: 760px) {
 		.side, .side-closed .side { display: block; position: fixed; z-index: 700; inset: 0 auto 0 0; transform: translateX(-102%); transition: transform 0.2s var(--ease); box-shadow: var(--shadow); }
-		.side :global(.sidebar) { width: min(300px, 86vw) !important; }
+		.side :global(.sidebar), .side :global(.mail-side) { width: min(300px, 86vw) !important; }
 		.mobile-nav .side { transform: none; }
 		.mobile-nav .scrim { display: block; position: fixed; inset: 0; z-index: 699; background: rgba(0, 0, 0, 0.45); animation: fade 0.15s; }
 	}

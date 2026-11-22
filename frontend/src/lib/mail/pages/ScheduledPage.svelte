@@ -29,7 +29,7 @@
   }
 </script>
 
-<div class="page scroll">
+<div class="mail-page scroll">
   <div class="inner">
     <h1 class="display">Scheduled</h1>
     <p class="ledger sub">
@@ -68,7 +68,7 @@
 </div>
 
 <style>
-  .page { flex: 1; }
+  .mail-page { flex: 1; min-height: 0; width: 100%; }
   .inner { max-width: 820px; margin: 0 auto; padding: 18px 20px 80px; }
   h1 { font-size: 36px; margin: 6px 0 4px; }
   .sub { color: var(--text-3); margin: 0 0 22px; }

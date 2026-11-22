@@ -11,6 +11,7 @@ urlpatterns = [
     path("account", views_account.account_detail),
     path("account/status", views_account.account_status),
     path("account/test", views_account.account_test),
+    path("check", views.check_now),
     path("folders", views.folders),
     path("folders/<int:pk>/read-all", views.folder_read_all),
     path("labels", views.labels),

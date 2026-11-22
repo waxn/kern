@@ -3,6 +3,8 @@
   import { navigate, route } from '../router.svelte.js';
   import { ui } from '../state.svelte.js';
   import Icon from './Icon.svelte';
+  import TabCorner from '#lib/components/TabCorner.svelte';
+  import { prefs as kernPrefs } from '#lib/state/prefs.svelte.ts';
 
   let { wide } = $props();
   let q = $state(route.q || '');
@@ -73,8 +75,8 @@
 </script>
 
 <header class="topbar">
-  {#if !wide}
-    <button class="icon-btn" aria-label="Open menu" onclick={() => (ui.sidebarOpen = true)}><Icon name="menu" /></button>
+  {#if kernPrefs.tabs.length <= 1}
+    <TabCorner />
   {/if}
   <form class="search" role="search" onsubmit={submit}>
     <Icon name="search" size={17} />

@@ -33,6 +33,7 @@ import androidx.compose.material.icons.outlined.Delete
 import androidx.compose.material.icons.outlined.Language
 import androidx.compose.material.icons.outlined.Quiz
 import androidx.compose.material.icons.outlined.Summarize
+import androidx.compose.material.icons.outlined.TaskAlt
 import androidx.compose.material.icons.outlined.EditNote
 import androidx.compose.material3.CircularProgressIndicator
 import androidx.compose.material3.Icon
@@ -158,7 +159,7 @@ private fun AnnotatedString.Builder.inline(s: String, k: KernColors) {
 
 @OptIn(ExperimentalLayoutApi::class)
 @Composable
-fun ChatScreen(ws: Workspace, nav: Nav, id: String, page: String?) {
+fun ChatScreen(ws: Workspace, nav: Nav, id: String, page: String?, mailThread: Long? = null) {
     var chat by remember { mutableStateOf<Chat?>(null) }
     var err by remember { mutableStateOf<String?>(null) }
     var text by remember { mutableStateOf("") }
@@ -170,6 +171,8 @@ fun ChatScreen(ws: Workspace, nav: Nav, id: String, page: String?) {
     val ctx = LocalContext.current
     val k = kern
     val pageTitle = page?.let { ws.doc(it)?.displayTitle }
+    var mailSubject by remember { mutableStateOf<String?>(null) }
+    LaunchedEffect(mailThread) { if (mailThread != null) mailSubject = runCatching { ws.kern.mailThread(mailThread).thread.subject.ifBlank { "(no subject)" } }.getOrNull() }
     LaunchedEffect(id) { try { chat = ws.kern.chat(id) } catch (e: Exception) { err = e.message } }
     val count = (chat?.messages?.size ?: 0) + (if (pending != null) 2 else 0)
     LaunchedEffect(count) { if (count > 0) list.animateScrollToItem(count - 1) }
@@ -179,7 +182,7 @@ fun ChatScreen(ws: Workspace, nav: Nav, id: String, page: String?) {
         if (m.isEmpty() || sending) return
         text = ""; pending = m; sending = true
         scope.launch {
-            try { chat = ws.kern.sendChat(id, m, page); ws.refresh() } catch (e: Exception) { snack.error(e); text = m }
+            try { chat = ws.kern.sendChat(id, m, page, mailThread); ws.refresh() } catch (e: Exception) { snack.error(e); text = m }
             pending = null; sending = false
         }
     }
@@ -189,7 +192,8 @@ fun ChatScreen(ws: Workspace, nav: Nav, id: String, page: String?) {
             IconButton(onClick = { nav.back() }) { Icon(Icons.AutoMirrored.Outlined.ArrowBack, "Back") }
             Column(Modifier.weight(1f)) {
                 Text(chat?.title ?: "Intelligence", style = MaterialTheme.typography.titleMedium, maxLines = 1, overflow = TextOverflow.Ellipsis)
-                if (pageTitle != null) Text("About “$pageTitle”", style = MaterialTheme.typography.bodySmall, color = k.text3, maxLines = 1)
+                if (mailThread != null) Text("About the email “${mailSubject ?: "…"}”", style = MaterialTheme.typography.bodySmall, color = k.text3, maxLines = 1, overflow = TextOverflow.Ellipsis)
+                else if (pageTitle != null) Text("About “$pageTitle”", style = MaterialTheme.typography.bodySmall, color = k.text3, maxLines = 1)
             }
         }
         Box(Modifier.weight(1f)) {
@@ -200,9 +204,15 @@ fun ChatScreen(ws: Workspace, nav: Nav, id: String, page: String?) {
                 msgs.isEmpty() && pending == null -> Column(Modifier.fillMaxSize().padding(20.dp), verticalArrangement = Arrangement.Center, horizontalAlignment = Alignment.CenterHorizontally) {
                     Icon(Icons.Outlined.AutoAwesome, null, tint = k.accent, modifier = Modifier.size(36.dp))
                     Spacer(Modifier.height(12.dp))
-                    Text(if (page != null) "Ask about this page" else "What can I help with?", style = MaterialTheme.typography.titleLarge)
+                    Text(if (mailThread != null) "Ask about this email" else if (page != null) "Ask about this page" else "What can I help with?", style = MaterialTheme.typography.titleLarge)
+                    if (mailThread != null) Text("It reads this conversation; it can't send or change mail.", style = MaterialTheme.typography.bodySmall, color = k.text3)
                     Spacer(Modifier.height(16.dp))
-                    val ideas = if (page != null) listOf(
+                    val ideas = if (mailThread != null) listOf(
+                        Icons.Outlined.Summarize to "Summarize this email in two or three lines",
+                        Icons.Outlined.Quiz to "What is this email asking me to do, and by when?",
+                        Icons.Outlined.EditNote to "Draft a short, friendly reply I can copy",
+                        Icons.Outlined.TaskAlt to "Make a task from this email, with the due date if it mentions one",
+                    ) else if (page != null) listOf(
                         Icons.Outlined.Summarize to "Summarize this page",
                         Icons.Outlined.Quiz to "Quiz me on this page, one question at a time",
                         Icons.Outlined.EditNote to "Suggest improvements to this page",

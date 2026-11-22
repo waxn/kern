@@ -97,16 +97,20 @@ private val TABS = listOf(
     Tab("more", "More", Icons.Outlined.Menu, Icons.Filled.Menu),
 )
 
-/** Navigation helpers shared by every screen. */
-class Nav(val c: NavHostController) {
+/**
+ * Navigation helpers shared by every screen. [outside] handles routes this app doesn't have
+ * (Kern Mail opens pages and tasks in Kern); it returns false to navigate normally.
+ */
+class Nav(val c: NavHostController, private val outside: (String) -> Boolean = { false }) {
     /** Opens [route] unless it is exactly what is showing already (so doc/A → doc/B still stacks). */
     fun go(route: String) {
+        if (outside(route)) return
         if (c.currentBackStackEntry?.let { e -> e.destination.route?.let { fill(it, e.arguments) } } == route) return
         c.navigate(route)
     }
     private fun fill(pattern: String, args: android.os.Bundle?): String =
         Regex("\\{(\\w+)\\}").replace(pattern) { args?.getString(it.groupValues[1]) ?: "" }.replace(Regex("[?&]\\w+=(?=&|$)"), "")
-    fun back() { if (!c.popBackStack()) tab("home") }
+    fun back() { if (!c.popBackStack()) tab(c.graph.startDestinationRoute ?: "home") }
     fun doc(id: String) = go("doc/$id")
     fun tab(route: String) = c.navigate(route) {
         popUpTo(c.graph.findStartDestination().id) { saveState = true }
@@ -240,9 +244,10 @@ private fun SignedIn(ws: Workspace, launch: MutableStateFlow<Launch?>, host: Sna
                 navArgument("doc") { type = NavType.StringType; nullable = true; defaultValue = null },
             )) { ReviewScreen(ws, n, it.arguments?.getString("deck"), it.arguments?.getString("doc")) }
             composable("intelligence") { IntelligenceScreen(ws, n) }
-            composable("chat/{id}?page={page}", arguments = listOf(
+            composable("chat/{id}?page={page}&mail={mail}", arguments = listOf(
                 navArgument("page") { type = NavType.StringType; nullable = true; defaultValue = null },
-            )) { ChatScreen(ws, n, it.arguments!!.getString("id")!!, it.arguments?.getString("page")) }
+                navArgument("mail") { type = NavType.StringType; nullable = true; defaultValue = null },
+            )) { ChatScreen(ws, n, it.arguments!!.getString("id")!!, it.arguments?.getString("page"), it.arguments?.getString("mail")?.toLongOrNull()) }
             composable("bookmarks?add={add}", arguments = listOf(
                 navArgument("add") { type = NavType.StringType; nullable = true; defaultValue = null },
             )) { BookmarksScreen(ws, n, it.arguments?.getString("add") != null) }

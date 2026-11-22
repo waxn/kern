@@ -1,9 +1,10 @@
 // @ts-nocheck: plain JavaScript (ported from Manifest); covered by its unit tests, not by svelte-check.
-// Live updates: polls /api/mail/changes (Kern serves threaded WSGI, so no
-// held-open event stream). Every 4 s while the page is visible, 30 s when hidden.
+// Live updates from /api/mail/changes. While the page is visible the request is
+// held open by the server (?wait=20) until something happens, so new mail shows
+// up within a fraction of a second; in the background it checks every 30 s.
 
 import { api } from './api.svelte.js';
-import { loadInfo, net, prefs, scheduleRefresh, syncProgress, toast } from './state.svelte.js';
+import { loadInfo, net, noteChecked, prefs, scheduleRefresh, syncProgress, toast } from './state.svelte.js';
 
 const PACKAGE_NEWS = {
   out_for_delivery: 'A package is out for delivery.',
@@ -41,6 +42,10 @@ function notify(kind, data) {
 
 function handle(data) {
     const kind = data.kind;
+    if (kind === 'checked') {
+      noteChecked();
+      return;
+    }
     if (kind === 'sync_progress' && data.folder) {
       syncProgress[data.folder] = { done: data.done, total: data.total };
     }
@@ -83,10 +88,15 @@ function handle(data) {
 }
 
 
+let generation = 0;
+
 async function poll() {
   if (!running) return;
+  const gen = generation;
+  const visible = document.visibilityState === 'visible';
   try {
-    const r = await api.get('/changes', last === null ? {} : { since: last });
+    const r = await api.get('/changes', last === null ? {} : { since: last, wait: visible ? 20 : undefined });
+    if (gen !== generation || !running) return; // stopped or restarted meanwhile
     if (failures && !net.live) scheduleRefresh({ thread: true }); // catch up after a gap
     failures = 0;
     net.live = true;
@@ -94,26 +104,32 @@ async function poll() {
     const first = last === null;
     last = r.last;
     if (!first) for (const e of r.events) handle(e);
-    if (r.more) {
+    if (r.more || first) {
       timer = setTimeout(poll, 50);
       return;
     }
   } catch {
+    if (gen !== generation) return;
     failures += 1;
     if (failures >= 2) net.live = false;
+    timer = setTimeout(poll, Math.min(30000, 2000 * failures));
+    return;
   }
-  timer = setTimeout(poll, document.visibilityState === 'visible' ? 4000 : 30000);
+  // Visible: the server already waited, so ask again straight away.
+  timer = setTimeout(poll, document.visibilityState === 'visible' ? 150 : 30000);
 }
 
 function onVisible() {
   if (document.visibilityState === 'visible' && running) {
     clearTimeout(timer);
+    generation += 1; // a background request may still be out; start a fresh held one
     poll();
   }
 }
 
 export function startLive() {
   stopLive();
+  generation += 1;
   running = true;
   last = null;
   poll();
@@ -123,6 +139,7 @@ export function startLive() {
 
 export function stopLive() {
   running = false;
+  generation += 1;
   clearTimeout(timer);
   clearInterval(infoTimer);
   document.removeEventListener('visibilitychange', onVisible);

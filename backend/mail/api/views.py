@@ -20,7 +20,7 @@ from .. import actions, followups, imgproxy, labels as labels_mod, parsing, risk
 from ..identity import my_addresses
 from ..models import (
     Attachment, BlockRule, Correspondent, Draft, DraftStatus, Folder, FolderRole, Label, Message,
-    OpStatus, OutboxOp, Thread, TrustedImageSender, Upload, WorkerStatus,
+    OpStatus, OutboxOp, Thread, ThreadFolder, TrustedImageSender, Upload, WorkerStatus,
 )
 from .util import ApiError, api, body, int_or_none, iso
 from mail.account import cfg as _mail_cfg
@@ -307,13 +307,13 @@ def folders(request):
         return folder_json(f)
 
     # Unread *conversations* per folder (like Gmail), not unread messages.
+    # ThreadFolder has one row per (folder, conversation): plain index counts.
     unread = dict(
-        Message.objects.filter(seen=False, thread__isnull=False).values("folder_id")
-        .annotate(n=Count("thread_id", distinct=True)).values_list("folder_id", "n")
+        ThreadFolder.objects.filter(unread=True).values("folder_id")
+        .annotate(n=Count("id")).values_list("folder_id", "n")
     )
     totals = dict(
-        Message.objects.filter(thread__isnull=False).values("folder_id")
-        .annotate(n=Count("thread_id", distinct=True)).values_list("folder_id", "n")
+        ThreadFolder.objects.values("folder_id").annotate(n=Count("id")).values_list("folder_id", "n")
     )
     fs = sorted(Folder.objects.filter(selectable=True), key=lambda f: (ROLE_ORDER.get(f.role, 7), f.name.lower()))
     starred = Thread.objects.filter(starred=True).count()
@@ -322,6 +322,20 @@ def folders(request):
         "labels": [label_json(lb) for lb in Label.objects.all()],
         "starred": starred,
     }
+
+
+@api(("POST",))
+def check_now(request):
+    """Ask the sync worker to look for new mail right away (Inbox, or ?folder=)."""
+    from .. import outbox
+
+    fid = int_or_none(body(request).get("folder"))
+    folder = Folder.objects.filter(pk=fid).first() if fid else Folder.objects.filter(role=FolderRole.INBOX).first()
+    if folder is None:
+        return {"ok": True, "queued": False}
+    if not OutboxOp.objects.filter(kind="check", status=OpStatus.PENDING, payload__folder=folder.pk).exists():
+        outbox.enqueue("check", folder=folder.pk)
+    return {"ok": True, "queued": True}
 
 
 @api(("POST",))
@@ -367,6 +381,41 @@ def label_detail(request, pk: int):
 
 # --- thread list --------------------------------------------------------------
 
+ROLE_VIEWS = {r.value for r in FolderRole if r.value and r.value != FolderRole.ALL}
+
+
+def resolve_view(view: str) -> str:
+    """'inbox', 'sent', … (folder roles) -> 'folder:<id>', so a client can ask
+    for its Inbox without first loading the folder list."""
+    if view in ROLE_VIEWS:
+        f = Folder.objects.filter(role=view).only("id").first()
+        if f is None:
+            raise ApiError("No such folder.", status=404)
+        return f"folder:{f.id}"
+    return view
+
+
+def _folder_page(fid: int | None, unread_only: bool, cursor: str | None, limit: int) -> list[Thread]:
+    """A folder's conversations, newest first, read from the ThreadFolder index."""
+    rows = ThreadFolder.objects.filter(folder_id=fid)
+    if unread_only:
+        rows = rows.filter(unread=True)
+    if cursor:
+        dt, tid = _parse_cursor(cursor)
+        rows = rows.filter(Q(last_date__lt=dt) | Q(last_date=dt, thread_id__lt=tid))
+    ids = list(rows.order_by("-last_date", "-thread_id").values_list("thread_id", flat=True)[:limit])
+    by_id = Thread.objects.in_bulk(ids)
+    return [by_id[i] for i in ids if i in by_id]
+
+
+def _parse_cursor(cursor: str):
+    try:
+        ts, tid = cursor.rsplit("|", 1)
+        return datetime.fromisoformat(ts), int(tid)
+    except ValueError:
+        raise ApiError("Bad cursor.") from None
+
+
 def _thread_queryset(view: str, q: str):
     qs = Thread.objects.all()
     if q:
@@ -387,28 +436,25 @@ def _thread_queryset(view: str, q: str):
 
 @api()
 def threads(request):
-    view = request.GET.get("view", "")
+    view = resolve_view(request.GET.get("view", ""))
     q = request.GET.get("q", "").strip()[:500]
-    qs = _thread_queryset(view, q)
-    if request.GET.get("unread") == "1":
-        unread = Message.objects.filter(thread=OuterRef("pk"), seen=False)
-        if view.startswith("folder:"):
-            unread = unread.filter(folder_id=int_or_none(view.split(":", 1)[1]))
-        qs = qs.filter(Exists(unread))
-    qs = qs.order_by("-last_date", "-id")
+    unread_only = request.GET.get("unread") == "1"
     cursor = request.GET.get("cursor")
-    if cursor:
-        try:
-            ts, tid = cursor.rsplit("|", 1)
-            dt = datetime.fromisoformat(ts)
-            qs = qs.filter(Q(last_date__lt=dt) | Q(last_date=dt, id__lt=int(tid)))
-        except ValueError:
-            raise ApiError("Bad cursor.") from None
-    page = list(qs[: PAGE + 1])
+    if view.startswith("folder:") and not q:
+        page = _folder_page(int_or_none(view.split(":", 1)[1]), unread_only, cursor, PAGE + 1)
+    else:
+        qs = _thread_queryset(view, q)
+        if unread_only:
+            qs = qs.filter(Exists(Message.objects.filter(thread=OuterRef("pk"), seen=False)))
+        qs = qs.order_by("-last_date", "-id")
+        if cursor:
+            dt, tid = _parse_cursor(cursor)
+            qs = qs.filter(Q(last_date__lt=dt) | Q(last_date=dt, id__lt=tid))
+        page = list(qs[: PAGE + 1])
     more = len(page) > PAGE
     page = page[:PAGE]
     folders_by_thread: dict[int, list[int]] = {}
-    for tid, fid in Message.objects.filter(thread_id__in=[t.id for t in page]).values_list("thread_id", "folder_id").distinct():
+    for tid, fid in ThreadFolder.objects.filter(thread_id__in=[t.id for t in page]).values_list("thread_id", "folder_id"):
         folders_by_thread.setdefault(tid, []).append(fid)
     next_cursor = f"{page[-1].last_date.isoformat()}|{page[-1].id}" if more and page[-1].last_date else None
     ids = [t.id for t in page]
@@ -465,21 +511,50 @@ THREAD_ACTIONS = {"read", "unread", "star", "unstar", "archive", "trash", "move"
                   "mute", "unmute"}
 
 
+MAX_BULK = 20000
+
+
+def _view_thread_ids(view: str, q: str, unread_only: bool) -> list[int]:
+    view = resolve_view(view) if view else view
+    if view.startswith("folder:") and not q:
+        rows = ThreadFolder.objects.filter(folder_id=int_or_none(view.split(":", 1)[1]))
+        if unread_only:
+            rows = rows.filter(unread=True)
+        return list(rows.order_by("-last_date").values_list("thread_id", flat=True)[:MAX_BULK])
+    qs = _thread_queryset(view, q)
+    if unread_only:
+        qs = qs.filter(Exists(Message.objects.filter(thread=OuterRef("pk"), seen=False)))
+    return list(qs.order_by("-last_date").values_list("id", flat=True)[:MAX_BULK])
+
+
 @api(("POST",))
 def thread_actions(request):
     data = body(request)
     action = data.get("action")
     if action not in THREAD_ACTIONS:
         raise ApiError("Unknown action.")
-    ids = [int(i) for i in data.get("ids", [])][:500]
+    scope = data.get("all")
+    if isinstance(scope, dict):
+        # "Select all N conversations in this view" (not just the loaded page).
+        if action in ("delete_forever", "snooze", "move", "spam"):
+            raise ApiError("Select conversations one page at a time for this action.")
+        ids = _view_thread_ids(str(scope.get("view", "")), str(scope.get("q", ""))[:500], bool(scope.get("unread")))
+    else:
+        ids = [int(i) for i in data.get("ids", [])][:500]
     context = Folder.objects.filter(pk=int_or_none(data.get("context"))).first() if data.get("context") else None
-    result: dict = {"ok": True}
+    result: dict = {"ok": True, "count": len(ids)}
+    if action in ("read", "unread"):
+        # One flag change for all of them, not one per conversation.
+        want_seen = action == "read"
+        for i in range(0, len(ids), 500):
+            target = list(Message.objects.filter(thread_id__in=ids[i:i + 500], seen=not want_seen))
+            for j in range(0, len(target), 1000):
+                chunk = target[j:j + 1000]
+                actions.set_flags(chunk, **({"add": ["\\Seen"]} if want_seen else {"remove": ["\\Seen"]}))
+        return result
     for t in Thread.objects.filter(pk__in=ids):
         msgs = list(Message.objects.filter(thread=t).select_related("folder"))
-        if action in ("read", "unread"):
-            target = [m for m in msgs if m.seen != (action == "read")]
-            actions.set_flags(target, **({"add": ["\\Seen"]} if action == "read" else {"remove": ["\\Seen"]}))
-        elif action == "star":
+        if action == "star":
             live = [m for m in msgs if m.folder.role not in (FolderRole.TRASH, FolderRole.JUNK)] or msgs
             latest = max(live, key=lambda m: (m.sort_date, m.id))
             if not latest.flagged:
@@ -561,6 +636,21 @@ def _message(pk: int) -> Message:
     return Message.objects.select_related("folder").get(pk=pk)
 
 
+_INVISIBLE = re.compile(r"(?is)<(style|head|title|script)\b[^>]*>.*?</\1\s*>|<!--.*?-->")
+_TAGS = re.compile(r"(?s)<[^>]*>")
+_VISUAL = re.compile(r"(?i)<(img|video|svg|picture|hr)\b|background(-image)?\s*[:=]\s*['\"]?\s*url")
+
+
+def _shows_anything(html: str) -> bool:
+    """Whether sanitized HTML has visible text or pictures."""
+    if _VISUAL.search(html):
+        return True
+    import html as html_lib
+
+    text = html_lib.unescape(_TAGS.sub(" ", _INVISIBLE.sub(" ", html)))
+    return bool(text.replace("\xa0", " ").replace("\u200b", "").replace("\u200c", "").strip())
+
+
 @api()
 def message_body(request, pk: int):
     m = _message(pk)
@@ -575,12 +665,14 @@ def message_body(request, pk: int):
     if pm.html:
         res = sanitize.sanitize_html(pm.html, message_pk=m.pk, load_images=load, cid_map=cid_map)
         html, remote = res.html, res.remote_images
+        if not remote and not _shows_anything(html):
+            html = None  # an empty HTML part (e.g. only attachments): don't draw a blank page
     else:
         html, remote = None, 0
     return {
         "html": html,
-        "text": pm.text if not pm.html else None,
-        "textHtml": sanitize.linkify_text(pm.text) if not pm.html else None,
+        "text": (pm.text or "") if html is None else None,
+        "textHtml": sanitize.linkify_text(pm.text or "") if html is None else None,
         "remoteImages": remote,
         "imagesLoaded": load and remote > 0,
         "trustedSender": trusted,
@@ -1273,16 +1365,36 @@ def draft_for_message(request, pk: int):
 
 # --- live updates ------------------------------------------------------------
 # Kern runs on threaded WSGI, so instead of a held-open event stream the app
-# polls this cheap endpoint every few seconds.
+# asks this cheap endpoint for news. With ?wait=<seconds> (at most LONG_POLL)
+# the request is held until something happens, so new mail shows up within a
+# fraction of a second of reaching the server without frequent polling.
+
+LONG_POLL = 290.0  # Kern Mail on Android holds up to ~4.5 min; the web app asks for 20 s
+LONG_POLL_TICK = 0.25  # first 20 s: answer within a quarter second
+LONG_POLL_SLOW_TICK = 1.0  # after that (a phone's long hold): within a second
+
 
 @api()
 def changes(request):
+    import time
+
     from ..models import ChangeEvent
 
     last = ChangeEvent.objects.order_by("-id").values_list("id", flat=True).first() or 0
     since = int_or_none(request.GET.get("since"))
     if since is None:
         return {"last": last, "events": []}
+    wait = min(max(float(int_or_none(request.GET.get("wait")) or 0), 0.0), LONG_POLL)
+    if wait and since == last:
+        start = time.monotonic()
+        deadline = start + wait
+        while time.monotonic() < deadline:
+            time.sleep(LONG_POLL_TICK if time.monotonic() - start < 20 else LONG_POLL_SLOW_TICK)
+            last = ChangeEvent.objects.order_by("-id").values_list("id", flat=True).first() or 0
+            if last != since:
+                break
+        if last == since:
+            return {"last": last, "events": []}
     if since > last:  # the local copy was reset (restore, new mailbox): reload everything
         return {"last": last, "events": [], "reset": True}
     rows = list(ChangeEvent.objects.filter(id__gt=since).order_by("id").values_list("id", "kind", "data")[:200])

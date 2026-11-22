@@ -130,6 +130,15 @@ class Worker:
                     server.close()
                 close_old_connections()
 
+    def sync_pushed(self, engine: SyncEngine) -> None:
+        """IDLE saw a change in INBOX: fetch it now (new mail first)."""
+        if not self.wake.is_set():
+            return
+        self.wake.clear()
+        inbox = Folder.objects.filter(role=FolderRole.INBOX).first()
+        if inbox:
+            engine.sync_folder(inbox)
+
     def loop(self, server: MailServer):
         engine = SyncEngine(server)
         executor = outbox.Executor(server, self.sender)
@@ -148,6 +157,9 @@ class Worker:
                     if folder:
                         engine.sync_folder(folder)
                 executor.touched_folders.clear()
+                if executor.checked:
+                    executor.checked = False
+                    events.emit("checked")
             # 2. Snoozed conversations whose time has come.
             from . import snooze
 
@@ -157,15 +169,11 @@ class Worker:
 
             followups.check_due()
             # 3. Push from IDLE: sync INBOX quickly.
-            if self.wake.is_set():
-                self.wake.clear()
-                inbox = Folder.objects.filter(role=FolderRole.INBOX).first()
-                if inbox:
-                    engine.sync_folder(inbox)
+            self.sync_pushed(engine)
             # 4. Periodic full sweep (other folders, flags changed elsewhere).
             if time.monotonic() - last_full > _mail_cfg()["POLL_SECONDS"]:
                 set_status("syncing", "Checking folders")
-                engine.sync_all()
+                engine.sync_all(between=lambda: self.sync_pushed(engine))
                 last_full = time.monotonic()
             if time.monotonic() - last_prune > 3600:
                 events.prune()

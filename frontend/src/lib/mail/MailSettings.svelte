@@ -8,7 +8,7 @@
   import { ui } from '#lib/state/ui.svelte.ts';
   import { api } from './api.svelte.js';
   import { loadMailStatus, mailStatus } from './status.svelte.js';
-  import { account as prefsSrv, loadAccountPrefs, prefs, saveAccountPrefs, savePrefs } from './state.svelte.js';
+  import { account as prefsSrv, dropMailCache, loadAccountPrefs, prefs, saveAccountPrefs, savePrefs } from './state.svelte.js';
   import { loadTemplates, templates } from './templates.svelte.js';
 
   const PROVIDERS = [
@@ -88,6 +88,7 @@
   });
   const save = () => run('save', async () => {
     mailStatus.data = { ...(await api.put('/account', { ...body(), enabled: true })), two_factor: twofa };
+    dropMailCache();
     password = '';
     ui.toast('Mail account connected. The first download can take a while for a big mailbox.');
     loadAll();
@@ -107,6 +108,7 @@
     });
     run('off', async () => {
       await api.del('/account' + (wipe ? '?forget=1' : ''));
+      dropMailCache();
       filled = false;
       await loadMailStatus();
       ui.toast(wipe ? 'Disconnected and removed the local copy.' : 'Disconnected.');
@@ -274,7 +276,9 @@
     <div class="group">
       <div class="item"><div><b>Mark as read</b></div>{@render seg(prefsSrv.mark_read, [['open', 'When opened'], ['delay', 'After 2 s'], ['manual', 'Manually']], (v) => setPref({ mark_read: v }))}</div>
       <div class="item"><div><b>After archiving or deleting</b></div>{@render seg(prefsSrv.after_action, [['next', 'Open next'], ['list', 'Back to list']], (v) => setPref({ after_action: v }))}</div>
-      <div class="item"><div><b>Reading pane</b><span>This browser. Conversation next to the list when there's room.</span></div><input type="checkbox" checked={prefs.readingPane} onchange={() => setLocal('readingPane', !prefs.readingPane)} /></div>
+      <div class="item"><div><b>Layout</b><span>This browser. Split shows the conversation next to the list; full width lets the inbox fill the window and opens a conversation over it, like Gmail.</span></div>
+        {@render seg(prefs.readingPane ? 'split' : 'full', [['split', 'Split'], ['full', 'Full width']], (v) => setLocal('readingPane', v === 'split'))}</div>
+      <div class="item"><div><b>Dark emails</b><span>This browser. In the dark theme, show emails as light text on a dark background. Any email can be switched back to its original colors from the message.</span></div><input type="checkbox" checked={prefs.darkEmails} onchange={() => setLocal('darkEmails', !prefs.darkEmails)} /></div>
       <div class="item"><div><b>Desktop notifications</b><span>This browser. A generic “New mail” alert while Kern is in the background; never the sender or subject.</span></div><input type="checkbox" checked={prefs.notifications} onchange={toggleNotifications} /></div>
     </div>
   {/if}

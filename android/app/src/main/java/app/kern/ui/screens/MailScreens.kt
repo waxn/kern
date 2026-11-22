@@ -10,6 +10,12 @@ import androidx.compose.foundation.background
 import androidx.compose.foundation.clickable
 import androidx.compose.foundation.horizontalScroll
 import androidx.compose.foundation.layout.Arrangement
+import androidx.compose.material.icons.outlined.Settings
+import kotlinx.serialization.decodeFromString
+import kotlinx.coroutines.async
+import androidx.compose.material.icons.outlined.AutoAwesome
+import androidx.compose.ui.draw.clip
+import app.kern.app
 import androidx.compose.foundation.layout.Box
 import androidx.compose.foundation.layout.Column
 import androidx.compose.foundation.layout.Row
@@ -147,9 +153,10 @@ private fun shortWhen(iso: String?): String {
 
 @OptIn(ExperimentalMaterial3Api::class)
 @Composable
-fun MailScreen(ws: Workspace, nav: Nav, initialView: String? = null) {
+fun MailScreen(ws: Workspace, nav: Nav, initialView: String? = null, standalone: Boolean = false) {
     val scope = rememberCoroutineScope()
     val snack = LocalSnack.current
+    val ctx = LocalContext.current
     var status by remember { mutableStateOf<MailStatus?>(null) }
     var folders by remember { mutableStateOf<List<MailFolder>>(emptyList()) }
     var view by remember { mutableStateOf(initialView ?: "inbox") }
@@ -162,19 +169,38 @@ fun MailScreen(ws: Workspace, nav: Nav, initialView: String? = null) {
     var error by remember { mutableStateOf<String?>(null) }
     val me = status?.account?.str("address") ?: ""
 
+    // Instant start: the Inbox as this phone last saw it, until the server answers.
+    LaunchedEffect(Unit) {
+        if (standalone) app.kern.notify.Notifications.clearMail(ctx) // you're looking at it now
+        if (view == "inbox" && threads.isEmpty()) {
+            ctx.app.settings.mailInboxCache?.let { c ->
+                runCatching { app.kern.data.KernJson.decodeFromString<List<MailThread>>(c) }.getOrNull()?.let {
+                    threads.addAll(it); loading = false
+                }
+            }
+        }
+    }
+
     fun apiView(v: String): String {
-        if (v == "starred" || v == "all") return v
-        val f = folders.firstOrNull { it.role == v } ?: folders.firstOrNull { "f${it.id}" == v }
+        if (v == "starred" || v == "all" || v in ROLE_VIEWS) return v // the server knows folders by role
+        val f = folders.firstOrNull { "f${it.id}" == v }
         return if (f != null) "folder:${f.id}" else "all"
     }
     suspend fun load(more: Boolean = false) {
         try {
-            if (folders.isEmpty()) folders = ws.kern.mailFolders().folders
-            val r = ws.kern.mailThreads(apiView(view), q = query.takeIf { searching && it.isNotBlank() }, cursor = if (more) next else null)
+            val r = kotlinx.coroutines.coroutineScope {
+                val f = if (folders.isEmpty()) async { runCatching { ws.kern.mailFolders().folders }.getOrNull() } else null
+                val t = async { ws.kern.mailThreads(apiView(view), q = query.takeIf { searching && it.isNotBlank() }, cursor = if (more) next else null) }
+                f?.await()?.let { folders = it }
+                t.await()
+            }
             if (!more) threads.clear()
             threads.addAll(r.threads)
             next = r.next
             error = null
+            if (!more && view == "inbox" && !searching) runCatching {
+                ctx.app.settings.mailInboxCache = app.kern.data.KernJson.encodeToString(kotlinx.serialization.builtins.ListSerializer(MailThread.serializer()), r.threads)
+            }
         } catch (e: ApiError) {
             if (e.status == 403) status = runCatching { ws.kern.mailStatus() }.getOrNull() ?: status
             else error = e.message
@@ -211,8 +237,9 @@ fun MailScreen(ws: Workspace, nav: Nav, initialView: String? = null) {
                     IconButton(onClick = { searching = false; query = ""; scope.launch { load() } }) { Icon(Icons.Outlined.Close, "Close search") }
                 }
             } else {
-                KTopBar(title, onBack = { nav.back() }, subtitle = me.ifBlank { null }) {
+                KTopBar(title, onBack = if (standalone) null else ({ nav.back() }), subtitle = me.ifBlank { null }) {
                     IconButton(onClick = { searching = true }) { Icon(Icons.Outlined.Search, "Search", tint = kern.text2) }
+                    if (standalone) IconButton(onClick = { nav.go("mail-settings") }) { Icon(Icons.Outlined.Settings, "Settings", tint = kern.text2) }
                 }
             }
             val s = status
@@ -238,7 +265,15 @@ fun MailScreen(ws: Workspace, nav: Nav, initialView: String? = null) {
                     }
                     PullToRefreshBox(
                         isRefreshing = refreshing,
-                        onRefresh = { scope.launch { refreshing = true; folders = emptyList(); load(); refreshing = false } },
+                        onRefresh = {
+                            scope.launch {
+                                refreshing = true
+                                runCatching { ws.kern.mailCheckNow() } // ask the server to look for new mail now
+                                folders = emptyList(); load()
+                                kotlinx.coroutines.delay(900); load() // the check usually lands within a second
+                                refreshing = false
+                            }
+                        },
                         modifier = Modifier.fillMaxSize(),
                     ) {
                         when {
@@ -246,7 +281,31 @@ fun MailScreen(ws: Workspace, nav: Nav, initialView: String? = null) {
                             error != null && threads.isEmpty() -> ErrorState(error!!) { scope.launch { loading = true; load() } }
                             threads.isEmpty() -> EmptyState(Icons.Outlined.Email, if (searching) "No matches" else "Nothing here", null)
                             else -> LazyColumn(Modifier.fillMaxSize()) {
-                                items(threads, key = { it.id }) { t -> ThreadRow(t, me) { nav.go("mail/thread/${t.id}") } }
+                                items(threads, key = { it.id }) { t ->
+                                    SwipeRow(
+                                        t,
+                                        canArchive = view != "archive" && view != "trash" && view != "junk",
+                                        onArchive = {
+                                            val inbox = folders.firstOrNull { it.role == view }?.id
+                                            threads.remove(t)
+                                            scope.launch {
+                                                try {
+                                                    ws.kern.mailAction(listOf(t.id), "archive", *(if (inbox != null) arrayOf("context" to inbox) else emptyArray()))
+                                                    val r = snack.host.showSnackbar("Archived", actionLabel = "Undo", duration = androidx.compose.material3.SnackbarDuration.Short)
+                                                    if (r == androidx.compose.material3.SnackbarResult.ActionPerformed) {
+                                                        ws.kern.mailAction(listOf(t.id), "inbox"); load()
+                                                    }
+                                                } catch (e: Exception) { snack.error(e); load() }
+                                            }
+                                        },
+                                        onToggleRead = {
+                                            val i = threads.indexOf(t)
+                                            val read = t.unread > 0
+                                            if (i >= 0) threads[i] = t.copy(unread = if (read) 0 else 1)
+                                            scope.launch { runCatching { ws.kern.mailAction(listOf(t.id), if (read) "read" else "unread") }.onFailure { snack.error(it) } }
+                                        },
+                                    ) { ThreadRow(t, me) { nav.go("mail/thread/${t.id}") } }
+                                }
                                 if (next != null) item {
                                     LaunchedEffect(next) { load(more = true) }
                                     Loading(Modifier.height(64.dp))
@@ -266,6 +325,40 @@ fun MailScreen(ws: Workspace, nav: Nav, initialView: String? = null) {
             ) { Icon(Icons.Outlined.Edit, "Write") }
         }
     }
+}
+
+private val ROLE_VIEWS = setOf("inbox", "snoozed", "drafts", "sent", "archive", "junk", "trash")
+
+/** Swipe right to archive, left to mark read/unread (like Gmail). */
+@Composable
+private fun SwipeRow(t: MailThread, canArchive: Boolean, onArchive: () -> Unit, onToggleRead: () -> Unit, content: @Composable () -> Unit) {
+    val state = androidx.compose.material3.rememberSwipeToDismissBoxState(
+        confirmValueChange = { v ->
+            when (v) {
+                androidx.compose.material3.SwipeToDismissBoxValue.StartToEnd -> { if (canArchive) onArchive(); canArchive }
+                androidx.compose.material3.SwipeToDismissBoxValue.EndToStart -> { onToggleRead(); false }
+                else -> false
+            }
+        },
+        positionalThreshold = { it * 0.35f },
+    )
+    androidx.compose.material3.SwipeToDismissBox(
+        state,
+        enableDismissFromStartToEnd = canArchive,
+        backgroundContent = {
+            val dir = state.dismissDirection
+            val archive = dir == androidx.compose.material3.SwipeToDismissBoxValue.StartToEnd
+            val color = if (archive) kern.green else kern.accent
+            Row(Modifier.fillMaxSize().background(kern.tint(color)).padding(horizontal = 24.dp),
+                horizontalArrangement = if (archive) Arrangement.Start else Arrangement.End, verticalAlignment = Alignment.CenterVertically) {
+                if (dir != androidx.compose.material3.SwipeToDismissBoxValue.Settled) {
+                    Icon(if (archive) Icons.Outlined.Archive else Icons.Outlined.MarkEmailUnread, null, tint = color)
+                    Spacer(Modifier.width(8.dp))
+                    Text(if (archive) "Archive" else if (t.unread > 0) "Mark read" else "Mark unread", color = color, style = MaterialTheme.typography.labelLarge)
+                }
+            }
+        },
+    ) { Box(Modifier.background(kern.bg)) { content() } }
 }
 
 @Composable
@@ -313,7 +406,18 @@ fun MailThreadScreen(ws: Workspace, nav: Nav, id: Long) {
             error = e.message
         }
     }
-    LaunchedEffect(id) { load() }
+    val ctx = LocalContext.current
+    LaunchedEffect(id) {
+        app.kern.notify.Notifications.cancelMailThread(ctx, id)
+        load()
+    }
+    var asking by remember { mutableStateOf(false) }
+    fun ask() = scope.launch {
+        if (asking) return@launch
+        asking = true
+        try { nav.go("chat/${ws.kern.createChat().id}?mail=$id") } catch (e: Exception) { snack.error(e) }
+        asking = false
+    }
 
     fun act(action: String, done: String, vararg extra: Pair<String, Any?>) = scope.launch {
         try {
@@ -327,6 +431,7 @@ fun MailThreadScreen(ws: Workspace, nav: Nav, id: Long) {
         val t = detail?.thread
         KTopBar("", onBack = { nav.back() }) {
             if (t != null) {
+                IconButton(onClick = { ask() }, enabled = !asking) { Icon(Icons.Outlined.AutoAwesome, "Ask Intelligence about this email", tint = kern.accent) }
                 IconButton(onClick = { act("archive", "Archived") }) { Icon(Icons.Outlined.Archive, "Archive", tint = kern.text2) }
                 IconButton(onClick = { act("trash", "Moved to Trash") }) { Icon(Icons.Outlined.Delete, "Trash", tint = kern.text2) }
                 IconButton(onClick = { act(if (t.starred) "unstar" else "star", if (t.starred) "Unstarred" else "Starred") }) {
@@ -436,7 +541,11 @@ private fun MessageItem(ws: Workspace, m: MailMessage, expanded: Boolean, onTogg
                 failed -> Text("Couldn't load this message.", color = kern.danger, modifier = Modifier.padding(12.dp))
                 b == null -> Loading(Modifier.height(80.dp))
                 else -> {
-                    EmailView(b)
+                    val hasFiles = m.attachments.any { !it.inline }
+                    val blank = b.html == null && (b.text ?: "").isBlank()
+                    if (blank && !hasFiles) Text("No message text.", style = MaterialTheme.typography.bodySmall, color = kern.text3,
+                        modifier = Modifier.padding(start = 12.dp, end = 12.dp, bottom = 12.dp))
+                    else if (!blank) EmailView(b)
                     if (b.remoteImages > 0) Text("Images from the web stay hidden in the app. Open the message in Kern's web app to load them.",
                         style = MaterialTheme.typography.bodySmall, color = kern.text3, modifier = Modifier.padding(start = 12.dp, end = 12.dp, bottom = 10.dp))
                     m.attachments.filter { !it.inline }.takeIf { it.isNotEmpty() }?.let { atts ->
@@ -461,15 +570,25 @@ private fun EmailView(b: MailBody) {
     val ctx = LocalContext.current
     val k = kern
     val inner = b.html ?: b.textHtml ?: android.text.Html.escapeHtml(b.text ?: "")
-    // HTML mail is shown on white, the way senders design it; plain text follows the app theme.
+    // HTML mail is drawn the way senders design it (on white); in the dark theme it is inverted
+    // to light-on-dark (pictures inverted back) unless it's dark already or you ask for the original.
     val isHtml = b.html != null
+    var original by remember(b) { mutableStateOf(false) }
+    val darkWanted = k.dark && isHtml && ctx.app.settings.mailDarkEmails && !looksDark(b.html ?: "")
+    val dark = darkWanted && !original
     fun hex(c: androidx.compose.ui.graphics.Color) = String.format("#%06X", 0xFFFFFF and c.toArgb())
-    val bg = if (isHtml) "#ffffff" else hex(k.surface)
+    val bg = when { dark -> "#ebebe9"; isHtml -> "#ffffff"; else -> hex(k.surface) }
     val fg = if (isHtml) "#1f1f1f" else hex(k.text)
+    // The body is inverted, not <html>: WebView paints the root's background outside the filter.
+    val darkCss = if (dark) "html{background:#141416!important}body{filter:invert(1) hue-rotate(180deg);min-height:100%}img,video,picture,[background],[style*=\"background-image\"]{filter:invert(1) hue-rotate(180deg)}" else ""
+    if (darkWanted || original) Row(Modifier.fillMaxWidth().padding(horizontal = 12.dp), horizontalArrangement = Arrangement.End) {
+        Text(if (original) "Dark colors" else "Original colors", style = MaterialTheme.typography.labelMedium, color = k.text3,
+            modifier = Modifier.clip(androidx.compose.foundation.shape.RoundedCornerShape(8.dp)).clickable { original = !original }.padding(horizontal = 8.dp, vertical = 4.dp))
+    }
     val page = """<!doctype html><html><head><meta charset="utf-8">
         <meta http-equiv="Content-Security-Policy" content="default-src 'none'; style-src 'unsafe-inline'; img-src data:">
         <meta name="viewport" content="width=device-width, initial-scale=1">
-        <style>html,body{margin:0;padding:6px 10px 10px;background:$bg;color:$fg;font:15px/1.5 sans-serif;overflow-wrap:anywhere}
+        <style>$darkCss html,body{margin:0;padding:6px 10px 10px;background:$bg;color:$fg;font:15px/1.5 sans-serif;overflow-wrap:anywhere}
         img{max-width:100%;height:auto}pre{white-space:pre-wrap}blockquote{margin:0 0 0 .6em;padding-left:.8em;border-left:2px solid #bbb;color:#666}</style>
         </head><body>$inner</body></html>"""
     key(page) {
@@ -568,4 +687,21 @@ fun MailComposeScreen(ws: Workspace, nav: Nav, message: Long? = null, mode: Stri
             Spacer(Modifier.height(24.dp))
         }
     }
+}
+
+/** An email that already has a dark background (same idea as the web's emailFrame.looksDark). */
+internal fun looksDark(html: String): Boolean {
+    val m = Regex("""(?is)(?:<body[^>]*\bbgcolor\s*=\s*["']?|body\s*\{[^}]*background(?:-color)?\s*:\s*|^\s*<(?:table|div|center)[^>]*(?:bgcolor\s*=\s*["']?|background(?:-color)?\s*:\s*))(#[0-9a-f]{3,6}|rgb\([^)]*\)|black|white)""")
+        .find(html.take(4000)) ?: return false
+    val c = m.groupValues[1].lowercase()
+    val rgb = when {
+        c == "black" -> listOf(0, 0, 0)
+        c == "white" -> listOf(255, 255, 255)
+        c.startsWith("#") -> {
+            val h = if (c.length == 4) c.drop(1).map { "$it$it" }.joinToString("") else c.drop(1).padEnd(6, '0')
+            listOf(0, 2, 4).map { h.substring(it, it + 2).toInt(16) }
+        }
+        else -> Regex("\\d+").findAll(c).take(3).map { it.value.toInt() }.toList().takeIf { it.size == 3 } ?: return false
+    }
+    return (0.2126 * rgb[0] + 0.7152 * rgb[1] + 0.0722 * rgb[2]) / 255 < 0.4
 }

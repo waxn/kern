@@ -437,8 +437,15 @@ def chat_message(request, chat_id):
     text = str(request.data.get("text") or "").strip()
     if not text:
         return bad("Write a message first.")
+    mail_thread = request.data.get("mail_thread")
+    if mail_thread is not None:
+        # Reading mail needs the same two-factor session as /api/mail (mail/api/guard.py).
+        from accounts import site, totp
+
+        if not site.get_all().get("allow_mail", True) or not totp.enabled(request.user) or not totp.session_verified(request):
+            return bad("Mail needs two-factor sign-in on this device.")
     try:
-        agent.chat_turn(c, text[:20000], request.data.get("page"))
+        agent.chat_turn(c, text[:20000], request.data.get("page"), mail_thread=mail_thread)
     except ai_mod.AIError as e:
         return _ai_error(e)
     return Response(chat_json(c, True))
