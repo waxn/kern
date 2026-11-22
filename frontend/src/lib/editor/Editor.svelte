@@ -18,14 +18,21 @@
 		mathHtml, notifyInput, onFirstLine, onLastLine, rangeForOffsets, readHtml, refHtml, renderMath,
 		selectionOffsets, setCaret, setCaretNearX, splitAtCaret, toggleWrap
 	} from './dom';
+	import DocPeek from './DocPeek.svelte';
 	import FormatToolbar from './FormatToolbar.svelte';
 	import AiInline from '#lib/ai/AiInline.svelte';
+	import { decodeClip, embedTree, encodeClip, KERN_MIME, pasteMode, stripTasks, type Clip } from './clip';
 	import { htmlToTrees, textToTrees, treesToText } from './paste';
 	import SuggestMenu, { type MenuEntry } from './SuggestMenu.svelte';
 
-	let { doc, onexit, rootId = null }: { doc: EditorDoc; onexit?: () => void; rootId?: string | null } = $props();
+	let { doc, onexit, rootId = null, rootIds = null }: {
+		doc: EditorDoc; onexit?: () => void;
+		/** Show only this block (a block embed) … */
+		rootId?: string | null;
+		/** … or only these blocks (blocks pasted from another page as a live embed). */
+		rootIds?: string[] | null;
+	} = $props();
 
-	const KERN_MIME = 'application/x-kern-blocks';
 	let root = $state<HTMLElement>();
 	let toolbar = $state<FormatToolbar>();
 	const fresh = $state<{ id: string | null }>({ id: null });
@@ -35,6 +42,8 @@
 	let math = $state<{ x: number; y: number; tex: string; span: HTMLElement | null; id: string; range: Range | null } | null>(null);
 	let mathInput = $state<HTMLInputElement>();
 	let indicator = $state<{ top: number; left: number; width: number } | null>(null);
+	/** A linked page shown in a small read-only popup (click on text linked with "Link to page"). */
+	let peek = $state<{ id: string; rect: DOMRect } | null>(null);
 
 	let dragIds: string[] = [];
 	let dropTarget: { id: string; where: 'before' | 'after' | 'inside' } | null = null;
@@ -408,6 +417,7 @@
 			if (lk === 's' && e.shiftKey) return pd(), void document.execCommand('strikeThrough');
 			if (lk === 'e') return pd(), toggleWrap(el, 'code');
 			if (lk === 'h' && e.shiftKey) return pd(), applyWrap(el, 'mark', 'data-bg', 'yellow');
+			if (lk === 'k' && e.shiftKey && !collapsed()) return pd(), e.stopPropagation(), toolbar?.linkToPage();
 			if (lk === 'k' && !collapsed()) return pd(), e.stopPropagation(), toolbar?.link();
 			if (lk === 'c' && e.shiftKey && !collapsed()) return pd(), insertText(`{{${getSelection()!.toString()}}}`);
 			return;
@@ -629,6 +639,13 @@
 		if (a && a.closest('.rt')) {
 			e.preventDefault();
 			const href = a.getAttribute('href') ?? '';
+			if (a.dataset.doc) {
+				// Ctrl/⌘-click opens the page itself; a plain click peeks at it.
+				if (e.ctrlKey || e.metaKey) open(`/doc/${a.dataset.doc}`, e);
+				else if (!a.classList.contains('broken') || ws.docs[a.dataset.doc]) peek = { id: a.dataset.doc, rect: a.getBoundingClientRect() };
+				else ui.toast('The linked page was deleted.');
+				return;
+			}
 			if (a.dataset.ref) {
 				if (!a.classList.contains('broken') && href) open(href, e);
 			} else if (href) window.open(a.href, '_blank', 'noopener');
@@ -650,18 +667,41 @@
 	// --------------------------------------------------------- clipboard
 
 	function onCopy(e: ClipboardEvent, cut = false) {
-		if (!mine(e) || !doc.selected.length || !e.clipboardData) return;
+		if (!mine(e) || !e.clipboardData) return;
+		const ids = doc.selected.length ? doc.topLevel(doc.selected) : wholeBlockSelection();
+		if (!ids.length) return;
 		e.preventDefault();
-		const trees = doc.exportTrees(doc.selected);
-		e.clipboardData.setData(KERN_MIME, JSON.stringify(trees));
+		const trees = doc.exportTrees(ids);
+		// Where the blocks came from goes along, so pasting on another page can embed the originals.
+		// A cut moves the blocks instead: pasting it anywhere makes a copy.
+		e.clipboardData.setData(KERN_MIME, cut ? encodeClip(doc.id, [], trees) : encodeClip(doc.id, ids, trees));
 		e.clipboardData.setData('text/plain', treesToText(trees));
+		if (!doc.selected.length) {
+			// All of one block's text: other apps (and a paste into this same page) still get the formatted text.
+			e.clipboardData.setData('text/html', doc.blocks[ids[0]].html);
+			e.clipboardData.setData('text/plain', getSelection()!.toString());
+			if (cut) document.execCommand('delete');
+			return;
+		}
 		if (cut) doc.remove(doc.selected);
 	}
 
-	function insertTreesNear(trees: BlockTree[], el: HTMLElement | null) {
-		if (!trees.length) return;
+	/** Text selected from the very start to the very end of one block counts as copying the block. */
+	function wholeBlockSelection(): string[] {
+		const sel = getSelection();
+		if (!sel || sel.isCollapsed || !sel.rangeCount) return [];
+		const el = editableFrom(sel.anchorNode instanceof Element ? sel.anchorNode : sel.anchorNode?.parentElement ?? null);
+		if (!el || el.dataset.plain !== undefined || !el.contains(sel.focusNode) || el.closest('[data-editor]') !== root) return [];
+		const s = selectionOffsets(el);
+		const len = el.textContent?.length ?? 0;
+		const id = blockIdOf(el);
+		return id && doc.blocks[id] && len > 0 && s && s.start === 0 && s.end >= len ? [id] : [];
+	}
+
+	function insertTreesNear(trees: BlockTree[], el: HTMLElement | null): string[] {
+		if (!trees.length) return [];
 		const anchor = el ? blockIdOf(el) : doc.selected[doc.selected.length - 1];
-		doc.run(() => {
+		return doc.run(() => {
 			let ids: string[];
 			if (!anchor || !doc.blocks[anchor]) ids = doc.insertTrees(trees, null, doc.children(null).length);
 			else {
@@ -673,6 +713,28 @@
 			const lastId = ids[ids.length - 1];
 			if (editableOf(lastId, root) || TEXT_TYPES.has(doc.blocks[lastId].type)) doc.focus(lastId, 'end');
 			else doc.select(ids);
+			return ids;
+		});
+	}
+
+	/** Blocks copied on another page arrive as a live embed of the originals; a copy is one click away. */
+	function pasteEmbed(clip: Clip, el: HTMLElement | null) {
+		const [id] = insertTreesNear([embedTree(clip)], el);
+		if (!id) return;
+		const from = ws.docs[clip.doc!]?.title || 'another page';
+		ui.toast(`Embedded from “${from}”. Edits show up in both places.`, {
+			action: {
+				label: 'Paste a copy instead',
+				run: () => {
+					if (!doc.blocks[id]) return;
+					doc.run(() => {
+						const { parent, index } = doc.loc(id);
+						const ids = doc.insertTrees(stripTasks(clip.trees), parent, index + 1);
+						doc.remove([id]);
+						doc.select(ids);
+					});
+				}
+			}
 		});
 	}
 
@@ -683,14 +745,16 @@
 		const target = e.target as HTMLElement;
 		const el = editableFrom(target);
 		if (!el && target !== root) return; // inputs, table cells: native paste
-		const kern = dt.getData(KERN_MIME);
-		if (kern) {
+		const clip = dt.getData(KERN_MIME) ? decodeClip(dt.getData(KERN_MIME)) : null;
+		if (clip && pasteMode(clip, doc.id) === 'embed') {
 			e.preventDefault();
-			try {
-				insertTreesNear(JSON.parse(kern), el);
-			} catch {
-				/* malformed clipboard */
-			}
+			pasteEmbed(clip, el);
+			return;
+		}
+		// Text copied from inside one block pastes as formatted text, as it always has.
+		if (clip && !dt.getData('text/html')) {
+			e.preventDefault();
+			insertTreesNear(clip.trees, el);
 			return;
 		}
 		if (dt.files.length) {
@@ -876,6 +940,10 @@
 	ondragleave={(e) => { if (!root?.contains(e.relatedTarget as Node)) indicator = null; }}>
 	{#if rootId}
 		{#if doc.blocks[rootId]}<BlockNode id={rootId} index={doc.loc(rootId).index} />{:else}<div class="gone">The original block was deleted.</div>{/if}
+	{:else if rootIds}
+		{#each rootIds as id (id)}
+			{#if doc.blocks[id]}<BlockNode {id} index={doc.loc(id).index} />{/if}
+		{/each}
 	{:else}
 		{#each doc.kids.root as id, i (id)}
 			<BlockNode {id} index={i} />
@@ -885,7 +953,7 @@
 		<div class="drop" style:top="{indicator.top}px" style:left="{indicator.left}px" style:width="{indicator.width}px"></div>
 	{/if}
 </div>
-{#if !rootId}
+{#if !rootId && !rootIds}
 	<!-- svelte-ignore a11y_click_events_have_key_events a11y_no_static_element_interactions -->
 	<div class="tail" class:short={!onexit} onclick={clickTail}></div>
 {/if}
@@ -895,7 +963,11 @@
 		empty={menu.kind === 'blockref' ? (menu.query.trim() ? 'No matching blocks' : 'Type to search blocks…') : 'No matches'} />
 {/if}
 
-{#if root}<FormatToolbar {root} bind:this={toolbar} />{/if}
+{#if root}<FormatToolbar {root} docId={doc.id} bind:this={toolbar} />{/if}
+
+{#if peek}
+	{#key peek}<DocPeek id={peek.id} rect={peek.rect} onclose={() => (peek = null)} />{/key}
+{/if}
 
 {#if aiAt}
 	<AiInline docId={doc.id} selection={aiAt.selection} rect={aiAt.rect} oninsert={insertAi}

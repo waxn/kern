@@ -401,7 +401,16 @@ def chat_json(c: Chat, full=False) -> dict:
            "created_at": c.created_at.isoformat()}
     if full:
         out["messages"] = c.transcript
+        out["pending"] = agent.pending_json(c)
+        out["granted"] = agent._perms(c)["granted"]
     return out
+
+
+def _mail_ok(request) -> bool:
+    """The same rule as /api/mail (mail/api/guard.py): two-factor on, and this session passed it."""
+    from accounts import totp
+    user = request.user
+    return bool(user and user.is_authenticated and totp.enabled(user) and totp.session_verified(request))
 
 
 @api_view(["GET", "POST"])
@@ -440,12 +449,35 @@ def chat_message(request, chat_id):
     mail_thread = request.data.get("mail_thread")
     if mail_thread is not None:
         # Reading mail needs the same two-factor session as /api/mail (mail/api/guard.py).
-        from accounts import site, totp
+        from accounts import site
 
-        if not site.get_all().get("allow_mail", True) or not totp.enabled(request.user) or not totp.session_verified(request):
+        if not site.get_all().get("allow_mail", True) or not _mail_ok(request):
             return bad("Mail needs two-factor sign-in on this device.")
     try:
-        agent.chat_turn(c, text[:20000], request.data.get("page"), mail_thread=mail_thread)
+        agent.chat_turn(c, text[:20000], request.data.get("page"), mail_ok=_mail_ok(request), mail_thread=mail_thread)
     except ai_mod.AIError as e:
         return _ai_error(e)
+    return Response(chat_json(c, True))
+
+
+@api_view(["POST"])
+def chat_permission(request, chat_id):
+    """Answer a permission request: {"id": pending id, "decision": "once" | "chat" | "deny"}."""
+    c = _get_chat(chat_id)
+    try:
+        agent.answer_permission(c, str(request.data.get("id") or ""), str(request.data.get("decision") or ""),
+                                mail_ok=_mail_ok(request))
+    except ai_mod.AIError as e:
+        return _ai_error(e)
+    return Response(chat_json(c, True))
+
+
+@api_view(["DELETE"])
+def chat_grant(request, chat_id, scope):
+    """Take back an "allow in this chat" permission."""
+    c = _get_chat(chat_id)
+    perms = dict(c.permissions or {})
+    perms["granted"] = [s for s in perms.get("granted") or [] if s != scope]
+    c.permissions = perms
+    c.save(update_fields=["permissions"])
     return Response(chat_json(c, True))

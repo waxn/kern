@@ -1,14 +1,23 @@
 <script lang="ts">
-	import { Globe } from '@lucide/svelte';
+	import { Bookmark, Globe, Mail, ShieldCheck, X } from '@lucide/svelte';
 	import { open } from '../state/tabs.ts';
 	import { ws } from '../state/workspace.svelte.ts';
-	import type { ChatMessage } from './chat.ts';
+	import { SCOPE_LABELS, type ChatMessage, type ChatPending, type ChatScope, type PermissionAnswer } from './chat.ts';
 	import { renderMarkdown } from './md.ts';
 	import Sparkle from './Sparkle.svelte';
 
-	let { messages, sending = false, pendingText = '', compact = false }: {
+	let { messages, sending = false, pendingText = '', compact = false, pending = null, granted = [], answering = null, onanswer, onrevoke }: {
 		messages: ChatMessage[]; sending?: boolean; pendingText?: string; compact?: boolean;
+		/** A permission request the assistant is waiting on. */
+		pending?: ChatPending | null; granted?: ChatScope[]; answering?: PermissionAnswer | null;
+		onanswer?: (a: PermissionAnswer) => void; onrevoke?: (s: ChatScope) => void;
 	} = $props();
+
+	let mailAsk = $derived(!!pending?.scopes.includes('mail.read'));
+	let askTitle = $derived(
+		!pending ? '' : pending.scopes.length > 1 ? 'Intelligence is asking for permission'
+		: mailAsk ? 'Intelligence wants to read your email' : 'Intelligence wants to change your bookmarks'
+	);
 
 	const linkFor = (title: string) => {
 		const t = title.trim().toLowerCase();
@@ -70,6 +79,39 @@
 			</div>
 		{/if}
 	{/each}
+	{#if pending && !sending}
+		<div class="msg bot">
+			<span class="avatar"><Sparkle size={compact ? 14 : 16} /></span>
+			<div class="body">
+				<div class="ask" role="group" aria-label="Permission request">
+					<div class="ask-head"><ShieldCheck size={15} />{askTitle}</div>
+					<ul>
+						{#each pending.asks as a, i (i)}
+							<li>{#if a.scope === 'mail.read'}<Mail size={13} />{:else}<Bookmark size={13} />{/if}<span>{a.detail}</span></li>
+						{/each}
+					</ul>
+					{#if mailAsk}<p class="ask-note">Read only: it cannot send, change or delete email, and web search is turned off for the rest of this chat.</p>{/if}
+					{#if answering}
+						<span class="thinking">{answering === 'deny' ? 'Telling it no…' : 'Working on it…'}</span>
+					{:else}
+						<div class="ask-btns">
+							<button class="btn primary" onclick={() => onanswer?.('once')}>Allow once</button>
+							<button class="btn" onclick={() => onanswer?.('chat')} title="Don't ask again in this conversation">Allow in this chat</button>
+							<button class="btn ghost" onclick={() => onanswer?.('deny')}>Don't allow</button>
+						</div>
+					{/if}
+				</div>
+			</div>
+		</div>
+	{/if}
+	{#if granted.length && onrevoke}
+		<div class="grants">
+			<ShieldCheck size={12} />Allowed in this chat:
+			{#each granted as g (g)}
+				<button class="grant" title="Ask me again next time" onclick={() => onrevoke?.(g)}>{SCOPE_LABELS[g] ?? g}<X size={11} /></button>
+			{/each}
+		</div>
+	{/if}
 	{#if sending}
 		<div class="msg user"><div class="bubble">{pendingText}</div></div>
 		<div class="msg bot">
@@ -106,6 +148,19 @@
 	.prose :global(h4) { margin: 10px 0 4px; font-size: 14.5px; }
 	.prose :global(pre) { margin: 0 0 8px; padding: 10px 12px; border-radius: 8px; background: var(--code-bg); overflow-x: auto; font: 12.5px/1.5 var(--font-mono); }
 	.prose :global(pre code) { background: none; padding: 0; color: inherit; }
+	.ask { padding: 10px 12px; border-radius: 10px; border: 1px solid color-mix(in srgb, var(--accent) 40%, var(--border)); background: color-mix(in srgb, var(--accent) 6%, var(--surface)); }
+	.ask-head { display: flex; align-items: center; gap: 7px; font-weight: 600; }
+	.ask-head :global(svg) { color: var(--accent); flex: none; }
+	.ask ul { margin: 8px 0 0; padding: 0; list-style: none; display: flex; flex-direction: column; gap: 4px; }
+	.ask li { display: flex; align-items: flex-start; gap: 7px; color: var(--text-2); font-size: 13px; line-height: 1.45; overflow-wrap: anywhere; }
+	.ask li :global(svg) { flex: none; margin-top: 3px; }
+	.ask-note { margin: 8px 0 0; font-size: 12px; color: var(--text-3); line-height: 1.45; }
+	.ask-btns { display: flex; flex-wrap: wrap; gap: 6px; margin-top: 10px; }
+	.ask-btns .btn { height: 28px; padding: 0 11px; font-size: 12.5px; }
+	.ask .thinking { display: inline-block; margin-top: 10px; }
+	.grants { display: flex; flex-wrap: wrap; align-items: center; gap: 5px; margin-top: -6px; font-size: 11.5px; color: var(--text-3); }
+	.grant { display: inline-flex; align-items: center; gap: 3px; padding: 1px 6px 1px 8px; border-radius: 9px; background: var(--hover); color: var(--text-2); font-size: 11.5px; }
+	.grant:hover { background: var(--active); color: var(--text); }
 	.sources { display: flex; flex-wrap: wrap; align-items: center; gap: 4px 6px; margin-top: 8px; }
 	.src { padding: 1px 7px; border-radius: 9px; font-size: 11.5px; color: var(--text-2); text-decoration: none; background: var(--hover); }
 	.src:hover { color: var(--text); background: var(--active); }

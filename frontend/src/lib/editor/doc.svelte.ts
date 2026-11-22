@@ -39,9 +39,14 @@ interface Tx {
 
 /** Refresh the display text of references from their current targets. */
 export function hydrateRefs(html: string, refs: Record<string, RefInfo>): string {
-	if (!html.includes('data-ref')) return html;
+	if (!html.includes('data-ref') && !html.includes('data-doc')) return html;
 	const t = document.createElement('template');
 	t.innerHTML = html;
+	// Text links to pages keep their own words; only mark them when the page is gone.
+	t.content.querySelectorAll<HTMLAnchorElement>('a[data-doc]').forEach((a) => {
+		const info = refs[`doc:${a.dataset.doc}`];
+		a.classList.toggle('broken', !info || !!info.trashed);
+	});
 	t.content.querySelectorAll<HTMLAnchorElement>('a[data-ref]').forEach((a) => {
 		const key = a.dataset.ref!;
 		const info = refs[key];
@@ -459,6 +464,15 @@ export class EditorDoc {
 	setProps(id: string, props: Record<string, any>) {
 		const b = this.blocks[id];
 		if (b) this.patch(id, { props: { ...$state.snapshot(b.props), ...props } });
+	}
+
+	/** Change props without an undo step: data the page keeps for itself, like an embed's offline copy. */
+	setPropsQuietly(id: string, props: Record<string, any>) {
+		const b = this.blocks[id];
+		if (!b) return;
+		b.props = { ...$state.snapshot(b.props), ...props };
+		this.dirty.add(id);
+		this.touch();
 	}
 
 	toggleCollapsed(id: string, value?: boolean) {

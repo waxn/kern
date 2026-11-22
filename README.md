@@ -197,6 +197,10 @@ Settings → Reminders), home-screen widgets and a share target. Build it with `
 - Focus mode: the expand button in a page's top bar hides the sidebar, tabs
   and right panel for distraction-free writing; Esc brings them back.
 - `[[` page links, `((` block references, `#` tags, backlinks with context.
+- Link to a page from your own words: select text and press the page-link button in the
+  formatting bar (or `Ctrl/⌘ Shift K`), then pick a page. Clicking the link opens a small
+  read-only preview of that page with an Open button (`Ctrl/⌘`-click opens it straight away).
+  These links count as references (backlinks, graph) and show struck through if the page is deleted.
 - Tags as first-class objects with their own property definitions; per-page
   properties (text, number, checkbox, date, URL, select, multi-select,
   relation, rating).
@@ -223,6 +227,12 @@ Settings → Reminders), home-screen widgets and a share target. Build it with `
   everywhere. Synced blocks can be mirrored by copying a synced reference from
   the block menu and pasting it into another page. Circular embeds are detected
   and not rendered.
+- Copy blocks on one page and paste them on another: they arrive as a live embed in a box
+  that names the original page (with a link to it), keeping headings, lists and formatting.
+  Edits go both ways, and new lines written inside it stay part of it. "Keep a copy" turns
+  it into ordinary blocks; the toast after pasting offers "Paste a copy instead". The embed
+  keeps its last saved content, so if the original page is deleted or trashed it shows that
+  copy and offers to keep it. Pasting on the same page still makes a copy, and a cut always does.
 - Knowledge graph: hierarchy, references, tags and database relations; zoom,
   pan, drag, search, per-type filters, focus mode (1–3 steps) and a
   connection panel.
@@ -332,6 +342,13 @@ Settings → Reminders), home-screen widgets and a share target. Build it with `
   at a time, with a score and the missed questions offered as flashcards), or
   have it look things up. Each page keeps its own conversation, which also
   appears on the Intelligence page.
+- Bookmarks and mail: it can always read your bookmarks. Before it saves or changes a bookmark,
+  or searches or reads your email, the chat shows what it wants to do with Allow once, Allow in
+  this chat, or Don't allow (an "allow in this chat" can be taken back from the chip under the
+  conversation). Mail is read only: there is no tool to send, change, move or delete email, and
+  it needs the same two-factor sign-in as the Mail screen. These rules are enforced on the server
+  (`notes/agent_access.py`), not just in the chat screen. Once a chat has read email its web tools
+  are switched off, so text inside an email cannot make it send your data to a website.
 - It can search the web and read web pages, and lists the sources under its
   answer. Claude uses its built-in search; other providers (OpenRouter, OpenAI,
   Ollama, ...) get `web_search` and `web_fetch` tools that Kern runs itself

@@ -11,5 +11,7 @@ export interface EditorCtx {
 }
 
 const KEY = Symbol('kern-editor');
+/** Context key: the pages and blocks being rendered above an embed, to stop circular embeds. */
+export const EMBED_CHAIN = Symbol('kern-embed-chain');
 export const setEditor = (ctx: EditorCtx) => setContext(KEY, ctx);
 export const getEditor = () => getContext<EditorCtx>(KEY);

@@ -8,7 +8,8 @@ INLINE_TAGS = {
     "span", "mark", "br", "sub", "sup",
 }
 INLINE_ATTRS = {
-    "a": {"href", "class", "contenteditable", "data-ref", "data-c"},
+    # data-doc: a text link to a page ("link to page" in the editor), opened in a peek popup.
+    "a": {"href", "class", "contenteditable", "data-ref", "data-c", "data-doc"},
     "span": {"class", "contenteditable", "data-math", "data-color"},
     "mark": {"data-bg", "data-note"},
 }
@@ -16,6 +17,7 @@ INLINE_ATTRS = {
 _TAG_RE = re.compile(r"<[^>]+>")
 _BR_RE = re.compile(r"<br\s*/?>", re.I)
 _REF_RE = re.compile(r'data-ref="(doc|block|tag):([0-9a-fA-F-]{32,36})"')
+_DOC_LINK_RE = re.compile(r'data-doc="([0-9a-fA-F-]{32,36})"')
 _WS_RE = re.compile(r"\s+")
 
 
@@ -45,4 +47,6 @@ def one_line(html: str, limit: int = 200) -> str:
 
 
 def extract_refs(html: str) -> set[tuple[str, str]]:
-    return {(kind, ref.lower()) for kind, ref in _REF_RE.findall(html or "")}
+    """Page, block and tag references in stored HTML; text links to a page count as page references."""
+    refs = {(kind, ref.lower()) for kind, ref in _REF_RE.findall(html or "")}
+    return refs | {("doc", ref.lower()) for ref in _DOC_LINK_RE.findall(html or "")}

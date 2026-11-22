@@ -1,7 +1,7 @@
 import type { BlockType } from '#lib/types.ts';
 import { escapeHtml } from '#lib/util.ts';
 import type { BlockTree } from './doc.svelte';
-import { htmlToText } from './dom';
+import { docLinkHtml, htmlToText } from './dom';
 
 const INLINE = new Set(['B', 'STRONG', 'I', 'EM', 'U', 'S', 'STRIKE', 'DEL', 'CODE', 'MARK', 'SUB', 'SUP']);
 const BLOCKISH = new Set([
@@ -31,12 +31,22 @@ export function sanitizeInline(node: Node, skip?: (el: Element) => boolean): str
 		else if (tag === 'A') {
 			const ref = child.dataset.ref;
 			const href = child.getAttribute('href') ?? '';
-			if (ref && /^(doc|block|tag):[0-9a-f-]{36}$/.test(ref))
-				out += `<a class="${escapeHtml(child.className)}" data-ref="${ref}" href="${escapeHtml(href)}" contenteditable="false">${escapeHtml(child.textContent ?? '')}</a>`;
+			const docLink = child.dataset.doc;
+			if (ref && /^(doc|block|tag):[0-9a-f-]{36}$/.test(ref)) {
+				const c = child.dataset.c ? ` data-c="${escapeHtml(child.dataset.c)}"` : '';
+				out += `<a class="${escapeHtml(child.className)}" data-ref="${ref}" href="${escapeHtml(href)}" contenteditable="false"${c}>${escapeHtml(child.textContent ?? '')}</a>`;
+			}
+			else if (docLink && /^[0-9a-f-]{36}$/.test(docLink)) out += docLinkHtml(docLink, inner());
 			else if (/^(https?:|mailto:|tel:)/i.test(href)) out += `<a href="${escapeHtml(href)}">${inner()}</a>`;
 			else out += inner();
 		} else if (tag === 'SPAN' && child.dataset.math !== undefined) {
 			out += `<span class="math" data-math="${escapeHtml(child.dataset.math)}" contenteditable="false">${escapeHtml(child.dataset.math)}</span>`;
+		} else if (tag === 'MARK' && (child.dataset.bg !== undefined || child.dataset.note !== undefined)) {
+			// Kern's own highlights and notes keep their colour and text.
+			const body = inner();
+			const bg = child.dataset.bg !== undefined ? ` data-bg="${escapeHtml(child.dataset.bg)}"` : '';
+			const note = child.dataset.note !== undefined ? ` data-note="${escapeHtml(child.dataset.note)}"` : '';
+			if (body) out += `<mark${bg}${note}>${body}</mark>`;
 		} else if (INLINE.has(tag)) {
 			const t = tag === 'STRONG' ? 'b' : tag === 'EM' ? 'i' : tag.toLowerCase();
 			const body = inner();
