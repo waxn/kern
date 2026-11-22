@@ -1,5 +1,6 @@
 package app.kern.data
 
+import kotlinx.serialization.decodeFromString
 import kotlinx.serialization.json.JsonArray
 import kotlinx.serialization.json.JsonElement
 import kotlinx.serialization.json.JsonNull
@@ -134,6 +135,12 @@ class Kern(val api: Api) {
     suspend fun chat(id: String): Chat = api.get("/chats/$id")
     suspend fun createChat(): Chat = api.post("/chats")
     suspend fun deleteChat(id: String) = api.delete("/chats/$id")
+    /** Answer a permission request: [decision] is "once", "chat" or "deny"; the turn then carries on. */
+    suspend fun answerChatPermission(id: String, pendingId: String, decision: String): Chat =
+        api.post("/chats/$id/permission", jsonOf("id" to pendingId, "decision" to decision))
+    /** Take back an "Allow in this chat". */
+    suspend fun revokeChatGrant(id: String, scope: String): Chat =
+        KernJson.decodeFromString(api.raw("DELETE", "/chats/$id/grants/$scope"))
     suspend fun sendChat(id: String, text: String, page: String? = null, mailThread: Long? = null): Chat =
         api.post("/chats/$id/message", if (mailThread != null) jsonOf("text" to text, "mail_thread" to mailThread) else jsonOf("text" to text, "page" to page))
     suspend fun aiConfig(): JsonObject = api.get("/ai/config")

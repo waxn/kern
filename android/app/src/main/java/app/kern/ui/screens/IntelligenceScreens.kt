@@ -1,5 +1,10 @@
 package app.kern.ui.screens
 
+import androidx.compose.material.icons.outlined.Close
+import androidx.compose.material.icons.outlined.BookmarkBorder
+import androidx.compose.material.icons.outlined.Email
+import androidx.compose.material.icons.outlined.VerifiedUser
+import androidx.compose.foundation.border
 import androidx.compose.foundation.background
 import androidx.compose.foundation.clickable
 import androidx.compose.foundation.layout.Arrangement
@@ -174,7 +179,8 @@ fun ChatScreen(ws: Workspace, nav: Nav, id: String, page: String?, mailThread: L
     var mailSubject by remember { mutableStateOf<String?>(null) }
     LaunchedEffect(mailThread) { if (mailThread != null) mailSubject = runCatching { ws.kern.mailThread(mailThread).thread.subject.ifBlank { "(no subject)" } }.getOrNull() }
     LaunchedEffect(id) { try { chat = ws.kern.chat(id) } catch (e: Exception) { err = e.message } }
-    val count = (chat?.messages?.size ?: 0) + (if (pending != null) 2 else 0)
+    var answering by remember { mutableStateOf<String?>(null) }
+    val count = (chat?.messages?.size ?: 0) + (if (pending != null) 2 else 0) + (if (chat?.pending != null) 1 else 0)
     LaunchedEffect(count) { if (count > 0) list.animateScrollToItem(count - 1) }
 
     fun send(msg: String = text) {
@@ -184,6 +190,24 @@ fun ChatScreen(ws: Workspace, nav: Nav, id: String, page: String?, mailThread: L
         scope.launch {
             try { chat = ws.kern.sendChat(id, m, page, mailThread); ws.refresh() } catch (e: Exception) { snack.error(e); text = m }
             pending = null; sending = false
+        }
+    }
+
+    /** Allow once, allow in this chat, or refuse what the assistant asked for; the server then carries on. */
+    fun answer(decision: String) {
+        val c = chat ?: return
+        val p = c.pending ?: return
+        if (answering != null) return
+        answering = decision
+        scope.launch {
+            try { chat = ws.kern.answerChatPermission(c.id, p.id, decision); ws.refresh() } catch (e: Exception) { snack.error(e) }
+            answering = null
+        }
+    }
+    fun revoke(scopeName: String) {
+        val c = chat ?: return
+        scope.launch {
+            try { chat = ws.kern.revokeChatGrant(c.id, scopeName); snack.show("It will ask again next time") } catch (e: Exception) { snack.error(e) }
         }
     }
 
@@ -232,6 +256,10 @@ fun ChatScreen(ws: Workspace, nav: Nav, id: String, page: String?, mailThread: L
                 }
                 else -> LazyColumn(Modifier.fillMaxSize(), state = list) {
                     items(msgs) { m -> Bubble(m, nav) { openUrl(ctx, it) } }
+                    val waiting = chat?.pending
+                    if (waiting != null && pending == null) item { PermissionCard(waiting, answering, ::answer) }
+                    val granted = chat?.granted.orEmpty()
+                    if (granted.isNotEmpty() && waiting == null) item { GrantedRow(granted, ::revoke) }
                     if (pending != null) {
                         item { Bubble(ChatMessage("user", pending!!), nav) {} }
                         item {
@@ -253,6 +281,72 @@ fun ChatScreen(ws: Workspace, nav: Nav, id: String, page: String?, mailThread: L
             Spacer(Modifier.width(8.dp))
             IconButton(onClick = { send() }, enabled = text.isNotBlank() && !sending, modifier = Modifier.clip(RoundedCornerShape(24.dp)).background(if (text.isNotBlank()) k.accent else k.surface2)) {
                 Icon(Icons.AutoMirrored.Outlined.Send, "Send", tint = if (text.isNotBlank()) k.onAccent else k.text3)
+            }
+        }
+    }
+}
+
+private val SCOPE_LABELS = mapOf("mail.read" to "Read your email", "bookmarks.write" to "Change your bookmarks")
+
+/** The assistant paused to ask (backend notes/agent_access.py); nothing ran yet. */
+@Composable
+private fun PermissionCard(p: app.kern.data.ChatPending, answering: String?, onAnswer: (String) -> Unit) {
+    val k = kern
+    val mail = "mail.read" in p.scopes
+    val title = when {
+        p.scopes.size > 1 -> "Intelligence is asking for permission"
+        mail -> "Intelligence wants to read your email"
+        else -> "Intelligence wants to change your bookmarks"
+    }
+    Column(Modifier.fillMaxWidth().padding(horizontal = 14.dp, vertical = 8.dp).clip(RoundedCornerShape(16.dp))
+        .background(k.surface).border(1.dp, k.tint(k.accent), RoundedCornerShape(16.dp)).padding(14.dp)) {
+        Row(verticalAlignment = Alignment.CenterVertically) {
+            Icon(Icons.Outlined.VerifiedUser, null, tint = k.accent, modifier = Modifier.size(18.dp))
+            Spacer(Modifier.width(8.dp))
+            Text(title, style = MaterialTheme.typography.titleSmall, color = k.text)
+        }
+        Spacer(Modifier.height(8.dp))
+        p.asks.forEach { a ->
+            Row(Modifier.padding(vertical = 3.dp), verticalAlignment = Alignment.Top) {
+                Icon(if (a.scope == "mail.read") Icons.Outlined.Email else Icons.Outlined.BookmarkBorder, null, tint = k.text3,
+                    modifier = Modifier.padding(top = 2.dp).size(15.dp))
+                Spacer(Modifier.width(8.dp))
+                Text(a.detail, style = MaterialTheme.typography.bodyMedium, color = k.text2)
+            }
+        }
+        if (mail) Text("Read only: it can't send, change or delete email, and web search is turned off for the rest of this chat.",
+            style = MaterialTheme.typography.bodySmall, color = k.text3, modifier = Modifier.padding(top = 6.dp))
+        Spacer(Modifier.height(12.dp))
+        if (answering != null) {
+            Row(verticalAlignment = Alignment.CenterVertically) {
+                CircularProgressIndicator(Modifier.size(16.dp), strokeWidth = 2.dp, color = k.accent)
+                Spacer(Modifier.width(10.dp))
+                Text(if (answering == "deny") "Telling it no…" else "Working on it…", color = k.text3, style = MaterialTheme.typography.bodyMedium)
+            }
+        } else {
+            Column(verticalArrangement = Arrangement.spacedBy(8.dp)) {
+                app.kern.ui.components.KButton("Allow once", Modifier.fillMaxWidth(), primary = true) { onAnswer("once") }
+                app.kern.ui.components.KButton("Allow in this chat", Modifier.fillMaxWidth()) { onAnswer("chat") }
+                app.kern.ui.components.KButton("Don't allow", Modifier.fillMaxWidth()) { onAnswer("deny") }
+            }
+        }
+    }
+}
+
+/** What's allowed for the rest of this chat; tap one to be asked again. */
+@OptIn(ExperimentalLayoutApi::class)
+@Composable
+private fun GrantedRow(granted: List<String>, onRevoke: (String) -> Unit) {
+    val k = kern
+    FlowRow(Modifier.fillMaxWidth().padding(horizontal = 20.dp, vertical = 6.dp), horizontalArrangement = Arrangement.spacedBy(6.dp),
+        verticalArrangement = Arrangement.spacedBy(6.dp)) {
+        Text("Allowed in this chat:", style = MaterialTheme.typography.bodySmall, color = k.text3, modifier = Modifier.align(Alignment.CenterVertically))
+        granted.forEach { g ->
+            Row(Modifier.clip(RoundedCornerShape(12.dp)).background(k.surface2).clickable { onRevoke(g) }.padding(horizontal = 10.dp, vertical = 4.dp),
+                verticalAlignment = Alignment.CenterVertically) {
+                Text(SCOPE_LABELS[g] ?: g, style = MaterialTheme.typography.bodySmall, color = k.text2)
+                Spacer(Modifier.width(4.dp))
+                Icon(Icons.Outlined.Close, "Ask me again", tint = k.text3, modifier = Modifier.size(12.dp))
             }
         }
     }

@@ -317,12 +317,23 @@ data class ChatMessage(
     val sources: List<JsonElement> = emptyList(),
 )
 
+/** One thing Intelligence wants to do that needs your OK (backend notes/agent_access.py). */
+@Serializable
+data class ChatAsk(val scope: String = "", val title: String = "", val detail: String = "")
+
+/** A turn paused until you allow or refuse what the assistant asked for. */
+@Serializable
+data class ChatPending(val id: String, val asks: List<ChatAsk> = emptyList(), val scopes: List<String> = emptyList())
+
 @Serializable
 data class Chat(
     val id: String,
     val title: String = "New chat",
     @SerialName("updated_at") val updatedAt: String? = null,
     val messages: List<ChatMessage> = emptyList(),
+    val pending: ChatPending? = null,
+    /** Scopes allowed for the rest of this chat ("Allow in this chat"). */
+    val granted: List<String> = emptyList(),
 )
 
 @Serializable
