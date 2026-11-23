@@ -84,3 +84,27 @@ def test_sorting_off_does_nothing(loaded, api, on, engine, server, monkeypatch):
     server.deliver("INBOX", mail(6))
     engine.sync_folder(inbox())
     assert Message.objects.get(message_id="pa6@stranger.test").folder.role == FolderRole.INBOX
+
+
+def test_address_without_path_gets_v1(api):
+    d = api.post("/api/private-ai", {"baseUrl": "http://192.168.0.113:1234"}).json()
+    assert d["baseUrl"] == "http://192.168.0.113:1234/v1"
+    d = api.post("/api/private-ai", {"baseUrl": "http://host:11434/v1/"}).json()
+    assert d["baseUrl"] == "http://host:11434/v1"
+
+
+def test_reason_is_kept_and_shown(loaded, on, engine, server, api, monkeypatch):
+    monkeypatch.setattr(private_ai, "complete", lambda s, p, **k: "<think>hm</think>VERDICT: junk\nREASON: Unsolicited prize offer from an unknown sender.")
+    server.deliver("INBOX", mail(7))
+    engine.sync_folder(inbox())
+    m = Message.objects.get(message_id="pa7@stranger.test")
+    assert m.folder.role == FolderRole.JUNK and m.risk_score == Message.objects.get(pk=m.pk).risk_score
+    body = api.get(f"/api/threads/{m.thread_id}").json()
+    msg = next(x for x in body["messages"] if x["id"] == m.pk)
+    assert msg["privateSort"] == {"verdict": "junk", "reason": "Unsolicited prize offer from an unknown sender."}
+    assert all(f["rule"] != "private-sort" for f in msg["risk"]["findings"])
+
+
+def test_reason_parsing():
+    assert private_ai.verdict("VERDICT: inbox\nREASON: Looks like junk but it is a receipt.") == "inbox"
+    assert private_ai.reason("VERDICT: inbox\nREASON: A receipt.") == "A receipt."

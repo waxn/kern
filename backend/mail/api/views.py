@@ -16,7 +16,7 @@ from django.utils.http import content_disposition_header
 
 from .. import mute as mute_mod
 from .. import preferences as prefs_mod
-from .. import actions, followups, imgproxy, labels as labels_mod, parsing, risk, sanitize, search, sending, snooze, spam, store
+from .. import actions, followups, imgproxy, labels as labels_mod, parsing, private_ai, risk, sanitize, search, sending, snooze, spam, store
 from ..identity import my_addresses
 from ..models import (
     Attachment, BlockRule, Correspondent, Draft, DraftStatus, Folder, FolderRole, Label, Message,
@@ -102,7 +102,9 @@ def message_json(m: Message, drafts_by_key: dict[str, int]) -> dict:
              "preview": _preview(a.content_type, a.filename, a.size)}
             for a in m.attachments.all()
         ],
-        "risk": {"level": m.risk_level, "score": m.risk_score, "findings": m.risk_findings},
+        "risk": {"level": m.risk_level, "score": m.risk_score,
+                 "findings": [f for f in m.risk_findings if f.get("rule") != "private-sort"]},
+        "privateSort": private_ai.note_for(m),
         "auth": m.auth_results,
         "listUnsubscribe": m.headers.get("list-unsubscribe", ""),
         "unsubscribe": _unsub_json(m),

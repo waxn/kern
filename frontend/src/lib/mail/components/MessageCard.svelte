@@ -160,6 +160,13 @@
         Moved to Junk because {m.blockedBy.kind === 'domain' ? 'the domain' : 'the sender'} <b>{m.blockedBy.value}</b> is blocked.
       </div>
     {/if}
+    {#if m.privateSort && !m.blockedBy && m.folder.role === m.privateSort.verdict}
+      <div class="note" class:warn={m.privateSort.verdict === 'junk'}>
+        <Icon name={m.privateSort.verdict === 'junk' ? 'shieldAlert' : 'shield'} size={15} />
+        <span><b>{m.privateSort.verdict === 'junk' ? 'Your private model moved this to Junk' : 'Your private model kept this in the Inbox'}.</b>
+          {m.privateSort.reason || ''}</span>
+      </div>
+    {/if}
     {#if showRisk}
       <RiskPanel risk={m.risk} expanded={m.risk.level === 'high'} />
     {:else if showDetails && !m.fromMe && m.risk.level}
