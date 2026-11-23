@@ -66,7 +66,7 @@ def failure_note(err: dict, carrier: str) -> str:
         # USPS, FedEx and a few others are read only through the scraper's browser service (TRAWL);
         # a local Chromium doesn't help them.
         text = ("{carrier} can only be read through the scraper's browser service (TRAWL), which this Kern doesn't run: "
-                "start the trawl service in docker-compose.yml, or use Parcels or TrackingMore.")
+                "use Parcels or TrackingMore for it.")
     elif kind == "challenge" and (has_browser() or has_trawl()):
         text = "{carrier} turned the browser away (a bot check). Trying again later; a fallback below may get through."
     else:

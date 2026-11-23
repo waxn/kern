@@ -88,9 +88,7 @@ on the local network** (off by default, see Security).
     no account or key. It's built into Kern's Docker image (Node plus the npm package, pinned in
     `backend/Dockerfile`; the mail worker runs it per lookup, in a thread of its own so slow
     carriers never hold up mail). USPS, FedEx, Royal Mail and other carriers only answer a real
-    browser session, which the scraper gets from its browser service, TRAWL: the `trawl` service
-    in `docker-compose.yml`, built from the scraper's repository at the same version (AGPL-3.0,
-    private, no ports published; `KERN_TRAWL_URL=` in .env goes without). Or point Kern at a
+    browser session; Kern runs no browser service, so use Parcels or TrackingMore for those. Or point Kern at a
     scraper you run (`parcel-scraper serve`). When a lookup finds nothing, the package says why.
     Amazon Logistics can't be tracked live. Fallback trackers (UPU on by default; ParcelsApp, Ship24, 17TRACK… opt-in) each
     receive the number. Licence: Apache-2.0 up to 0.1293.2 (the pinned version), PolyForm

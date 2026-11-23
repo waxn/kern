@@ -12,8 +12,6 @@ services:
     restart: unless-stopped
     environment:
       KERN_DATA_DIR: /data
-      # The parcel scraper's browser service ("Check now" on a package runs here).
-      FLARESOLVERR_URL: ${KERN_TRAWL_URL-http://trawl:8191}
       # Set KERN_HTTPS=1 when Kern is served over HTTPS by a proxy in front of it.
       KERN_HTTPS: ${KERN_HTTPS:-0}
       KERN_TRUSTED_HOSTS: ${KERN_TRUSTED_HOSTS:-}
@@ -47,9 +45,6 @@ services:
         condition: service_healthy
     environment:
       KERN_DATA_DIR: /data
-      # Live package tracking: the parcel scraper reads USPS, FedEx and other browser-only
-      # carriers through the trawl service below. Set KERN_TRAWL_URL= (empty) in .env to go without.
-      FLARESOLVERR_URL: ${KERN_TRAWL_URL-http://trawl:8191}
     volumes:
       - kern_data:/data
     extra_hosts:
@@ -94,21 +89,6 @@ services:
       - kern_data:/data
     ports:
       - "${KERN_BIND:-0.0.0.0}:${KERN_SSH_PORT:-2222}:2222"
-
-  # Browser service for live package tracking with the built-in Universal Parcel Scraper
-  # (Settings → Mail → Package tracking): USPS, FedEx, Royal Mail and other carriers only answer
-  # a real browser session, which this keeps a small pool of. Built from the scraper's own
-  # repository at the version the backend image carries (TRAWL, AGPL-3.0). Private: no ports
-  # are published; only the backend and mail services talk to it. Not tracking packages with the
-  # built-in scraper? Remove this service and set KERN_TRAWL_URL= (empty) in .env.
-  trawl:
-    build:
-      context: https://github.com/plhery/universal-parcel-scraper.git#v${PARCEL_SCRAPER_VERSION:-0.1225.0}:trawl
-    restart: unless-stopped
-    shm_size: 1gb
-    environment:
-      SESSION_CACHE_DRIVER: memory
-      BROWSER_POOL_SIZE: "1"
 
   web:
     build: ./frontend
