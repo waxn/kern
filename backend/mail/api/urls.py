@@ -37,6 +37,7 @@ urlpatterns = [
     path("messages/<int:pk>/attachments/<int:aid>/html", views.attachment_html),
     path("img", views.image_proxy),
     path("snoozes", views.snoozes),
+    path("private-ai", views.private_ai_view),
     path("packages", views.packages_list),
     path("packages/tracking", views.packages_tracking),
     path("packages/map", views.packages_map),

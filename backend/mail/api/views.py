@@ -1056,6 +1056,20 @@ def packages_map(request):
 
 
 @api(("GET", "POST"))
+def private_ai_view(request):
+    """The private model (mail/private_ai.py): {baseUrl, model, key?, timeout, sortMail}. GET also
+    says whether it answers right now (online) and which models it offers."""
+    from .. import private_ai
+
+    if request.method == "POST":
+        try:
+            return private_ai.configure(body(request))
+        except private_ai.PrivateAIError as exc:
+            raise ApiError(str(exc)) from exc
+    return private_ai.settings_json(check=True)
+
+
+@api(("GET", "POST"))
 def packages_tracking(request):
     """Live tracking settings: {provider: "parcels"|"trackingmore"|"scraper"|"", key?, country?, limit?,
     scraper?: {url, fallbacks}}. key "" forgets the stored key, a missing key keeps it."""

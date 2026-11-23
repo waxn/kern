@@ -158,6 +158,31 @@ class BlockListStage(Stage):
         actions.move_messages([ctx.message], actions.role_folder(FolderRole.JUNK))
 
 
+class PrivateSortStage(Stage):
+    """Asks your private model (mail/private_ai.py) whether new mail is Inbox or Junk. Only new
+    mail, never a first sync's backlog, and never someone you've written to. If the model is off
+    the mail just stays where the normal rules put it."""
+
+    name = "private-sort"
+    version = 1
+
+    def applies(self, ctx: Context) -> bool:
+        from .. import private_ai
+
+        return (not ctx.initial and not ctx.from_me and ctx.message.folder.role == FolderRole.INBOX
+                and private_ai.sorting_on())
+
+    def run(self, ctx: Context) -> None:
+        from .. import actions, private_ai
+
+        m = ctx.message
+        corr = Correspondent.objects.filter(address=m.from_addr).first()
+        if corr and corr.sent_count > 0:
+            return
+        if private_ai.classify(m, ctx.parsed.text or (m.snippet or "")) == "junk":
+            actions.move_messages([m], actions.role_folder(FolderRole.JUNK))
+
+
 class PackageStage(Stage):
     """Shipping emails -> Shipment rows (mail/packages.py). Rules only."""
 
@@ -245,4 +270,4 @@ class SnoozeReplyStage(Stage):
             snooze.wake_for_new_message(ctx.message)
 
 
-__all__ = ["RiskStage", "ContactsStage", "BlockListStage", "SnoozeReplyStage", "Q"]
+__all__ = ["RiskStage", "ContactsStage", "BlockListStage", "PrivateSortStage", "SnoozeReplyStage", "Q"]

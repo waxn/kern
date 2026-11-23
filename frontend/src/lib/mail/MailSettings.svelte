@@ -101,6 +101,7 @@
       [trusted, rules, failed, idents, tracking] = await Promise.all([api.get('/trusted-senders'), api.get('/risk/rules'), api.get('/ops/failed'),
         api.get('/identities'), api.get('/packages/tracking')]);
       mapInfo = await api.get('/packages/map').catch(() => null);
+      loadPrivate(); // not awaited: an off PC takes a few seconds to say so
     } catch {
       /* not connected yet */
     }
@@ -176,6 +177,34 @@
       trackMsg = { ok: false, text: e.message };
     } finally {
       trackBusy = false;
+    }
+  }
+  // The private model (mail/private_ai.py): an endpoint on your own machine, apart from Intelligence.
+  let priv = $state(null);
+  let privForm = $state({ baseUrl: '', model: '', timeout: 120, key: '' });
+  let privBusy = $state(false);
+  let privMsg = $state(null);
+  function privFill(d) {
+    priv = d;
+    privForm = { baseUrl: d.baseUrl, model: d.model, timeout: d.timeout, key: '' };
+  }
+  async function loadPrivate() {
+    try {
+      privFill(await api.get('/private-ai'));
+    } catch {
+      /* leave the section out */
+    }
+  }
+  async function savePrivate(extra = {}) {
+    privBusy = true;
+    privMsg = null;
+    try {
+      const { key, ...rest } = privForm;
+      privFill(await api.post('/private-ai', { ...rest, ...(key ? { key } : {}), ...extra }));
+    } catch (e) {
+      privMsg = { ok: false, text: e.message };
+    } finally {
+      privBusy = false;
     }
   }
   function toggleFallback(f) {
@@ -528,6 +557,37 @@
         {/if}
         {#if mapMsg}<span class="test" class:good={mapMsg.ok} class:bad={!mapMsg.ok}>{#if mapMsg.ok}<CircleCheck size={13} />{:else}<CircleAlert size={13} />{/if} {mapMsg.text}</span>{/if}
       </div>
+    </div>
+
+    <div class="section-title" id="private">Private model</div>
+    <div class="group">
+      <div class="item col">
+        <div><b>Your own AI endpoint</b><span>An OpenAI-compatible server you run yourself, such as LM Studio, Ollama or llama.cpp. It is kept apart from
+          Intelligence: mail is only ever shown to this one, never to a hosted model. Plain http:// works, and Kern waits a good while for
+          an answer. If it's switched off, nothing happens and mail is sorted the normal way. Kern runs on a server, so “localhost” means
+          that server: use your PC's address on the network (in Docker, host.docker.internal also reaches the machine it runs on).</span></div>
+        <div class="row">
+          <input class="input wide" bind:value={privForm.baseUrl} placeholder="http://192.168.1.20:1234/v1" aria-label="Private model address" />
+          {#if priv?.configured}
+            <span class="test" class:good={priv.online} class:bad={priv.online === false} aria-live="polite">
+              {#if priv.online}<CircleCheck size={13} /> Online{:else if priv.online === false}<CircleAlert size={13} /> Offline{/if}</span>
+          {/if}
+        </div>
+        <div class="row">
+          <input class="input wide" bind:value={privForm.model} list="priv-models" placeholder="Model (empty: whichever is loaded)" aria-label="Private model name" />
+          <datalist id="priv-models">{#each priv?.models || [] as m (m)}<option value={m}></option>{/each}</datalist>
+          <input class="input" type="password" bind:value={privForm.key} autocomplete="off" style="width:170px"
+                 placeholder={priv?.hasKey ? 'Key saved' : 'API key (optional)'} aria-label="Private model API key" />
+        </div>
+        <div class="row lim"><span class="faint">Wait up to</span><input class="input port" type="number" min="10" max="900" bind:value={privForm.timeout} aria-label="Seconds to wait for an answer" /><span class="faint">seconds for an answer</span>
+          <button class="btn primary" disabled={privBusy || !privForm.baseUrl} onclick={() => savePrivate()}>{privBusy ? 'Checking…' : 'Save'}</button>
+          {#if priv?.configured}<button class="btn ghost" disabled={privBusy} onclick={() => { privForm.baseUrl = ''; privForm.key = ''; savePrivate({ baseUrl: '', key: '' }); }}>Remove</button>{/if}</div>
+        {#if privMsg}<span class="test bad"><CircleAlert size={13} /> {privMsg.text}</span>{/if}
+      </div>
+      {#if priv?.configured}
+        <div class="item"><div><b>Sort incoming mail</b><span>New mail is shown to the private model, which decides Inbox or Junk. People you've written to are never judged.</span></div>
+          <input type="checkbox" checked={priv.sortMail} onchange={(e) => savePrivate({ sortMail: e.currentTarget.checked })} /></div>
+      {/if}
     </div>
   {/if}
 
