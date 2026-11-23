@@ -24,7 +24,7 @@ if (typeof window !== 'undefined') {
 // Preferences stored on the server (shared by all your devices).
 export const account = $state({
   from_name: '', signature: '', signature_on_replies: true, undo_seconds: null,
-  after_action: 'next', mark_read: 'open', loaded: false,
+  after_action: 'next', mark_read: 'open', load_images: false, loaded: false,
 });
 
 export async function loadAccountPrefs() {

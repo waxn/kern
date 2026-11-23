@@ -17,6 +17,7 @@ DEFAULTS = {
     "signature_on_replies": True,
     "undo_seconds": None,       # None: use SEND_UNDO_SECONDS from .env
     "after_action": "next",     # after archive/trash/...: "next" conversation or back to "list"
+    "load_images": False,       # load remote images in every message (through the image proxy)
     "mark_read": "open",        # "open" (immediately), "delay" (after 2s), "manual"
 }
 
@@ -43,7 +44,7 @@ def update(changes: dict) -> dict:
             value = str(value or "").replace("\r\n", "\n")[: LIMITS[key]]
             if key == "from_name":
                 value = " ".join(value.split())
-        elif key == "signature_on_replies":
+        elif key in ("signature_on_replies", "load_images"):
             value = bool(value)
         elif key == "undo_seconds":
             value = None if value in (None, "") else max(0, min(60, int(value)))

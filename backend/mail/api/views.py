@@ -727,7 +727,7 @@ def message_body(request, pk: int):
     raw = store.get(m.blob_id)
     pm = parsing.parse_message(raw)
     trusted = TrustedImageSender.objects.filter(address=m.from_addr).exists()
-    load = request.GET.get("images") == "1" or trusted
+    load = request.GET.get("images") == "1" or trusted or bool(prefs_mod.get()["load_images"])
     # Never auto-load images for risky mail, even from a "trusted" sender.
     if m.risk_level == "high" and request.GET.get("images") != "1":
         load = False

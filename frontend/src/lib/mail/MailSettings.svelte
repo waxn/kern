@@ -181,12 +181,12 @@
   }
   // The private model (mail/private_ai.py): an endpoint on your own machine, apart from Intelligence.
   let priv = $state(null);
-  let privForm = $state({ baseUrl: '', model: '', timeout: 120, key: '' });
+  let privForm = $state({ baseUrl: '', model: '', timeout: 300, maxTokens: 10000, guidance: '', key: '' });
   let privBusy = $state(false);
   let privMsg = $state(null);
   function privFill(d) {
     priv = d;
-    privForm = { baseUrl: d.baseUrl, model: d.model, timeout: d.timeout, key: '' };
+    privForm = { baseUrl: d.baseUrl, model: d.model, timeout: d.timeout, maxTokens: d.maxTokens, guidance: d.guidance, key: '' };
   }
   async function loadPrivate() {
     try {
@@ -565,7 +565,7 @@
         <div><b>Your own AI endpoint</b><span>An OpenAI-compatible server you run yourself, such as LM Studio, Ollama or llama.cpp. It is kept apart from
           Intelligence: mail is only ever shown to this one, never to a hosted model. Plain http:// works, and Kern waits a good while for
           an answer. If it's switched off, nothing happens and mail is sorted the normal way. Kern runs on a server, so “localhost” means
-          that server: use your PC's address on the network (in Docker, host.docker.internal also reaches the machine it runs on).</span></div>
+          that server: use your PC's address on the network (in Docker, host.docker.internal also reaches the machine it runs on). Everything here takes effect on the next email, with no restart; only updating Kern itself needs the backend and mail worker restarted.</span></div>
         <div class="row">
           <input class="input wide" bind:value={privForm.baseUrl} placeholder="http://192.168.1.20:1234/v1" aria-label="Private model address" />
           {#if priv?.configured}
@@ -580,6 +580,11 @@
                  placeholder={priv?.hasKey ? 'Key saved' : 'API key (optional)'} aria-label="Private model API key" />
         </div>
         <div class="row lim"><span class="faint">Wait up to</span><input class="input port" type="number" min="10" max="900" bind:value={privForm.timeout} aria-label="Seconds to wait for an answer" /><span class="faint">seconds for an answer</span>
+        </div>
+        <div class="row lim"><span class="faint">Let it write up to</span><input class="input port" style="width:90px" type="number" min="200" max="200000" bind:value={privForm.maxTokens} aria-label="Most tokens it may write" /><span class="faint">tokens per email (thinking models use thousands before answering)</span>
+        </div>
+        <textarea class="input" rows="3" bind:value={privForm.guidance} placeholder="Your own sorting rules, optional. e.g. “Anything from pentel.com or a shop's newsletter is junk. Mail from my school is always inbox.”" aria-label="Your own sorting rules"></textarea>
+        <div class="row lim">
           <button class="btn primary" disabled={privBusy || !privForm.baseUrl} onclick={() => savePrivate()}>{privBusy ? 'Checking…' : 'Save'}</button>
           {#if priv?.configured}<button class="btn ghost" disabled={privBusy} onclick={() => { privForm.baseUrl = ''; privForm.key = ''; savePrivate({ baseUrl: '', key: '' }); }}>Remove</button>{/if}</div>
         {#if privMsg}<span class="test bad"><CircleAlert size={13} /> {privMsg.text}</span>{/if}
@@ -629,6 +634,8 @@
         <ul class="list">{#each trusted as t (t.id)}<li><span>{t.address}</span><button class="btn ghost" onclick={() => untrust(t)}>Remove</button></li>{/each}</ul>
       {:else}<span class="faint">No trusted senders.</span>{/if}
     </div>
+    <div class="item"><div><b>Always load remote images</b><span>Don't block remote images. They still load through Kern's image proxy, so senders never see your address or browser, but they can see that a message was opened. Messages scored high risk still stay blocked.</span></div>
+      <input type="checkbox" checked={prefsSrv.load_images} onchange={(e) => setPref({ load_images: e.currentTarget.checked })} /></div>
     <div class="item"><div><b>Blocked senders</b><span>Mail from them goes straight to Junk, on the mail server too.</span></div><a class="btn" href="/mail/blocklist">Manage</a></div>
     {#if rules}
       <details class="item col rules">

@@ -108,3 +108,22 @@ def test_reason_is_kept_and_shown(loaded, on, engine, server, api, monkeypatch):
 def test_reason_parsing():
     assert private_ai.verdict("VERDICT: inbox\nREASON: Looks like junk but it is a receipt.") == "inbox"
     assert private_ai.reason("VERDICT: inbox\nREASON: A receipt.") == "A receipt."
+
+
+def test_unreadable_answer_is_explained(loaded, on, engine, server, api, monkeypatch):
+    monkeypatch.setattr(private_ai, "complete", lambda s, p, **k: "<think>let me think about this")
+    server.deliver("INBOX", mail(8))
+    engine.sync_folder(inbox())
+    m = Message.objects.get(message_id="pa8@stranger.test")
+    assert m.folder.role == FolderRole.INBOX
+    assert private_ai.note_for(m)["verdict"] == "unclear"
+
+
+def test_token_limit_and_guidance_are_settings(api):
+    d = api.post("/api/private-ai", {"baseUrl": "http://pc:1234", "maxTokens": 20000, "guidance": "Shops are junk."}).json()
+    assert d["maxTokens"] == 20000 and d["guidance"] == "Shops are junk."
+    assert api.get("/api/private-ai").json()["maxTokens"] == 20000
+
+
+def test_load_images_preference(loaded, api):
+    assert api.patch("/api/preferences", {"load_images": True}).json()["load_images"] is True
