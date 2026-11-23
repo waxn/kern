@@ -429,3 +429,41 @@ def test_old_parcels_settings_still_work(db):
     assert tracking.secret("parcels") == "OLD"
     a = tracking.allowance()
     assert a["limit"] == 120 and a["used"] == 1
+
+
+def test_saving_settings_does_no_lookups(api, ship, fake):
+    """Turning tracking on only checks the service; the worker does the lookups right after."""
+    calls, _ = fake
+    r = api.post("/api/mail/packages/tracking", {"provider": "parcels", "key": "KEY"})
+    assert r.status_code == 200
+    assert [c[2].split("?")[0] for c in calls] == ["/tracking-carriers"]  # the key check only
+    assert tracking.kicked()
+    tracking.refresh()  # what the worker runs within seconds
+    assert any(c[2] == "/trackings" for c in calls)
+    assert not tracking.kicked()
+
+
+def test_a_round_stops_starting_lookups_after_its_time(db, monkeypatch):
+    import json
+    import subprocess
+
+    for i in range(3):
+        Shipment.objects.create(carrier="ups", number=f"1Z{i}", status="in_transit", status_at=timezone.now())
+    clock = [0.0]
+    monkeypatch.setattr("time.monotonic", lambda: clock[0])
+
+    class Done:
+        returncode = 0
+        stdout = json.dumps(SCRAPED).encode()
+        stderr = b""
+
+    def run(cmd, **kw):
+        clock[0] += 20  # each carrier takes 20 s
+        return Done()
+
+    monkeypatch.setattr(scraper_mod, "binary", lambda: "/usr/bin/parcel-scraper")
+    monkeypatch.setattr(subprocess, "run", run)
+    tracking.configure("scraper")
+    tracking.refresh()
+    checked = set(Shipment.objects.filter(checked_at__isnull=False).values_list("number", flat=True))
+    assert checked == {"1Z0", "1Z1"}  # 40 s: the third waits for the next round, first in line

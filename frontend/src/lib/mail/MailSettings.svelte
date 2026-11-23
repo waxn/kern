@@ -170,7 +170,8 @@
       trackKey = '';
       trackPick = '';
       scraperUrl = scraperFallbacks = null;
-      trackMsg = provider ? (tracking.lastError ? { ok: false, text: tracking.lastError } : { ok: true, text: 'On. Packages update from the carrier from now on.' }) : null;
+      trackMsg = provider ? (tracking.lastError ? { ok: false, text: tracking.lastError }
+        : { ok: true, text: 'On. Your packages are being checked now and update over the next minute or two.' }) : null;
     } catch (e) {
       trackMsg = { ok: false, text: e.message };
     } finally {

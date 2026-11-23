@@ -1068,8 +1068,8 @@ def packages_tracking(request):
                                      int_or_none(data.get("limit")) if data.get("limit") else None,
                                      data.get("scraper") if isinstance(data.get("scraper"), dict) else None)
             if out["provider"]:
-                tracking.check_key()
-                tracking.refresh(force=True)
+                tracking.check_key()  # quick: the service answers (and takes the key); no lookups
+                tracking.kick()  # the mail worker checks every package within seconds
                 out = tracking.settings_json()
         except tracking.TrackingError as exc:
             raise ApiError(str(exc)) from exc

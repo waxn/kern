@@ -113,7 +113,11 @@ class TrackingMore(Tracker):
         out: dict = {}
         warning = ""
         known = cfg.get("tm_couriers") or {}  # number -> courier code, so detection runs once
+        cfg["_skipped"] = []
         for s in shipments:
+            if tracking.out_of_time(cfg):
+                cfg["_skipped"].append(s.number)  # next round
+                continue
             code = known.get(s.number) or cls._courier(key, s)
             if not code:
                 warning = "TrackingMore couldn't tell which carrier some packages are with."

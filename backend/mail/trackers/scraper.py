@@ -29,7 +29,7 @@ from urllib.parse import urlsplit
 from .base import Tracker
 
 FALLBACKS = ["UPU", "ParcelsApp", "Ship24", "17TRACK", "Ordertracker", "Postal Ninja", "Track718"]
-TIMEOUT = 90
+TIMEOUT = 45  # one lookup; a round stops starting new ones after tracking.ROUND_SECONDS
 
 # Our carrier ids -> the scraper catalog's ids (it detects the rest itself).
 CARRIERS = {"ups": "ups", "usps": "usps", "fedex": "fedex", "royalmail": "royal-mail", "postnord": "postnord",
@@ -176,9 +176,15 @@ class Scraper(Tracker):
 
     @classmethod
     def lookup(cls, shipments, cfg: dict):
+        from .. import tracking
+
         out: dict = {}
         remote = bool((cfg.get("scraper") or {}).get("url"))
+        cfg["_skipped"] = []
         for s in shipments:
+            if tracking.out_of_time(cfg):
+                cfg["_skipped"].append(s.number)  # next round
+                continue
             carrier = CARRIERS.get(s.carrier)
             answer = cls._remote(cfg, {"number": s.number, **({"carrier": carrier} if carrier else {})}) if remote \
                 else cls._local(cfg, s.number, carrier)

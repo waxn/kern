@@ -40,6 +40,7 @@ BATCH = 40
 EVERY = timedelta(minutes=90)
 EVERY_SOON = timedelta(minutes=25)  # out for delivery / due today: check more often
 MAX_AGE = timedelta(days=60)  # stop asking about packages this old
+ROUND_SECONDS = 30  # one round of lookups stops starting new ones after this; the rest wait a round
 
 
 class TrackingError(Exception):
@@ -235,6 +236,21 @@ def counted(name: str, number: str) -> bool:
     return sent.get("month") == _month() and number in (sent.get("numbers") or [])
 
 
+def kick() -> None:
+    """Check every package soon: the mail worker picks this up within seconds (worker.py), so
+    saving settings doesn't wait for slow carriers."""
+    Shipment.objects.filter(hidden=False).exclude(status="delivered").update(checked_at=None)
+    t = _cfg()
+    t["kick"] = timezone.now().isoformat()
+    _save(t)
+
+
+def kicked() -> bool:
+    """Whether a check was asked for since the last round (cheap: one row)."""
+    t = _cfg()
+    return bool(t.get("kick")) and (t.get("last_checked") or "") < t["kick"]
+
+
 def check_key() -> None:
     """A check that the chosen service answers (with a key: that it's accepted). Uses no quota."""
     t = _cfg()
@@ -335,16 +351,30 @@ def store(s: Shipment, r: Result | None, now) -> int:
     return int(moved)
 
 
+def skipped(cfg: dict) -> set[str]:
+    return set(cfg.get("_skipped") or ())
+
+
+def out_of_time(cfg: dict) -> bool:
+    import time as _time
+
+    return _time.monotonic() > cfg.get("_deadline", float("inf"))
+
+
 def refresh(shipments: list[Shipment] | None = None, *, force: bool = False) -> int:
     """Ask the chosen service about due (or the given) shipments. Returns how many changed status."""
     t = _cfg()
     name = t.get("provider", "")
     tr = tracker(name)
     if tr is None or (tr.NEEDS_KEY and not secret(name, t)) or not tr.available(t):
+        if kicked():
+            note(t.get("last_error", ""))  # nothing to do: answer the request so it isn't asked again
         return 0
     now = timezone.now()
     items = shipments if shipments is not None else _due(now)
     if not items and not t.get("pending"):
+        if kicked():
+            note(t.get("last_error", ""))
         return 0
     try:
         ask, warning = items, ""
@@ -359,8 +389,12 @@ def refresh(shipments: list[Shipment] | None = None, *, force: bool = False) -> 
                     ask.append(s)
             if items and len(ask) < len(items):
                 warning = "This month's allowance is used up. New packages are tracked from emails until it resets."
+        import time as _time
+
+        t["_deadline"] = _time.monotonic() + (ROUND_SECONDS if shipments is None else 120)
         results, said = tr.lookup(ask, t) if ask or t.get("pending") else ({}, "")
-        changed = sum(store(s, results.get(s.number), now) for s in ask)
+        # Packages the round had no time for keep their place in the queue for the next one.
+        changed = sum(store(s, results.get(s.number), now) for s in ask if s.number in results or s.number not in skipped(t))
         for s in items:
             if s not in ask:
                 store(s, None, now)

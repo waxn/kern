@@ -147,6 +147,7 @@ class Worker:
         last_full = time.monotonic()
         last_prune = 0.0
         last_tracking = 0.0
+        last_kick_check = 0.0
         while not self.stop.is_set():
             close_old_connections()
             # 1. Write-back queue.
@@ -170,6 +171,12 @@ class Worker:
 
             followups.check_due()
             # Live package tracking (opt-in; rate-limited per package inside).
+            if time.monotonic() - last_kick_check > 5:
+                from . import tracking
+
+                last_kick_check = time.monotonic()
+                if tracking.kicked():  # settings just saved: don't wait for the next round
+                    last_tracking = 0.0
             if time.monotonic() - last_tracking > 120:
                 from . import tracking
 
