@@ -402,6 +402,8 @@ class Shipment(models.Model):
     # For the map: {"origin": str, "destination": str, "points": [[lat, lon, place], ...]} oldest first.
     route = models.JSONField(default=dict)
     checked_at = models.DateTimeField(null=True, blank=True)
+    # Why the last live lookup found nothing ("UPS only answers a browser…"); "" when it worked.
+    track_note = models.CharField(max_length=300, blank=True, default="")
     first_seen = models.DateTimeField(auto_now_add=True)
     updated = models.DateTimeField(auto_now=True)
 

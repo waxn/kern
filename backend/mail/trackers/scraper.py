@@ -35,6 +35,34 @@ TIMEOUT = 45  # one lookup; a round stops starting new ones after tracking.ROUND
 CARRIERS = {"ups": "ups", "usps": "usps", "fedex": "fedex", "royalmail": "royal-mail", "postnord": "postnord",
             "bring": "bring-posten", "amazon": "amazon-logistics"}
 
+# Carriers the scraper can't follow at all: their tracking lives in a shop account.
+LINK_ONLY = {"amazon": "Amazon Logistics only shows tracking in your Amazon account, so it can't be checked live."}
+
+# Why a lookup found nothing (the scraper's FailureHint kinds), in words.
+FAILURES = {
+    "challenge": "{carrier} only answers a real browser, and this scraper has none. Rebuild Kern's image with the browser (the default), or use a scraper with Chromium.",
+    "not_found": "{carrier} doesn't know this number (yet).",
+    "input_required": "{carrier} wants the {field} to show this package.",
+    "rate_limited": "{carrier} is turning lookups away for now. Trying again later.",
+    "maintenance": "{carrier}'s tracking site is down for maintenance. Trying again later.",
+    "transport": "Couldn't reach {carrier}'s tracking site. Trying again later.",
+    "budget": "{carrier} took too long to answer. Trying again later.",
+    "schema": "{carrier}'s tracking page changed and the scraper can't read it yet.",
+    "indeterminate": "{carrier} gave an answer the scraper couldn't place.",
+    "invalid_input": "{carrier} says this isn't a valid tracking number.",
+}
+
+
+def failure_note(err: dict, carrier: str) -> str:
+    hint = err.get("hint") if isinstance(err.get("hint"), dict) else {}
+    kind = hint.get("kind") or ""
+    kinds = {a.get("kind") for a in err.get("attempts") or [] if isinstance(a, dict)}
+    if not kind and "challenge" in kinds:
+        kind = "challenge"
+    text = FAILURES.get(kind) or (str(err.get("error") or "") + ".").strip(". ") or "The carrier had nothing for this number."
+    return text.format(carrier=carrier or "The carrier", field=hint.get("field") or "postcode")[:300]
+
+
 # The scraper's stages (data/stages.json) -> ours.
 STAGES = {
     "pending": "ordered", "registered": "ordered", "accepted": "in_transit", "in_transit": "in_transit",
@@ -49,6 +77,16 @@ def binary() -> str:
     if path and os.path.exists(path) and (not path.endswith(".js") or shutil.which("node")):
         return path
     return shutil.which("parcel-scraper") or ""
+
+
+def has_browser() -> bool:
+    """Whether the built-in scraper has Chromium (and the packages that drive it)."""
+    path = os.environ.get("TRACKING_CHROMIUM_PATH", "")
+    exe = binary()
+    if not path or not os.path.exists(path) or not exe.endswith(".js"):
+        return bool(path and os.path.exists(path) and exe)
+    root = exe.split("/node_modules/")[0]
+    return os.path.isdir(os.path.join(root, "node_modules", "playwright-core"))
 
 
 def result_of(answer: dict):
@@ -90,6 +128,10 @@ class Scraper(Tracker):
         return bool(binary())
 
     @classmethod
+    def browser(cls) -> bool:
+        return cls.built_in() and has_browser()
+
+    @classmethod
     def available(cls, cfg: dict) -> bool:
         return bool((cfg.get("scraper") or {}).get("url")) or cls.built_in()
 
@@ -126,8 +168,10 @@ class Scraper(Tracker):
         token = tracking.secret("scraper", cfg)
 
         def error(status, body):
+            if status in (400, 404, 502) and isinstance(body, dict) and (body.get("hint") or body.get("attempts")):
+                return _NotFound(body)
             if status == 404:
-                return _NotFound()
+                return _NotFound({"hint": {"kind": "not_found"}})
             if status == 401:
                 return tracking.TrackingError("The scraper wants its token (SCRAPER_TOKEN).", status=401)
             if status == 429:
@@ -139,8 +183,8 @@ class Scraper(Tracker):
         try:
             return cls.http_json(url + "/v1/track", method="POST", body=payload, timeout=TIMEOUT,
                                  headers={"Authorization": f"Bearer {token}"} if token else {}, error=error)
-        except _NotFound:
-            return None
+        except _NotFound as nf:
+            return {"_failed": nf.args[0] if nf.args else {}}
 
     @classmethod
     def _local(cls, cfg: dict, number: str, carrier: str | None) -> dict | None:
@@ -150,14 +194,26 @@ class Scraper(Tracker):
         # The image points at the package's script (run with Node); a global install has a command.
         cmd = (["node", exe] if exe.endswith(".js") else [exe]) + ["track", number] + (["--carrier", carrier] if carrier else [])
         env = {"PATH": os.environ.get("PATH", "/usr/local/bin:/usr/bin:/bin"), "HOME": os.environ.get("HOME", "/tmp"),
+               "TMPDIR": os.environ.get("TMPDIR", "/tmp"),
                "SCRAPER_PROVIDERS": ",".join((cfg.get("scraper") or {}).get("fallbacks") or ["UPU"]),
                "SCRAPER_USER_AGENT": "Kern-Mail/1 (self-hosted mail client)"}
+        # The browser for carriers that only answer one (USPS, UPS, FedEx…): set by the image.
+        if has_browser():
+            env["TRACKING_CHROMIUM_PATH"] = os.environ["TRACKING_CHROMIUM_PATH"]
+        if os.environ.get("FLARESOLVERR_URL"):
+            env["FLARESOLVERR_URL"] = os.environ["FLARESOLVERR_URL"]
         try:
             p = subprocess.run(cmd, capture_output=True, timeout=TIMEOUT, env=env, check=False)  # noqa: S603 - fixed argv
         except (OSError, subprocess.TimeoutExpired) as e:
             raise tracking.TrackingError("The built-in scraper didn't answer.") from e
         if p.returncode != 0:
-            return None  # no source knows the parcel (yet), or the carrier turned the lookup away
+            # The command prints {"error", "attempts", "hint"} for a lookup that found nothing.
+            lines = p.stderr.decode("utf-8", "replace").strip().splitlines()
+            try:
+                err = json.loads(lines[-1]) if lines else {}
+            except ValueError:
+                err = {"error": lines[-1][:200] if lines else ""}
+            return {"_failed": err if isinstance(err, dict) else {}}
         try:
             return json.loads(p.stdout.decode("utf-8", "replace"))
         except ValueError as e:
@@ -182,13 +238,21 @@ class Scraper(Tracker):
         remote = bool((cfg.get("scraper") or {}).get("url"))
         cfg["_skipped"] = []
         for s in shipments:
+            if s.carrier in LINK_ONLY:
+                out[s.number] = tracking.Result(pending=True, note=LINK_ONLY[s.carrier])
+                continue
             if tracking.out_of_time(cfg):
                 cfg["_skipped"].append(s.number)  # next round
                 continue
             carrier = CARRIERS.get(s.carrier)
             answer = cls._remote(cfg, {"number": s.number, **({"carrier": carrier} if carrier else {})}) if remote \
                 else cls._local(cfg, s.number, carrier)
-            if answer:
+            if answer and "_failed" in answer:
+                from ..packages import CARRIERS as NAMES
+
+                name = NAMES[s.carrier].name if s.carrier in NAMES else ""
+                out[s.number] = tracking.Result(pending=True, note=failure_note(answer["_failed"], name))
+            elif answer:
                 out[s.number] = result_of(answer)
         return out, ""
 

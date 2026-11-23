@@ -71,6 +71,8 @@ data class MailPackage(
     val events: List<MailScan> = emptyList(),
     val assumed: Boolean = false,
     val route: MailRoute = MailRoute(),
+    /** Why the last live check found nothing ("UPS only answers a browser…"). */
+    val trackNote: String = "",
 )
 
 /** Where a package has been, oldest first: [lat, lon, place] (backend/mail/geo.py). */

@@ -991,6 +991,7 @@ def shipment_json(s, assumed: bool = False) -> dict:
         "threadId": tid, "hidden": s.hidden,
         "live": s.live, "location": s.location, "checkedAt": iso(s.checked_at), "events": (s.live_events or [])[:12],
         "route": s.route or {},
+        "trackNote": s.track_note,
     }
 
 

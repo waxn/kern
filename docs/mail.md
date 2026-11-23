@@ -86,9 +86,11 @@ on the local network** (off by default, see Security).
   worker (`backend/mail/tracking.py`, services in `backend/mail/trackers/`):
   - **Universal Parcel Scraper** (Peek's open-source engine) reads each carrier's own site with
     no account or key. It's built into Kern's Docker image (Node plus the npm package, pinned in
-    `backend/Dockerfile`; the mail worker runs it per lookup), or point Kern at one you run (its
-    `parcel-scraper serve` / Docker image, which has Chromium for the carriers that need a
-    browser). Fallback trackers (UPU on by default; ParcelsApp, Ship24, 17TRACK… opt-in) each
+    `backend/Dockerfile`; the mail worker runs it per lookup) with Chromium, which USPS, UPS,
+    FedEx and other carriers need (`--build-arg PARCEL_SCRAPER_BROWSER=0` leaves it out, about
+    400 MB), or point Kern at one you run (`parcel-scraper serve` or its Docker image). When a
+    lookup finds nothing, the package says why (the carrier only answers a browser, doesn't know
+    the number yet…). Amazon Logistics can't be tracked live. Fallback trackers (UPU on by default; ParcelsApp, Ship24, 17TRACK… opt-in) each
     receive the number. Licence: Apache-2.0 up to 0.1293.2 (the pinned version), PolyForm
     Noncommercial after.
   - **Parcels** (parcelsapp.com, API v5): API key, free for 300 packages a month.

@@ -467,3 +467,80 @@ def test_a_round_stops_starting_lookups_after_its_time(db, monkeypatch):
     tracking.refresh()
     checked = set(Shipment.objects.filter(checked_at__isnull=False).values_list("number", flat=True))
     assert checked == {"1Z0", "1Z1"}  # 40 s: the third waits for the next round, first in line
+
+
+def test_scraper_says_why_it_found_nothing(ship, monkeypatch):
+    import json
+    import subprocess
+
+    class Failed:
+        returncode = 1
+        stdout = b""
+        stderr = json.dumps({"error": "No history", "attempts": [{"source": "usps", "kind": "challenge", "durationMs": 900}],
+                             "hint": {"kind": "challenge"}}).encode()
+
+    monkeypatch.setattr(scraper_mod, "binary", lambda: "/usr/bin/parcel-scraper")
+    monkeypatch.setattr(subprocess, "run", lambda cmd, **kw: Failed())
+    tracking.configure("scraper")
+    assert tracking.refresh() == 0
+    ship.refresh_from_db()
+    assert ship.status == "in_transit"  # unchanged
+    assert ship.track_note.startswith("USPS only answers a real browser")
+    assert "No package was found" in tracking.settings_json()["lastError"]
+    # Shown with the package, and cleared once a lookup works.
+    assert api_json_note(ship) == ship.track_note
+
+    class Done:
+        returncode = 0
+        stdout = json.dumps(SCRAPED).encode()
+        stderr = b""
+
+    monkeypatch.setattr(subprocess, "run", lambda cmd, **kw: Done())
+    Shipment.objects.update(checked_at=None)
+    tracking.refresh()
+    ship.refresh_from_db()
+    assert ship.track_note == "" and ship.status == "out_for_delivery"
+
+
+def api_json_note(s):
+    from mail.api.views import shipment_json
+
+    return shipment_json(s)["trackNote"]
+
+
+def test_amazon_is_not_looked_up(db, monkeypatch):
+    import subprocess
+
+    s = Shipment.objects.create(carrier="amazon", number="TBA312345678901", status="in_transit", status_at=timezone.now())
+    ran = []
+    monkeypatch.setattr(scraper_mod, "binary", lambda: "/usr/bin/parcel-scraper")
+    monkeypatch.setattr(subprocess, "run", lambda cmd, **kw: ran.append(cmd))
+    tracking.configure("scraper")
+    tracking.refresh()
+    s.refresh_from_db()
+    assert ran == [] and "Amazon account" in s.track_note
+
+
+def test_browser_is_passed_only_when_there(ship, monkeypatch, tmp_path):
+    import json
+    import subprocess
+
+    seen = []
+
+    class Done:
+        returncode = 0
+        stdout = json.dumps(SCRAPED).encode()
+        stderr = b""
+
+    monkeypatch.setattr(scraper_mod, "binary", lambda: "/usr/bin/parcel-scraper")
+    monkeypatch.setattr(subprocess, "run", lambda cmd, **kw: seen.append(kw["env"]) or Done())
+    monkeypatch.setenv("TRACKING_CHROMIUM_PATH", str(tmp_path / "nope"))
+    tracking.configure("scraper")
+    tracking.refresh()
+    assert "TRACKING_CHROMIUM_PATH" not in seen[-1]
+    chromium = tmp_path / "chromium"
+    chromium.write_text("")
+    monkeypatch.setenv("TRACKING_CHROMIUM_PATH", str(chromium))
+    Shipment.objects.update(checked_at=None, status="in_transit")
+    tracking.refresh()
+    assert seen[-1]["TRACKING_CHROMIUM_PATH"] == str(chromium)

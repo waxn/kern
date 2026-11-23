@@ -569,7 +569,9 @@ private fun PackageItem(p: app.kern.data.MailPackage, nav: Nav, ctx: android.con
         Row(Modifier.padding(top = 10.dp).fillMaxWidth(), horizontalArrangement = Arrangement.spacedBy(4.dp)) {
             repeat(4) { i -> Box(Modifier.weight(1f).height(4.dp).clip(androidx.compose.foundation.shape.RoundedCornerShape(2.dp)).background(if (i <= p.step) tone else kern.border)) }
         }
-        p.events.firstOrNull()?.let { e ->
+        if (p.trackNote.isNotBlank() && live) Text(p.trackNote, style = MaterialTheme.typography.bodySmall, color = kern.orange,
+            modifier = Modifier.padding(top = 8.dp))
+        else p.events.firstOrNull()?.let { e ->
             Text(e.text + if (e.where.isNotBlank()) " · ${e.where}" else "", style = MaterialTheme.typography.bodySmall, color = kern.text2,
                 modifier = Modifier.padding(top = 8.dp), maxLines = if (open) 3 else 1, overflow = TextOverflow.Ellipsis)
         }

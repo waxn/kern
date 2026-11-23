@@ -445,8 +445,10 @@
         {:else if service === 'scraper'}
           <p class="hint">Peek's open-source <a href="https://github.com/plhery/universal-parcel-scraper" target="_blank" rel="noopener noreferrer">Universal
             Parcel Scraper</a> reads each carrier's own tracking site: no account, no key, no limit. {tracking?.scraper?.builtIn
-              ? 'It\'s built into this Kern.' : 'This Kern has no built-in copy (rebuild the Docker image), so enter the address of one you run.'}
-            Carriers that only answer a browser need its Docker image (it has Chromium) at an address below.</p>
+              ? (tracking.scraper.browser ? 'It\'s built into this Kern, with the browser that USPS, UPS and FedEx need.'
+                : 'It\'s built into this Kern, but without a browser, so USPS, UPS, FedEx and other carriers that only answer one can\'t be checked: rebuild the image (the browser is on by default), or enter the address of a scraper with Chromium.')
+              : 'This Kern has no built-in copy (rebuild the Docker image), so enter the address of one you run.'}
+            Amazon Logistics can't be tracked live (only in your Amazon account).</p>
         {/if}
         {#if isOn}
           {@const a = tracking.allowance}

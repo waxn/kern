@@ -67,6 +67,7 @@ class Result:
     origin: str = ""
     destination: str = ""
     pending: bool = False  # still being looked up: ask again next round
+    note: str = ""  # nothing found, and why (shown on the package)
 
 
 # --- settings --------------------------------------------------------------------------
@@ -152,7 +153,7 @@ def settings_json() -> dict:
         "keys": {n: bool(secret(n, t)) for n in TRACKERS},
         "country": t.get("country", ""),
         "scraper": {"url": (t.get("scraper") or {}).get("url", ""), "fallbacks": (t.get("scraper") or {}).get("fallbacks", ["UPU"]),
-                    "builtIn": TRACKERS["scraper"].built_in()},
+                    "builtIn": TRACKERS["scraper"].built_in(), "browser": TRACKERS["scraper"].browser()},
         "lastError": t.get("last_error", ""), "lastChecked": t.get("last_checked"),
         "allowance": allowance(t, name) if tr else None,
         "services": [{"id": n, "name": x.LABEL, "needsKey": x.NEEDS_KEY, "metered": x.METERED} for n, x in TRACKERS.items()],
@@ -341,10 +342,13 @@ def store(s: Shipment, r: Result | None, now) -> int:
     if r is None or r.pending:
         if s.checked_at is None or s.checked_at < now:
             s.checked_at = now
-            s.save(update_fields=["checked_at"])
+        if r is not None and r.note:
+            s.track_note = r.note[:300]
+        s.save(update_fields=["checked_at", "track_note"])
         return 0
     before = s.status
     moved = apply(s, r)
+    s.track_note = ""
     s.save()
     if moved:
         events.emit("package", id=s.pk, status=s.status, thread=s.thread_id, before=before)
@@ -398,6 +402,10 @@ def refresh(shipments: list[Shipment] | None = None, *, force: bool = False) -> 
         for s in items:
             if s not in ask:
                 store(s, None, now)
+        # Nothing found for any package asked about: say why, where the settings show it.
+        answered = [results[s.number] for s in ask if s.number in results]
+        if answered and all(r.note and not r.scans for r in answered) and not (said or warning):
+            said = "No package was found this round. " + answered[0].note
         note(said or warning)
         return changed
     except TrackingError as e:

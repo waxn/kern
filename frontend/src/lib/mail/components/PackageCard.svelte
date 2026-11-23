@@ -28,7 +28,9 @@
   async function refresh() {
     refreshing = true;
     try {
-      await packageAction(p, 'refresh');
+      const r = await packageAction(p, 'refresh');
+      if (r?.trackNote) toast(r.trackNote, { kind: 'error', timeout: 9000 });
+      else if (r) toast(`${r.statusLabel}${r.location ? ' · ' + r.location : ''}`);
     } catch (e) {
       errorToast(e);
     } finally {
@@ -59,7 +61,9 @@
     <div class="what">
       <div class="ledger who">{p.carrierName}{#if p.merchant}<span class="sep">·</span>{p.merchant}{/if}</div>
       <div class="when display">{arrivalLabel(p)}</div>
-      {#if scans[0]}
+      {#if p.trackNote && parcels.tracking?.hasKey}
+        <div class="scan note" title="From the last live check">{p.trackNote}</div>
+      {:else if scans[0]}
         <div class="scan"><span class="live" title="Live from the carrier"></span>{scans[0].text}{#if scans[0].where}<span class="faint"> · {scans[0].where}</span>{/if}</div>
       {:else if !compact && p.subject}<div class="subj faint">{p.subject}</div>{/if}
     </div>
@@ -150,6 +154,7 @@
   .mono { font-family: var(--mono); font-size: 12.5px; color: var(--text-2); letter-spacing: .02em; user-select: all; }
   .grow { flex: 1; }
   .scan { font-size: 12.5px; margin-top: 3px; color: var(--text-2); white-space: nowrap; overflow: hidden; text-overflow: ellipsis; display: flex; align-items: center; gap: 6px; }
+  .scan.note { color: var(--warn); white-space: normal; }
   .live { flex: none; width: 6px; height: 6px; border-radius: 50%; background: var(--ok); box-shadow: 0 0 0 3px color-mix(in srgb, var(--ok) 20%, transparent); }
   .scans { list-style: none; margin: 0; padding: 0 0 0 4px; display: grid; gap: 6px; border-left: 2px solid var(--line); }
   .scans li { display: grid; grid-template-columns: 108px 1fr; gap: 10px; padding-left: 10px; font-size: 12.5px; color: var(--text-2); }
