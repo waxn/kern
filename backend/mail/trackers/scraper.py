@@ -29,7 +29,9 @@ from urllib.parse import urlsplit
 from .base import Tracker
 
 FALLBACKS = ["UPU", "ParcelsApp", "Ship24", "17TRACK", "Ordertracker", "Postal Ninja", "Track718"]
-TIMEOUT = 45  # one lookup; a round stops starting new ones after tracking.ROUND_SECONDS
+def timeout() -> int:
+    """One lookup's limit: reads through the browser service (TRAWL) can take a minute or two."""
+    return 150 if os.environ.get("FLARESOLVERR_URL") else 60
 
 # Our carrier ids -> the scraper catalog's ids (it detects the rest itself).
 CARRIERS = {"ups": "ups", "usps": "usps", "fedex": "fedex", "royalmail": "royal-mail", "postnord": "postnord",
@@ -40,7 +42,7 @@ LINK_ONLY = {"amazon": "Amazon Logistics only shows tracking in your Amazon acco
 
 # Why a lookup found nothing (the scraper's FailureHint kinds), in words.
 FAILURES = {
-    "challenge": "{carrier} only answers a real browser, and this scraper has none. Rebuild Kern's image with the browser (the default), or use a scraper with Chromium.",
+    "challenge": "{carrier} only answers a real browser, and this scraper has none. Rebuild Kern's image with the browser (the default).",
     "not_found": "{carrier} doesn't know this number (yet).",
     "input_required": "{carrier} wants the {field} to show this package.",
     "rate_limited": "{carrier} is turning lookups away for now. Trying again later.",
@@ -59,7 +61,16 @@ def failure_note(err: dict, carrier: str) -> str:
     kinds = {a.get("kind") for a in err.get("attempts") or [] if isinstance(a, dict)}
     if not kind and "challenge" in kinds:
         kind = "challenge"
-    text = FAILURES.get(kind) or (str(err.get("error") or "") + ".").strip(". ") or "The carrier had nothing for this number."
+    said = str(err.get("error") or "")
+    if ("FLARESOLVERR_URL" in said or "browser fallback" in said) and not has_trawl():
+        # USPS, FedEx and a few others are read only through the scraper's browser service (TRAWL);
+        # a local Chromium doesn't help them.
+        text = ("{carrier} can only be read through the scraper's browser service (TRAWL), which this Kern doesn't run: "
+                "start the trawl service in docker-compose.yml, or use Parcels or TrackingMore.")
+    elif kind == "challenge" and (has_browser() or has_trawl()):
+        text = "{carrier} turned the browser away (a bot check). Trying again later; a fallback below may get through."
+    else:
+        text = FAILURES.get(kind) or (said + ".").strip(". ") or "The carrier had nothing for this number."
     return text.format(carrier=carrier or "The carrier", field=hint.get("field") or "postcode")[:300]
 
 
@@ -77,6 +88,11 @@ def binary() -> str:
     if path and os.path.exists(path) and (not path.endswith(".js") or shutil.which("node")):
         return path
     return shutil.which("parcel-scraper") or ""
+
+
+def has_trawl() -> bool:
+    """Whether the scraper's browser service (TRAWL) is wired up (docker-compose sets it)."""
+    return bool(os.environ.get("FLARESOLVERR_URL"))
 
 
 def has_browser() -> bool:
@@ -132,6 +148,10 @@ class Scraper(Tracker):
         return cls.built_in() and has_browser()
 
     @classmethod
+    def trawl(cls) -> bool:
+        return has_trawl()
+
+    @classmethod
     def available(cls, cfg: dict) -> bool:
         return bool((cfg.get("scraper") or {}).get("url")) or cls.built_in()
 
@@ -181,7 +201,7 @@ class Scraper(Tracker):
             return e
 
         try:
-            return cls.http_json(url + "/v1/track", method="POST", body=payload, timeout=TIMEOUT,
+            return cls.http_json(url + "/v1/track", method="POST", body=payload, timeout=timeout(),
                                  headers={"Authorization": f"Bearer {token}"} if token else {}, error=error)
         except _NotFound as nf:
             return {"_failed": nf.args[0] if nf.args else {}}
@@ -203,7 +223,7 @@ class Scraper(Tracker):
         if os.environ.get("FLARESOLVERR_URL"):
             env["FLARESOLVERR_URL"] = os.environ["FLARESOLVERR_URL"]
         try:
-            p = subprocess.run(cmd, capture_output=True, timeout=TIMEOUT, env=env, check=False)  # noqa: S603 - fixed argv
+            p = subprocess.run(cmd, capture_output=True, timeout=timeout(), env=env, check=False)  # noqa: S603 - fixed argv
         except (OSError, subprocess.TimeoutExpired) as e:
             raise tracking.TrackingError("The built-in scraper didn't answer.") from e
         if p.returncode != 0:

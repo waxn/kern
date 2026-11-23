@@ -28,7 +28,12 @@ export function mapView(points, width, height, { pad = 22, maxZoom = 11, minZoom
   const cy = (Math.max(...xy.map((p) => p.y)) + Math.min(...xy.map((p) => p.y))) / 2;
   const ox = cx - width / 2;
   const oy = cy - height / 2;
-  // Tiles one zoom level deeper drawn at half size: sharp on high-density screens.
+  return { z, ox, oy, tiles: tilesFor(z, ox, oy, width, height), tileSize: TILE / 2,
+    pts: xy.map((p, i) => ({ x: p.x - ox, y: p.y - oy, place: ll[i][2] || '' })) };
+}
+
+// Tiles one zoom level deeper drawn at half size: sharp on high-density screens.
+function tilesFor(z, ox, oy, width, height) {
   const zt = Math.min(z + 1, 18);
   const k = 2 ** (zt - z);
   const size = TILE / k;
@@ -41,5 +46,30 @@ export function mapView(points, width, height, { pad = 22, maxZoom = 11, minZoom
       tiles.push({ key: `${zt}/${tx}/${ty}`, z: zt, x, y: ty, left: Math.round(tx * size - ox), top: Math.round(ty * size - oy) });
     }
   }
-  return { z, tiles, tileSize: size, pts: xy.map((p, i) => ({ x: p.x - ox, y: p.y - oy, place: ll[i][2] || '' })) };
+  return tiles;
+}
+
+// Several routes on one map (the Packages page): fitted to all of them together. With none,
+// a world view (centre: [lat, lon], for the reader's own region when known).
+// routes: [{ id, points: [[lat, lon, place?], ...], ... }] -> { tiles, tileSize, routes: [{ ...route, pts }] }
+export function mapViewRoutes(routes, width, height, { center = [30, 0], ...opts } = {}) {
+  if (width <= 0 || height <= 0) return null;
+  const valid = (p) => Array.isArray(p) && Number.isFinite(p[0]) && Number.isFinite(p[1]);
+  const all = (routes || []).flatMap((r) => (r.points || []).filter(valid));
+  let z, ox, oy;
+  if (all.length) {
+    ({ z, ox, oy } = mapView(all, width, height, opts));
+  } else {
+    z = Math.max(1, Math.min(4, Math.ceil(Math.log2(width / TILE))));
+    const c = project(center[0], center[1], z);
+    ox = c.x - width / 2;
+    oy = Math.max(0, Math.min(TILE * 2 ** z - height, c.y - height / 2));
+  }
+  return {
+    z, tiles: tilesFor(z, ox, oy, width, height), tileSize: TILE / 2,
+    routes: (routes || []).map((r) => ({ ...r, pts: (r.points || []).filter(valid).map((p) => {
+      const q = project(p[0], p[1], z);
+      return { x: q.x - ox, y: q.y - oy, place: p[2] || '' };
+    }) })),
+  };
 }

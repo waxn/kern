@@ -438,6 +438,7 @@ fun MailPackagesScreen(ws: Workspace, nav: Nav) {
     var data by remember { mutableStateOf<app.kern.data.MailPackages?>(null) }
     var error by remember { mutableStateOf<String?>(null) }
     var refreshing by remember { mutableStateOf(false) }
+    val listState = androidx.compose.foundation.lazy.rememberLazyListState()
     suspend fun load() {
         try { data = ws.kern.mailPackages(); error = null } catch (e: Exception) { error = e.message }
     }
@@ -449,10 +450,29 @@ fun MailPackagesScreen(ws: Workspace, nav: Nav) {
             d == null && error == null -> Loading()
             d == null -> ErrorState(error!!) { scope.launch { load() } }
             else -> PullToRefreshBox(isRefreshing = refreshing, onRefresh = { scope.launch { refreshing = true; load(); refreshing = false } }) {
-                LazyColumn(Modifier.fillMaxSize(), contentPadding = androidx.compose.foundation.layout.PaddingValues(start = 16.dp, end = 16.dp, bottom = 32.dp)) {
+                LazyColumn(Modifier.fillMaxSize(), state = listState, contentPadding = androidx.compose.foundation.layout.PaddingValues(start = 16.dp, end = 16.dp, bottom = 32.dp)) {
                     if (d.tracking?.hasKey != true) item {
                         Text("Live tracking is off: shops rarely email when something arrives. Turn it on in Kern's web app, Settings → Mail → Package tracking (built in with no account, or Parcels or TrackingMore).",
                             style = MaterialTheme.typography.bodySmall, color = kern.text3, modifier = Modifier.padding(bottom = 12.dp))
+                    }
+                    if (d.active.isNotEmpty() || d.delivered.isNotEmpty()) item {
+                        // Every package on one map: on the way, and today's deliveries.
+                        val recent = java.time.Instant.now().minusSeconds(2 * 86400)
+                        val routes = d.active.map { MapRoute(it.id, it.route.latLon, false, it.merchant.ifBlank { it.carrierName }) } +
+                            d.delivered.filter { p -> p.route.latLon.isNotEmpty() && runCatching { java.time.Instant.parse(p.statusAt ?: "") }.getOrNull()?.isAfter(recent) == true }
+                                .map { MapRoute(it.id, it.route.latLon, true, it.merchant.ifBlank { it.carrierName }) }
+                        RoutesMap(routes, d.map, height = 230.dp, onPick = { id ->
+                            // Items above the cards: the tracking tip, this map, the section labels.
+                            val before = (if (d.tracking?.hasKey != true) 1 else 0) + 1
+                            val a = d.active.indexOfFirst { it.id == id }
+                            val dl = d.delivered.indexOfFirst { it.id == id }
+                            val i = when {
+                                a >= 0 -> before + 1 + a
+                                dl >= 0 -> before + (if (d.active.isNotEmpty()) 1 + d.active.size else 0) + 1 + dl
+                                else -> -1
+                            }
+                            if (i >= 0) scope.launch { listState.animateScrollToItem(i) }
+                        })
                     }
                     if (d.active.isEmpty() && d.delivered.isEmpty()) item { EmptyState(Icons.Outlined.LocalShipping, "No packages", "Shipping emails with a tracking number show up here.") }
                     if (d.active.isNotEmpty()) item { SectionLabel("On the way") }
@@ -470,7 +490,17 @@ fun MailPackagesScreen(ws: Workspace, nav: Nav) {
 /** The package map: a line through its scans on map tiles from Kern's server, dark or light with
  *  the theme (the web's PackageMap.svelte / mapView.js, same math). */
 @Composable
-private fun PackageMap(points: List<Pair<Double, Double>>, delivered: Boolean, map: app.kern.data.MailMapInfo, height: androidx.compose.ui.unit.Dp = 170.dp) {
+private fun PackageMap(points: List<Pair<Double, Double>>, delivered: Boolean, map: app.kern.data.MailMapInfo, height: androidx.compose.ui.unit.Dp = 170.dp) =
+    RoutesMap(listOf(MapRoute(0, points, delivered, "")), map, height, labels = false)
+
+/** One package's way on the map: its scans' places oldest first, and its name by the marker. */
+internal data class MapRoute(val id: Long, val points: List<Pair<Double, Double>>, val delivered: Boolean, val label: String)
+
+/** Routes on map tiles from Kern's server, dark or light with the theme (the web's PackageMap.svelte /
+ *  mapView.js, same math). With no places yet it shows the world. */
+@Composable
+private fun RoutesMap(routes: List<MapRoute>, map: app.kern.data.MailMapInfo, height: androidx.compose.ui.unit.Dp = 170.dp,
+                      labels: Boolean = true, onPick: ((Long) -> Unit)? = null) {
     val ctx = LocalContext.current
     val k = kern
     val theme = if (k.dark) "dark" else "light"
@@ -485,19 +515,30 @@ private fun PackageMap(points: List<Pair<Double, Double>>, delivered: Boolean, m
             val s = Math.sin(lat * Math.PI / 180).coerceIn(-0.9999, 0.9999)
             return ((lon + 180) / 360 * size) to ((0.5 - Math.log((1 + s) / (1 - s)) / (4 * Math.PI)) * size)
         }
+        val all = routes.flatMap { it.points }
         val pad = 22.0
-        var z = 9
-        if (points.size > 1) {
-            z = 11
-            while (z > 1) {
-                val xy = points.map { project(it.first, it.second, z) }
-                if (xy.maxOf { it.first } - xy.minOf { it.first } <= w - 2 * pad && xy.maxOf { it.second } - xy.minOf { it.second } <= h - 2 * pad) break
-                z--
+        var z: Int
+        val ox: Double
+        val oy: Double
+        if (all.isEmpty()) {
+            z = Math.ceil(Math.log(w / tile) / Math.log(2.0)).toInt().coerceIn(1, 4)
+            val c = project(30.0, 0.0, z)
+            ox = c.first - w / 2
+            oy = (c.second - h / 2).coerceIn(0.0, maxOf(0.0, tile * (1 shl z) - h))
+        } else {
+            z = 9
+            if (all.size > 1) {
+                z = 11
+                while (z > 1) {
+                    val xy = all.map { project(it.first, it.second, z) }
+                    if (xy.maxOf { it.first } - xy.minOf { it.first } <= w - 2 * pad && xy.maxOf { it.second } - xy.minOf { it.second } <= h - 2 * pad) break
+                    z--
+                }
             }
+            val xy = all.map { project(it.first, it.second, z) }
+            ox = (xy.maxOf { it.first } + xy.minOf { it.first }) / 2 - w / 2
+            oy = (xy.maxOf { it.second } + xy.minOf { it.second }) / 2 - h / 2
         }
-        val xy = points.map { project(it.first, it.second, z) }
-        val ox = (xy.maxOf { it.first } + xy.minOf { it.first }) / 2 - w / 2
-        val oy = (xy.maxOf { it.second } + xy.minOf { it.second }) / 2 - h / 2
         // One zoom level deeper at half size: sharp on the phone's dense screen.
         val zt = minOf(z + 1, 18)
         val size = tile / 2
@@ -521,26 +562,42 @@ private fun PackageMap(points: List<Pair<Double, Double>>, delivered: Boolean, m
                     modifier = Modifier.offset((tx * size - ox).dp, (ty * size - oy).dp).size(size.dp))
             }
         }
+        val placed = routes.map { r -> r to r.points.map { p -> project(p.first, p.second, z).let { (it.first - ox) to (it.second - oy) } } }
         val accent = k.accent
         val page = k.bg
         val done = k.green
         androidx.compose.foundation.Canvas(Modifier.fillMaxSize()) {
-            val pts = xy.map { androidx.compose.ui.geometry.Offset(((it.first - ox).dp).toPx(), ((it.second - oy).dp).toPx()) }
-            if (pts.size > 1) {
-                val path = androidx.compose.ui.graphics.Path().apply { moveTo(pts[0].x, pts[0].y); pts.drop(1).forEach { lineTo(it.x, it.y) } }
-                val round = androidx.compose.ui.graphics.drawscope.Stroke(width = 6.dp.toPx(), cap = androidx.compose.ui.graphics.StrokeCap.Round, join = androidx.compose.ui.graphics.StrokeJoin.Round)
-                drawPath(path, page.copy(alpha = 0.7f), style = round)
-                drawPath(path, accent, style = androidx.compose.ui.graphics.drawscope.Stroke(width = 3.dp.toPx(), cap = androidx.compose.ui.graphics.StrokeCap.Round, join = androidx.compose.ui.graphics.StrokeJoin.Round))
-            }
-            pts.dropLast(1).forEach {
-                drawCircle(page, 3.5.dp.toPx(), it)
-                drawCircle(accent, 3.5.dp.toPx(), it, style = androidx.compose.ui.graphics.drawscope.Stroke(2.dp.toPx()))
-            }
-            pts.lastOrNull()?.let {
-                drawCircle(page, 8.5.dp.toPx(), it)
-                drawCircle(if (delivered) done else accent, 6.dp.toPx(), it)
+            for ((r, xy) in placed) {
+                val pts = xy.map { androidx.compose.ui.geometry.Offset(it.first.dp.toPx(), it.second.dp.toPx()) }
+                val color = if (r.delivered) done else accent
+                if (pts.size > 1) {
+                    val path = androidx.compose.ui.graphics.Path().apply { moveTo(pts[0].x, pts[0].y); pts.drop(1).forEach { lineTo(it.x, it.y) } }
+                    drawPath(path, page.copy(alpha = 0.7f), style = androidx.compose.ui.graphics.drawscope.Stroke(width = 6.dp.toPx(), cap = androidx.compose.ui.graphics.StrokeCap.Round, join = androidx.compose.ui.graphics.StrokeJoin.Round))
+                    drawPath(path, color, style = androidx.compose.ui.graphics.drawscope.Stroke(width = 3.dp.toPx(), cap = androidx.compose.ui.graphics.StrokeCap.Round, join = androidx.compose.ui.graphics.StrokeJoin.Round))
+                }
+                pts.dropLast(1).forEach {
+                    drawCircle(page, 3.5.dp.toPx(), it)
+                    drawCircle(color, 3.5.dp.toPx(), it, style = androidx.compose.ui.graphics.drawscope.Stroke(2.dp.toPx()))
+                }
+                pts.lastOrNull()?.let {
+                    drawCircle(page, 8.5.dp.toPx(), it)
+                    drawCircle(color, 6.dp.toPx(), it)
+                }
             }
         }
+        if (labels) for ((r, xy) in placed) {
+            val now = xy.lastOrNull() ?: continue
+            if (r.label.isBlank()) continue
+            Text(r.label, style = MaterialTheme.typography.labelSmall, color = if (r.delivered) k.text2 else k.text, maxLines = 1,
+                modifier = Modifier.offset((now.first + 10).dp, (now.second - 10).dp)
+                    .clip(androidx.compose.foundation.shape.RoundedCornerShape(10.dp))
+                    .background(k.bg.copy(alpha = 0.88f))
+                    .then(if (onPick != null) Modifier.clickable { onPick(r.id) } else Modifier)
+                    .padding(horizontal = 7.dp, vertical = 2.dp))
+        }
+        if (labels && all.isEmpty()) Text("Packages appear here once live tracking has their scans.", style = MaterialTheme.typography.bodySmall,
+            color = k.text2, modifier = Modifier.align(Alignment.Center).clip(androidx.compose.foundation.shape.RoundedCornerShape(12.dp))
+                .background(k.bg.copy(alpha = 0.85f)).padding(horizontal = 12.dp, vertical = 6.dp))
         Text(map.attribution, style = MaterialTheme.typography.labelSmall.copy(fontSize = 8.sp), color = k.text3,
             modifier = Modifier.align(Alignment.BottomEnd).padding(horizontal = 4.dp, vertical = 1.dp))
     }

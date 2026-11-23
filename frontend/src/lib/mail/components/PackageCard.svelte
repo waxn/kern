@@ -55,7 +55,7 @@
   }
 </script>
 
-<article class="pkg {tone}" class:compact aria-label={`${p.carrierName} package ${p.number}: ${p.statusLabel}`}>
+<article id="pkg-{p.id}" class="pkg {tone}" class:compact aria-label={`${p.carrierName} package ${p.number}: ${p.statusLabel}`}>
   <div class="top">
     <span class="ico"><Icon name={p.status === 'delivered' ? 'check' : p.step >= 2 ? 'truck' : 'package'} size={compact ? 16 : 18} /></span>
     <div class="what">

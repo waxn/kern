@@ -4,6 +4,7 @@
   import { loadPackages, parcels } from '../state.svelte.js';
   import { daysUntil, packageSummary } from '../packages.js';
   import PackageCard from '../components/PackageCard.svelte';
+  import PackageMap from '../components/PackageMap.svelte';
   import Icon from '../components/Icon.svelte';
 
   onMount(loadPackages);
@@ -18,6 +19,18 @@
       return da - db;
     }),
   );
+  // Every package on one map: on the way first, and today's deliveries.
+  const routes = $derived([
+    ...active.map((p) => ({ id: p.id, points: p.route?.points || [], delivered: false, label: p.merchant || p.carrierName })),
+    ...parcels.delivered.filter((p) => p.route?.points?.length && p.statusAt && new Date(p.statusAt) > new Date(Date.now() - 2 * 86400e3))
+      .map((p) => ({ id: p.id, points: p.route.points, delivered: true, label: p.merchant || p.carrierName })),
+  ]);
+  function pick(id) {
+    const el = document.getElementById(`pkg-${id}`);
+    el?.scrollIntoView({ behavior: 'smooth', block: 'center' });
+    el?.classList.add('flash');
+    setTimeout(() => el?.classList.remove('flash'), 1200);
+  }
   const ledger = $derived.by(() => {
     const n = parcels.active.length;
     const parts = [n ? `${n} on the way` : 'nothing on the way', ...packageSummary(parcels.active)];
@@ -41,6 +54,10 @@
     {:else if parcels.tracking?.lastError}
       <div class="tip warn"><Icon name="shieldAlert" size={16} /><span>Live tracking: {parcels.tracking.lastError}</span>
         <a class="btn small" href="/settings?s=mail#tracking">Settings</a></div>
+    {/if}
+
+    {#if active.length || parcels.delivered.length}
+      <div class="overview"><PackageMap {routes} height={260} map={parcels.map} onpick={pick} /></div>
     {/if}
 
     {#if parcels.loaded && !active.length && !parcels.delivered.length}
@@ -85,6 +102,8 @@
   a.btn { text-decoration: none; color: var(--text); }
   @media (max-width: 760px) { .inner { padding: 48px 16px 80px; } }
   section { margin-top: 18px; }
+  .overview { margin: 4px 0 6px; }
+  .grid :global(.pkg.flash) { box-shadow: 0 0 0 2px var(--accent); transition: box-shadow .3s; }
   h2 { color: var(--text-3); margin: 0 0 10px; }
   .grid { display: grid; gap: 10px; }
   .empty { text-align: center; padding: 50px 20px; max-width: 460px; margin: 0 auto; }

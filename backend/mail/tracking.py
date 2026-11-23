@@ -40,7 +40,8 @@ BATCH = 40
 EVERY = timedelta(minutes=90)
 EVERY_SOON = timedelta(minutes=25)  # out for delivery / due today: check more often
 MAX_AGE = timedelta(days=60)  # stop asking about packages this old
-ROUND_SECONDS = 30  # one round of lookups stops starting new ones after this; the rest wait a round
+ROUND_SECONDS = 120  # one round of lookups stops starting new ones after this; the rest wait a round
+# (it runs in its own thread in the mail worker, so a slow carrier never holds up mail)
 
 
 class TrackingError(Exception):
@@ -153,7 +154,8 @@ def settings_json() -> dict:
         "keys": {n: bool(secret(n, t)) for n in TRACKERS},
         "country": t.get("country", ""),
         "scraper": {"url": (t.get("scraper") or {}).get("url", ""), "fallbacks": (t.get("scraper") or {}).get("fallbacks", ["UPU"]),
-                    "builtIn": TRACKERS["scraper"].built_in(), "browser": TRACKERS["scraper"].browser()},
+                    "builtIn": TRACKERS["scraper"].built_in(), "browser": TRACKERS["scraper"].browser(),
+                    "trawl": TRACKERS["scraper"].trawl()},
         "lastError": t.get("last_error", ""), "lastChecked": t.get("last_checked"),
         "allowance": allowance(t, name) if tr else None,
         "services": [{"id": n, "name": x.LABEL, "needsKey": x.NEEDS_KEY, "metered": x.METERED} for n, x in TRACKERS.items()],

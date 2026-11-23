@@ -96,6 +96,25 @@ class Worker:
             except Exception:  # noqa: BLE001
                 pass
 
+    def track_packages(self):
+        """Live package tracking, in its own thread: a carrier that takes a minute to answer
+        (through a browser) must never hold up mail. Checks every package soon after settings
+        change (tracking.kick) and every two minutes otherwise; each package has its own pace
+        inside tracking.refresh."""
+        from . import tracking
+
+        last = 0.0
+        while not self.stop.is_set():
+            try:
+                if time.monotonic() - last > 120 or tracking.kicked():
+                    last = time.monotonic()
+                    tracking.refresh()
+            except Exception:  # noqa: BLE001 - tracking must never take the worker down
+                log.exception("package tracking failed")
+            finally:
+                close_old_connections()
+            self.stop.wait(5)
+
     def run_forever(self):
         if self.require_config and not _mail_cfg()["USERNAME"]:
             log.error("MAIL_USERNAME not set; worker idle. See .env.example.")
@@ -106,6 +125,10 @@ class Worker:
         if self.use_idle:
             self.idle = IdleWatcher(self.connect, self.wake, self.stop)
             self.idle.start()
+        if self.use_idle:  # the real worker (tests drive refresh themselves)
+            from kern import tenancy
+
+            tenancy.spawn(self.track_packages)
         backoff = 5
         while not self.stop.is_set():
             server: MailServer | None = None
@@ -146,8 +169,6 @@ class Worker:
         engine.sync_all()
         last_full = time.monotonic()
         last_prune = 0.0
-        last_tracking = 0.0
-        last_kick_check = 0.0
         while not self.stop.is_set():
             close_old_connections()
             # 1. Write-back queue.
@@ -171,17 +192,6 @@ class Worker:
 
             followups.check_due()
             # Live package tracking (opt-in; rate-limited per package inside).
-            if time.monotonic() - last_kick_check > 5:
-                from . import tracking
-
-                last_kick_check = time.monotonic()
-                if tracking.kicked():  # settings just saved: don't wait for the next round
-                    last_tracking = 0.0
-            if time.monotonic() - last_tracking > 120:
-                from . import tracking
-
-                tracking.refresh()
-                last_tracking = time.monotonic()
             # 3. Push from IDLE: sync INBOX quickly.
             self.sync_pushed(engine)
             # 4. Periodic full sweep (other folders, flags changed elsewhere).

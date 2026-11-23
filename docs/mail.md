@@ -86,11 +86,13 @@ on the local network** (off by default, see Security).
   worker (`backend/mail/tracking.py`, services in `backend/mail/trackers/`):
   - **Universal Parcel Scraper** (Peek's open-source engine) reads each carrier's own site with
     no account or key. It's built into Kern's Docker image (Node plus the npm package, pinned in
-    `backend/Dockerfile`; the mail worker runs it per lookup) with Chromium, which USPS, UPS,
-    FedEx and other carriers need (`--build-arg PARCEL_SCRAPER_BROWSER=0` leaves it out, about
-    400 MB), or point Kern at one you run (`parcel-scraper serve` or its Docker image). When a
-    lookup finds nothing, the package says why (the carrier only answers a browser, doesn't know
-    the number yet…). Amazon Logistics can't be tracked live. Fallback trackers (UPU on by default; ParcelsApp, Ship24, 17TRACK… opt-in) each
+    `backend/Dockerfile`; the mail worker runs it per lookup, in a thread of its own so slow
+    carriers never hold up mail). USPS, FedEx, Royal Mail and other carriers only answer a real
+    browser session, which the scraper gets from its browser service, TRAWL: the `trawl` service
+    in `docker-compose.yml`, built from the scraper's repository at the same version (AGPL-3.0,
+    private, no ports published; `KERN_TRAWL_URL=` in .env goes without). Or point Kern at a
+    scraper you run (`parcel-scraper serve`). When a lookup finds nothing, the package says why.
+    Amazon Logistics can't be tracked live. Fallback trackers (UPU on by default; ParcelsApp, Ship24, 17TRACK… opt-in) each
     receive the number. Licence: Apache-2.0 up to 0.1293.2 (the pinned version), PolyForm
     Noncommercial after.
   - **Parcels** (parcelsapp.com, API v5): API key, free for 300 packages a month.
@@ -99,7 +101,8 @@ on the local network** (off by default, see Security).
   For metered services Kern counts each package once a month (as they bill) and shows what's left
   next to the key, using the service's own figures when it reports them. Only tracking numbers,
   and your country for numbers that need one, are sent.
-- A **map** on each package draws a line through its scans (places looked up once with
+- A **map** on the Packages page shows every package at once (click a name to jump to its card),
+  and each package's card has its own. It draws a line through the scans (places looked up once with
   OpenStreetMap's Nominatim, `backend/mail/geo.py`) on tiles the server fetches and caches, so the
   browser never contacts the map service. Sources (Settings → Mail → Package map): OpenStreetMap
   (no key, toned to the theme), Esri's grey canvas (no key, dark and light), MapTiler, Stadia Maps,

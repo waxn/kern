@@ -458,7 +458,7 @@ def test_a_round_stops_starting_lookups_after_its_time(db, monkeypatch):
         stderr = b""
 
     def run(cmd, **kw):
-        clock[0] += 20  # each carrier takes 20 s
+        clock[0] += 70  # each carrier takes 70 s
         return Done()
 
     monkeypatch.setattr(scraper_mod, "binary", lambda: "/usr/bin/parcel-scraper")
@@ -466,7 +466,7 @@ def test_a_round_stops_starting_lookups_after_its_time(db, monkeypatch):
     tracking.configure("scraper")
     tracking.refresh()
     checked = set(Shipment.objects.filter(checked_at__isnull=False).values_list("number", flat=True))
-    assert checked == {"1Z0", "1Z1"}  # 40 s: the third waits for the next round, first in line
+    assert checked == {"1Z0", "1Z1"}  # 140 s: the third waits for the next round, first in line
 
 
 def test_scraper_says_why_it_found_nothing(ship, monkeypatch):
@@ -486,6 +486,8 @@ def test_scraper_says_why_it_found_nothing(ship, monkeypatch):
     ship.refresh_from_db()
     assert ship.status == "in_transit"  # unchanged
     assert ship.track_note.startswith("USPS only answers a real browser")
+    assert scraper_mod.failure_note({"error": "USPS challenged direct tracking; configure FLARESOLVERR_URL for browser fallback",
+                                     "hint": {"kind": "challenge"}}, "USPS").startswith("USPS can only be read through the scraper's browser service")
     assert "No package was found" in tracking.settings_json()["lastError"]
     # Shown with the package, and cleared once a lookup works.
     assert api_json_note(ship) == ship.track_note
