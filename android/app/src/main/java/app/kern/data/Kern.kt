@@ -181,7 +181,9 @@ class Kern(val api: Api) {
         api.get("/mail/changes" + qs("since" to since, "wait" to wait))
     suspend fun mailCheckNow(): JsonObject = api.post("/mail/check")
     /** colors: "dark" or "light" fits the email to the theme on the server; null shows it as sent. */
-    suspend fun mailBody(id: Long, colors: String? = null): MailBody = api.get("/mail/messages/$id/body" + qs("colors" to colors))
+    /** images: load this message's remote images through the server's image proxy (the "Load images" button). */
+    suspend fun mailBody(id: Long, colors: String? = null, images: Boolean = false): MailBody =
+        api.get("/mail/messages/$id/body" + qs("colors" to colors, "images" to if (images) 1 else null))
     suspend fun mailPackages(): MailPackages = api.get("/mail/packages")
     suspend fun mailPackageAction(id: Long, action: String): MailPackage = api.post("/mail/packages/$id", jsonOf("action" to action))
     suspend fun mailInfo(): MailInfo = api.get("/mail/info")

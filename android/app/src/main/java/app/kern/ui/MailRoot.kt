@@ -7,6 +7,8 @@ import android.net.Uri
 import android.os.Build
 import androidx.activity.compose.rememberLauncherForActivityResult
 import androidx.activity.result.contract.ActivityResultContracts
+import androidx.compose.animation.core.CubicBezierEasing
+import androidx.compose.animation.core.tween
 import androidx.compose.animation.fadeIn
 import androidx.compose.animation.fadeOut
 import androidx.compose.animation.slideInHorizontally
@@ -71,6 +73,9 @@ import app.kern.ui.screens.MailThreadScreen
 import app.kern.ui.screens.MailPackagesScreen
 import app.kern.ui.theme.kern
 import kotlinx.coroutines.flow.MutableStateFlow
+
+private const val PUSH_MS = 340
+private val PUSH_EASE = CubicBezierEasing(0.2f, 0f, 0f, 1f)
 
 /** Routes Kern Mail has itself; everything else (pages, tasks, tags…) opens in Kern. */
 private fun mailRoute(r: String) = r == "mail" || r.startsWith("mail?") || r.startsWith("mail/") || r.startsWith("chat/") || r == "mail-settings"
@@ -148,10 +153,12 @@ private fun MailSignedIn(ws: Workspace, launch: MutableStateFlow<Launch?>, host:
         NavHost(
             nav, startDestination = "mail?view={view}",
             modifier = Modifier.fillMaxSize().padding(bottom = pad.calculateBottomPadding()),
-            enterTransition = { fadeIn() + slideInHorizontally { it / 12 } },
-            exitTransition = { fadeOut() },
-            popEnterTransition = { fadeIn() },
-            popExitTransition = { fadeOut() + slideOutHorizontally { it / 12 } },
+            // A conversation slides in over the list, which drifts a little behind it; Back (and the
+            // predictive back gesture, which drives these as the finger moves) runs it in reverse.
+            enterTransition = { slideInHorizontally(tween(PUSH_MS, easing = PUSH_EASE)) { it } },
+            exitTransition = { slideOutHorizontally(tween(PUSH_MS, easing = PUSH_EASE)) { -it / 4 } + fadeOut(tween(PUSH_MS), targetAlpha = 0.7f) },
+            popEnterTransition = { slideInHorizontally(tween(PUSH_MS, easing = PUSH_EASE)) { -it / 4 } + fadeIn(tween(PUSH_MS), initialAlpha = 0.7f) },
+            popExitTransition = { slideOutHorizontally(tween(PUSH_MS, easing = PUSH_EASE)) { it } },
         ) {
             composable("mail?view={view}", arguments = listOf(
                 navArgument("view") { type = NavType.StringType; nullable = true; defaultValue = null },

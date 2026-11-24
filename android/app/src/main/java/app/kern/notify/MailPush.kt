@@ -138,6 +138,18 @@ class MailPushService : Service() {
     private suspend fun handle(r: MailChanges) {
         val ctx = this
         val k = app.kern
+        // The web app's other notifications, in its words.
+        for (e in r.events) when (e.kind) {
+            "package" -> Notifications.PACKAGE_NEWS[e.status]?.let { text ->
+                Notifications.showMailNews(ctx, e.kind, e.id, "Package update", text, e.thread?.let { "mail/thread/$it" } ?: "mail/packages")
+            }
+            "snooze_wake" -> e.thread?.let { t ->
+                Notifications.showMailNews(ctx, e.kind, t, "Snoozed mail is back", "A conversation you snoozed is back in your Inbox.", "mail/thread/$t")
+            }
+            "nudge" -> e.thread?.let { t ->
+                Notifications.showMailNews(ctx, e.kind, t, "No reply yet", "A conversation you were waiting on has had no reply.", "mail/thread/$t")
+            }
+        }
         val fresh = r.events.filter { it.kind == "message" && it.new }.mapNotNull { it.thread }.distinct()
         val touched = r.events.flatMap { it.threads + listOfNotNull(it.thread) }.toSet()
         val notified = app.settings.mailNotified

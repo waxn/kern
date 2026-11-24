@@ -143,6 +143,9 @@ data class MailBody(
     val text: String? = null,
     val textHtml: String? = null,
     val remoteImages: Int = 0,
+    /** Remote images are shown (asked for, always-load is on, or the sender is trusted). */
+    val imagesLoaded: Boolean = false,
+    val trustedSender: Boolean = false,
     /** How the server fitted its colors to the theme (backend/mail/colors.py). */
     val colors: String = "none",
 )
@@ -193,6 +196,8 @@ data class MailEvent(
     val thread: Long? = null,
     val threads: List<Long> = emptyList(),
     val new: Boolean = false,
+    /** A package's new status ("out_for_delivery", "delivered"…), on "package" events. */
+    val status: String = "",
 )
 
 @Serializable

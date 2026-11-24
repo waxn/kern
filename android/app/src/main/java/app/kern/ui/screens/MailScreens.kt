@@ -10,6 +10,23 @@ import androidx.compose.foundation.background
 import androidx.compose.foundation.border
 import androidx.compose.foundation.clickable
 import androidx.compose.foundation.horizontalScroll
+import androidx.compose.foundation.combinedClickable
+import androidx.compose.foundation.layout.widthIn
+import androidx.compose.foundation.shape.CircleShape
+import androidx.compose.material.icons.filled.Star
+import androidx.compose.material.icons.outlined.AttachFile
+import androidx.compose.material.icons.outlined.Check
+import androidx.compose.material.icons.outlined.DarkMode
+import androidx.compose.material.icons.outlined.ExpandLess
+import androidx.compose.material.icons.outlined.ExpandMore
+import androidx.compose.material.icons.outlined.GppMaybe
+import androidx.compose.material.icons.outlined.Image
+import androidx.compose.material.icons.outlined.Inbox
+import androidx.compose.material.icons.outlined.LightMode
+import androidx.compose.material.icons.outlined.NotificationsOff
+import androidx.compose.material.icons.outlined.Report
+import androidx.compose.material.icons.outlined.Schedule
+import androidx.compose.material3.HorizontalDivider
 import androidx.compose.foundation.layout.Arrangement
 import androidx.compose.material.icons.outlined.Settings
 import kotlinx.serialization.decodeFromString
@@ -157,16 +174,6 @@ internal fun who(t: MailThread, me: String): String {
     return if (people.size == 2) "$na, $nb" else "$na … $nb"
 }
 
-private fun shortWhen(iso: String?): String {
-    val d = runCatching { ZonedDateTime.parse(iso).withZoneSameInstant(java.time.ZoneId.systemDefault()) }.getOrNull() ?: return ""
-    val today = LocalDate.now()
-    return when {
-        d.toLocalDate() == today -> "%02d:%02d".format(d.hour, d.minute)
-        d.year == today.year -> "${d.dayOfMonth} ${d.month.name.take(3).lowercase().replaceFirstChar { it.uppercase() }}"
-        else -> d.toLocalDate().toString()
-    }
-}
-
 @OptIn(ExperimentalMaterial3Api::class)
 @Composable
 fun MailScreen(ws: Workspace, nav: Nav, initialView: String? = null, standalone: Boolean = false) {
@@ -178,6 +185,7 @@ fun MailScreen(ws: Workspace, nav: Nav, initialView: String? = null, standalone:
     var view by remember { mutableStateOf(initialView ?: "inbox") }
     var query by remember { mutableStateOf("") }
     var searching by remember { mutableStateOf(false) }
+    var unreadOnly by remember { mutableStateOf(false) }
     val threads = remember { mutableStateListOf<MailThread>() }
     var next by remember { mutableStateOf<String?>(null) }
     var loading by remember { mutableStateOf(true) }
@@ -207,7 +215,10 @@ fun MailScreen(ws: Workspace, nav: Nav, initialView: String? = null, standalone:
         try {
             val r = kotlinx.coroutines.coroutineScope {
                 val f = if (folders.isEmpty()) async { runCatching { ws.kern.mailFolders().folders }.getOrNull() } else null
-                val t = async { ws.kern.mailThreads(apiView(view), q = query.takeIf { searching && it.isNotBlank() }, cursor = if (more) next else null) }
+                val t = async {
+                    ws.kern.mailThreads(apiView(view), q = query.takeIf { searching && it.isNotBlank() }, cursor = if (more) next else null,
+                        unread = unreadOnly && !searching && view !in setOf("snoozed", "sent", "drafts"))
+                }
                 f?.await()?.let { folders = it }
                 t.await()
             }
@@ -215,7 +226,7 @@ fun MailScreen(ws: Workspace, nav: Nav, initialView: String? = null, standalone:
             threads.addAll(r.threads)
             next = r.next
             error = null
-            if (!more && view == "inbox" && !searching) runCatching {
+            if (!more && view == "inbox" && !searching && !unreadOnly) runCatching {
                 ctx.app.settings.mailInboxCache = app.kern.data.KernJson.encodeToString(kotlinx.serialization.builtins.ListSerializer(MailThread.serializer()), r.threads)
             }
         } catch (e: ApiError) {
@@ -230,7 +241,7 @@ fun MailScreen(ws: Workspace, nav: Nav, initialView: String? = null, standalone:
     LaunchedEffect(Unit) {
         status = runCatching { ws.kern.mailStatus() }.getOrElse { error = it.message; null }
     }
-    LaunchedEffect(status, view) {
+    LaunchedEffect(status, view, unreadOnly) {
         val s = status ?: return@LaunchedEffect
         if (s.twoFactor.enabled && s.twoFactor.sessionVerified && (s.connected || !s.account?.str("address").isNullOrBlank())) {
             loading = true
@@ -264,6 +275,90 @@ fun MailScreen(ws: Workspace, nav: Nav, initialView: String? = null, standalone:
         }
     }
 
+    val h24 = android.text.format.DateFormat.is24HourFormat(ctx)
+    // A list read from the top stays at the top when new mail or the package strip arrives above
+    // (a keyed list otherwise keeps the old first row in place and hides what's new above it).
+    val listState = androidx.compose.foundation.lazy.rememberLazyListState()
+    var pinned by remember { mutableStateOf(true) }
+    LaunchedEffect(listState) {
+        androidx.compose.runtime.snapshotFlow { listState.isScrollInProgress }.collect { moving ->
+            if (!moving) pinned = listState.firstVisibleItemIndex == 0 && listState.firstVisibleItemScrollOffset == 0
+        }
+    }
+    LaunchedEffect(threads.firstOrNull()?.id, parcels.isNotEmpty(), view) {
+        if (pinned && (listState.firstVisibleItemIndex != 0 || listState.firstVisibleItemScrollOffset != 0)) listState.scrollToItem(0)
+    }
+    var snoozing by remember { mutableStateOf<MailThread?>(null) }
+    var menuFor by remember { mutableStateOf<Long?>(null) }
+
+    fun replace(t: MailThread, with: MailThread) {
+        val i = threads.indexOfFirst { it.id == t.id }
+        if (i >= 0) threads[i] = with
+    }
+
+    /** Swipe right: Archive, or back to the Inbox from Archive and Trash (the web's rule). */
+    fun moveOut(t: MailThread) {
+        val toInbox = view == "archive" || view == "trash"
+        val context = folders.firstOrNull { it.role == view }?.id
+        threads.removeAll { it.id == t.id }
+        scope.launch {
+            try {
+                if (toInbox) ws.kern.mailAction(listOf(t.id), "inbox")
+                else ws.kern.mailAction(listOf(t.id), "archive", *(if (context != null) arrayOf("context" to context) else emptyArray()))
+                val r = snack.host.showSnackbar(if (toInbox) "Moved to Inbox" else "Archived", actionLabel = "Undo", duration = androidx.compose.material3.SnackbarDuration.Short)
+                if (r == androidx.compose.material3.SnackbarResult.ActionPerformed) {
+                    ws.kern.mailAction(listOf(t.id), if (!toInbox) "inbox" else if (view == "trash") "trash" else "archive")
+                    load()
+                }
+            } catch (e: Exception) { snack.error(e); load() }
+        }
+    }
+
+    fun snooze(t: MailThread, at: java.time.LocalDateTime) {
+        snoozing = null
+        if (view != "snoozed") threads.removeAll { it.id == t.id }
+        scope.launch {
+            try {
+                ws.kern.mailAction(listOf(t.id), "snooze", "until" to at.isoOffset())
+                val r = snack.host.showSnackbar("Snoozed until " + snoozeLabel(at, h24), actionLabel = "Undo", duration = androidx.compose.material3.SnackbarDuration.Short)
+                if (r == androidx.compose.material3.SnackbarResult.ActionPerformed) { ws.kern.mailAction(listOf(t.id), "unsnooze"); load() }
+                else if (view == "snoozed") load()
+            } catch (e: Exception) { snack.error(e); load() }
+        }
+    }
+
+    fun star(t: MailThread) {
+        replace(t, t.copy(starred = !t.starred))
+        scope.launch {
+            runCatching { ws.kern.mailAction(listOf(t.id), if (t.starred) "unstar" else "star") }
+                .onFailure { replace(t, t); snack.error(it) }
+            if (view == "starred" && t.starred) threads.removeAll { it.id == t.id }
+        }
+    }
+
+    /** The long-press menu on a row. */
+    fun rowAction(t: MailThread, action: String) {
+        when (action) {
+            "read", "unread" -> {
+                replace(t, t.copy(unread = if (action == "read") 0 else maxOf(1, t.count)))
+                scope.launch { runCatching { ws.kern.mailAction(listOf(t.id), action) }.onFailure { replace(t, t); snack.error(it) } }
+            }
+            "archive", "inbox" -> moveOut(t)
+            "snooze" -> snoozing = t
+            "star" -> star(t)
+            "trash" -> {
+                threads.removeAll { it.id == t.id }
+                scope.launch {
+                    try {
+                        ws.kern.mailAction(listOf(t.id), "trash")
+                        val r = snack.host.showSnackbar("Moved to Trash", actionLabel = "Undo", duration = androidx.compose.material3.SnackbarDuration.Short)
+                        if (r == androidx.compose.material3.SnackbarResult.ActionPerformed) { ws.kern.mailAction(listOf(t.id), "inbox"); load() }
+                    } catch (e: Exception) { snack.error(e); load() }
+                }
+            }
+        }
+    }
+
     val title = when (view) {
         "starred" -> "Starred"
         "all" -> "All mail"
@@ -280,7 +375,17 @@ fun MailScreen(ws: Workspace, nav: Nav, initialView: String? = null, standalone:
                     IconButton(onClick = { searching = false; query = ""; scope.launch { load() } }) { Icon(Icons.Outlined.Close, "Close search") }
                 }
             } else {
-                KTopBar(title, onBack = if (standalone) null else ({ nav.back() }), subtitle = me.ifBlank { null }) {
+                // The web's subtitle: how much is unread in the Inbox, how many are snoozed.
+                val inboxUnread = folders.firstOrNull { it.role == "inbox" }?.unread
+                val subtitle = when {
+                    view == "inbox" && inboxUnread != null -> if (inboxUnread > 0) "%,d unread".format(inboxUnread) else "all read"
+                    view == "snoozed" && !loading -> "${threads.size} snoozed"
+                    else -> me.ifBlank { null }
+                }
+                KTopBar(title, onBack = if (standalone) null else ({ nav.back() }), subtitle = subtitle) {
+                    if (view !in setOf("snoozed", "sent", "drafts")) {
+                        Segmented(listOf("All", "Unread"), if (unreadOnly) 1 else 0, Modifier.padding(end = 4.dp)) { unreadOnly = it == 1 }
+                    }
                     IconButton(onClick = { searching = true }) { Icon(Icons.Outlined.Search, "Search", tint = kern.text2) }
                     if (standalone) IconButton(onClick = { nav.go("mail-settings") }) { Icon(Icons.Outlined.Settings, "Settings", tint = kern.text2) }
                 }
@@ -302,7 +407,7 @@ fun MailScreen(ws: Workspace, nav: Nav, initialView: String? = null, standalone:
                                 }
                             } + folders.filter { it.role.isBlank() }.map { "f${it.id}" to it.displayName }
                             chips.forEach { (v, label) ->
-                                Pill(label, if (v == view) kern.accent else kern.text2, onClick = { view = v })
+                                Pill(label, if (v == view) kern.accent else kern.text2, onClick = { pinned = true; view = v })
                             }
                             Pill("Packages" + if (parcels.isNotEmpty()) " ${parcels.size}" else "", kern.text2, onClick = { nav.go("mail/packages") })
                         }
@@ -324,34 +429,47 @@ fun MailScreen(ws: Workspace, nav: Nav, initialView: String? = null, standalone:
                             loading && threads.isEmpty() -> Loading()
                             error != null && threads.isEmpty() -> ErrorState(error!!) { scope.launch { loading = true; load() } }
                             threads.isEmpty() -> EmptyState(Icons.Outlined.Email, if (searching) "No matches" else "Nothing here", null)
-                            else -> LazyColumn(Modifier.fillMaxSize()) {
+                            else -> LazyColumn(Modifier.fillMaxSize(), state = listState) {
                                 if (view == "inbox" && !searching && parcels.isNotEmpty()) item(key = "parcels") {
                                     ParcelStrip(parcels) { p -> nav.go(p.threadId?.let { "mail/thread/$it" } ?: "mail/packages") }
                                 }
-                                items(threads, key = { it.id }) { t ->
-                                    SwipeRow(
-                                        t,
-                                        canArchive = view != "archive" && view != "trash" && view != "junk",
-                                        onArchive = {
-                                            val inbox = folders.firstOrNull { it.role == view }?.id
-                                            threads.remove(t)
-                                            scope.launch {
-                                                try {
-                                                    ws.kern.mailAction(listOf(t.id), "archive", *(if (inbox != null) arrayOf("context" to inbox) else emptyArray()))
-                                                    val r = snack.host.showSnackbar("Archived", actionLabel = "Undo", duration = androidx.compose.material3.SnackbarDuration.Short)
-                                                    if (r == androidx.compose.material3.SnackbarResult.ActionPerformed) {
-                                                        ws.kern.mailAction(listOf(t.id), "inbox"); load()
-                                                    }
-                                                } catch (e: Exception) { snack.error(e); load() }
+                                // Like the web: headings by day, except for Snoozed (sorted by wake-up time).
+                                val grouped = view != "snoozed"
+                                val today = LocalDate.now()
+                                var lastGroup: String? = null
+                                val seenGroups = HashSet<String>()
+                                for (t in threads.toList()) {
+                                    if (grouped) {
+                                        val g = timeGroup(t.lastDate, today)
+                                        if (g != lastGroup) {
+                                            lastGroup = g
+                                            val k = if (seenGroups.add(g)) "g:$g" else "g:$g:${t.id}"
+                                            stickyHeader(key = k, contentType = "group") {
+                                                Column(Modifier.fillMaxWidth().background(kern.bg)) {
+                                                    Ledger(g, Modifier.padding(start = 24.dp, end = 16.dp, top = 12.dp, bottom = 5.dp))
+                                                    HorizontalDivider(color = kern.border)
+                                                }
                                             }
-                                        },
-                                        onToggleRead = {
-                                            val i = threads.indexOf(t)
-                                            val read = t.unread > 0
-                                            if (i >= 0) threads[i] = t.copy(unread = if (read) 0 else 1)
-                                            scope.launch { runCatching { ws.kern.mailAction(listOf(t.id), if (read) "read" else "unread") }.onFailure { snack.error(it) } }
-                                        },
-                                    ) { ThreadRow(t, me) { nav.go("mail/thread/${t.id}") } }
+                                        }
+                                    }
+                                    item(key = t.id, contentType = "thread") {
+                                        val toInbox = view == "archive" || view == "trash"
+                                        SwipeRow(
+                                            right = SwipeAction(if (toInbox) "Inbox" else "Archive", if (toInbox) Icons.Outlined.Inbox else Icons.Outlined.Archive,
+                                                kern.green, leaves = true) { moveOut(t) },
+                                            left = if (view == "drafts" || view == "sent") null else
+                                                SwipeAction("Snooze", Icons.Outlined.Schedule, kern.accent, leaves = false) { snoozing = t },
+                                            modifier = Modifier.animateItem(fadeInSpec = null, placementSpec = null, fadeOutSpec = null), // the row folds itself away
+                                        ) {
+                                            ThreadRow(t, me, h24,
+                                                onStar = { star(t) },
+                                                onLongClick = { menuFor = t.id },
+                                                menu = menuFor == t.id,
+                                                onMenuClose = { menuFor = null },
+                                                onMenu = { action -> menuFor = null; rowAction(t, action) },
+                                            ) { nav.go("mail/thread/${t.id}") }
+                                        }
+                                    }
                                 }
                                 if (next != null) item {
                                     LaunchedEffect(next) { load(more = true) }
@@ -371,6 +489,7 @@ fun MailScreen(ws: Workspace, nav: Nav, initialView: String? = null, standalone:
                 modifier = Modifier.align(Alignment.BottomEnd).padding(20.dp),
             ) { Icon(Icons.Outlined.Edit, "Write") }
         }
+        snoozing?.let { t -> SnoozeSheet(h24, onDismiss = { snoozing = null }) { at -> snooze(t, at) } }
     }
 }
 
@@ -649,58 +768,95 @@ private fun PackageItem(p: app.kern.data.MailPackage, nav: Nav, ctx: android.con
     }
 }
 
-/** Swipe right to archive, left to mark read/unread (like Gmail). */
+/** One conversation in the list, laid out like the web's ThreadList row. */
 @Composable
-private fun SwipeRow(t: MailThread, canArchive: Boolean, onArchive: () -> Unit, onToggleRead: () -> Unit, content: @Composable () -> Unit) {
-    val state = androidx.compose.material3.rememberSwipeToDismissBoxState(
-        confirmValueChange = { v ->
-            when (v) {
-                androidx.compose.material3.SwipeToDismissBoxValue.StartToEnd -> { if (canArchive) onArchive(); canArchive }
-                androidx.compose.material3.SwipeToDismissBoxValue.EndToStart -> { onToggleRead(); false }
-                else -> false
-            }
-        },
-        positionalThreshold = { it * 0.35f },
-    )
-    androidx.compose.material3.SwipeToDismissBox(
-        state,
-        enableDismissFromStartToEnd = canArchive,
-        backgroundContent = {
-            val dir = state.dismissDirection
-            val archive = dir == androidx.compose.material3.SwipeToDismissBoxValue.StartToEnd
-            val color = if (archive) kern.green else kern.accent
-            Row(Modifier.fillMaxSize().background(kern.tint(color)).padding(horizontal = 24.dp),
-                horizontalArrangement = if (archive) Arrangement.Start else Arrangement.End, verticalAlignment = Alignment.CenterVertically) {
-                if (dir != androidx.compose.material3.SwipeToDismissBoxValue.Settled) {
-                    Icon(if (archive) Icons.Outlined.Archive else Icons.Outlined.MarkEmailUnread, null, tint = color)
-                    Spacer(Modifier.width(8.dp))
-                    Text(if (archive) "Archive" else if (t.unread > 0) "Mark read" else "Mark unread", color = color, style = MaterialTheme.typography.labelLarge)
+private fun ThreadRow(
+    t: MailThread, me: String, h24: Boolean,
+    onStar: () -> Unit, onLongClick: () -> Unit, menu: Boolean, onMenuClose: () -> Unit, onMenu: (String) -> Unit,
+    onClick: () -> Unit,
+) {
+    val k = kern
+    val unread = t.unread > 0
+    Column(Modifier.fillMaxWidth()) {
+        Box {
+            Row(
+                Modifier.fillMaxWidth()
+                    .combinedClickable(onClick = onClick, onLongClick = onLongClick)
+                    .padding(start = 24.dp, end = 6.dp, top = 10.dp, bottom = 10.dp),
+                verticalAlignment = Alignment.Top,
+            ) {
+                Column(Modifier.weight(1f)) {
+                    Row(verticalAlignment = Alignment.CenterVertically) {
+                        Text(
+                            androidx.compose.ui.text.buildAnnotatedString {
+                                append(who(t, me))
+                                if (t.count > 1) {
+                                    pushStyle(androidx.compose.ui.text.SpanStyle(color = k.text3, fontWeight = FontWeight.Normal, fontSize = 12.sp))
+                                    append("  ${t.count}")
+                                    pop()
+                                }
+                            },
+                            maxLines = 1, overflow = TextOverflow.Ellipsis, fontSize = 14.5.sp, lineHeight = 19.sp,
+                            color = if (unread) k.text else k.text2,
+                            fontWeight = if (unread) FontWeight.SemiBold else FontWeight.Normal,
+                            modifier = Modifier.weight(1f),
+                        )
+                        if (t.risk == "high" || t.risk == "medium") {
+                            Spacer(Modifier.width(6.dp))
+                            Icon(Icons.Outlined.GppMaybe, if (t.risk == "high") "High phishing risk" else "Medium phishing risk",
+                                tint = if (t.risk == "high") k.danger else k.orange, modifier = Modifier.size(15.dp))
+                        }
+                        if (t.hasAttachments) {
+                            Spacer(Modifier.width(6.dp))
+                            Icon(Icons.Outlined.AttachFile, "Has attachments", tint = k.text3, modifier = Modifier.size(14.dp))
+                        }
+                        if (t.muted) {
+                            Spacer(Modifier.width(6.dp))
+                            Icon(Icons.Outlined.NotificationsOff, "Muted", tint = k.text3, modifier = Modifier.size(14.dp))
+                        }
+                        Spacer(Modifier.width(8.dp))
+                        if (t.snoozeUntil != null) {
+                            Icon(Icons.Outlined.Schedule, "Snoozed", tint = k.accent, modifier = Modifier.size(12.dp))
+                            Spacer(Modifier.width(3.dp))
+                            Text(snoozeLabel(t.snoozeUntil, h24), fontSize = 11.5.sp, lineHeight = 15.sp, color = k.accent, maxLines = 1)
+                        } else {
+                            Text(mailDate(t.lastDate, h24), fontSize = 12.sp, lineHeight = 15.sp, maxLines = 1,
+                                color = if (unread) k.accent else k.text3, fontWeight = if (unread) FontWeight.SemiBold else FontWeight.Normal)
+                        }
+                    }
+                    Spacer(Modifier.height(3.dp))
+                    // Subject and preview on one line, the subject taking at most 72% (the web's line2).
+                    androidx.compose.foundation.layout.BoxWithConstraints(Modifier.fillMaxWidth()) {
+                        val cap = maxWidth * 0.72f
+                        Row {
+                            Text(t.subject.ifBlank { "(no subject)" }, maxLines = 1, overflow = TextOverflow.Ellipsis, fontSize = 14.sp, lineHeight = 19.sp,
+                                color = if (unread) k.text else k.text2, fontWeight = if (unread) FontWeight.SemiBold else FontWeight.Normal,
+                                modifier = Modifier.widthIn(max = cap))
+                            val preview = if (t.hit.isNotBlank()) hitText(t.hit, k.text) else androidx.compose.ui.text.AnnotatedString(t.snippet)
+                            if (preview.isNotBlank()) {
+                                Spacer(Modifier.width(8.dp))
+                                Text(preview, maxLines = 1, overflow = TextOverflow.Ellipsis, fontSize = 14.sp, lineHeight = 19.sp, color = k.text3, modifier = Modifier.weight(1f))
+                            }
+                        }
+                    }
+                }
+                Box(Modifier.padding(start = 2.dp).size(36.dp).clip(CircleShape).clickable(onClick = onStar), contentAlignment = Alignment.Center) {
+                    Icon(if (t.starred) Icons.Filled.Star else Icons.Outlined.StarBorder, if (t.starred) "Unstar" else "Star",
+                        tint = if (t.starred) k.yellow else k.text3.copy(alpha = 0.6f), modifier = Modifier.size(18.dp))
                 }
             }
-        },
-    ) { Box(Modifier.background(kern.bg)) { content() } }
-}
-
-@Composable
-private fun ThreadRow(t: MailThread, me: String, onClick: () -> Unit) {
-    val unread = t.unread > 0
-    Row(Modifier.fillMaxWidth().clickable(onClick = onClick).padding(horizontal = 16.dp, vertical = 10.dp), verticalAlignment = Alignment.Top) {
-        Box(Modifier.padding(top = 7.dp).size(7.dp).background(if (unread) kern.accent else androidx.compose.ui.graphics.Color.Transparent, androidx.compose.foundation.shape.CircleShape))
-        Spacer(Modifier.width(10.dp))
-        Column(Modifier.weight(1f)) {
-            Row(verticalAlignment = Alignment.CenterVertically) {
-                Text(who(t, me) + if (t.count > 1) "  ${t.count}" else "", maxLines = 1, overflow = TextOverflow.Ellipsis,
-                    fontWeight = if (unread) FontWeight.SemiBold else FontWeight.Normal, style = MaterialTheme.typography.bodyLarge, modifier = Modifier.weight(1f))
-                if (t.risk == "high" || t.risk == "medium") Icon(Icons.Outlined.WarningAmber, "Possible phishing", tint = kern.danger, modifier = Modifier.size(15.dp))
-                if (t.starred) Icon(Icons.Outlined.Star, "Starred", tint = kern.yellow, modifier = Modifier.size(15.dp))
-                Spacer(Modifier.width(6.dp))
-                Text(shortWhen(t.lastDate), style = MaterialTheme.typography.bodySmall, color = if (unread) kern.accent else kern.text3)
+            // The unread dot sits in the left margin, like the web.
+            Box(Modifier.padding(start = 10.dp, top = 17.dp).size(6.dp).clip(CircleShape).background(if (unread) k.accent else androidx.compose.ui.graphics.Color.Transparent))
+            DropdownMenu(expanded = menu, onDismissRequest = onMenuClose, offset = androidx.compose.ui.unit.DpOffset(24.dp, 0.dp)) {
+                DropdownMenuItem(text = { Text(if (unread) "Mark read" else "Mark unread") }, leadingIcon = { Icon(Icons.Outlined.MarkEmailUnread, null) },
+                    onClick = { onMenu(if (unread) "read" else "unread") })
+                DropdownMenuItem(text = { Text(if (t.starred) "Unstar" else "Star") }, leadingIcon = { Icon(Icons.Outlined.StarBorder, null) }, onClick = { onMenu("star") })
+                DropdownMenuItem(text = { Text("Snooze…") }, leadingIcon = { Icon(Icons.Outlined.Schedule, null) }, onClick = { onMenu("snooze") })
+                DropdownMenuItem(text = { Text("Archive") }, leadingIcon = { Icon(Icons.Outlined.Archive, null) }, onClick = { onMenu("archive") })
+                DropdownMenuItem(text = { Text("Move to Trash") }, leadingIcon = { Icon(Icons.Outlined.Delete, null) }, onClick = { onMenu("trash") })
             }
-            Text(t.subject.ifBlank { "(no subject)" }, maxLines = 1, overflow = TextOverflow.Ellipsis,
-                fontWeight = if (unread) FontWeight.SemiBold else FontWeight.Normal, style = MaterialTheme.typography.bodyMedium, color = kern.text)
-            if (t.hit.isNotBlank()) Text(hitText(t.hit, kern.text), maxLines = 1, overflow = TextOverflow.Ellipsis, style = MaterialTheme.typography.bodySmall, color = kern.text3)
-            else Text(t.snippet, maxLines = 1, overflow = TextOverflow.Ellipsis, style = MaterialTheme.typography.bodySmall, color = kern.text3)
         }
+        HorizontalDivider(color = k.border)
     }
 }
 
@@ -708,9 +864,13 @@ private fun ThreadRow(t: MailThread, me: String, onClick: () -> Unit) {
 fun MailThreadScreen(ws: Workspace, nav: Nav, id: Long) {
     val scope = rememberCoroutineScope()
     val snack = LocalSnack.current
+    val ctx = LocalContext.current
+    val h24 = android.text.format.DateFormat.is24HourFormat(ctx)
     var detail by remember { mutableStateOf<MailThreadDetail?>(null) }
     var error by remember { mutableStateOf<String?>(null) }
     var menu by remember { mutableStateOf(false) }
+    var snoozing by remember { mutableStateOf(false) }
+    var mine by remember { mutableStateOf<Set<String>>(emptySet()) }
     val open = remember { mutableStateListOf<Long>() }
 
     suspend fun load() {
@@ -727,10 +887,14 @@ fun MailThreadScreen(ws: Workspace, nav: Nav, id: Long) {
             error = e.message
         }
     }
-    val ctx = LocalContext.current
     LaunchedEffect(id) {
         app.kern.notify.Notifications.cancelMailThread(ctx, id)
         load()
+    }
+    LaunchedEffect(Unit) {
+        runCatching { ws.kern.mailInfo() }.getOrNull()?.let { i ->
+            mine = (listOf(i.address) + i.identities.map { it.address }).filter { it.isNotBlank() }.map { it.lowercase() }.toSet()
+        }
     }
     var asking by remember { mutableStateOf(false) }
     fun ask() = scope.launch {
@@ -756,19 +920,15 @@ fun MailThreadScreen(ws: Workspace, nav: Nav, id: Long) {
                 IconButton(onClick = { act("archive", "Archived") }) { Icon(Icons.Outlined.Archive, "Archive", tint = kern.text2) }
                 IconButton(onClick = { act("trash", "Moved to Trash") }) { Icon(Icons.Outlined.Delete, "Trash", tint = kern.text2) }
                 IconButton(onClick = { act(if (t.starred) "unstar" else "star", if (t.starred) "Unstarred" else "Starred") }) {
-                    Icon(if (t.starred) Icons.Outlined.Star else Icons.Outlined.StarBorder, if (t.starred) "Unstar" else "Star", tint = if (t.starred) kern.yellow else kern.text2)
+                    Icon(if (t.starred) Icons.Filled.Star else Icons.Outlined.StarBorder, if (t.starred) "Unstar" else "Star", tint = if (t.starred) kern.yellow else kern.text2)
                 }
                 Box {
                     IconButton(onClick = { menu = true }) { Icon(Icons.Outlined.MoreVert, "More", tint = kern.text2) }
                     DropdownMenu(expanded = menu, onDismissRequest = { menu = false }) {
                         DropdownMenuItem(text = { Text("Mark unread") }, leadingIcon = { Icon(Icons.Outlined.MarkEmailUnread, null) },
                             onClick = { menu = false; scope.launch { runCatching { ws.kern.mailAction(listOf(id), "unread") }; nav.back() } })
-                        DropdownMenuItem(text = { Text("Snooze until tomorrow 8:00") }, leadingIcon = { Icon(Icons.Outlined.Snooze, null) },
-                            onClick = {
-                                menu = false
-                                val at = LocalDate.now().plusDays(1).atTime(LocalTime.of(8, 0)).atZone(java.time.ZoneId.systemDefault()).toOffsetDateTime().toString()
-                                act("snooze", "Snoozed until tomorrow", "until" to at)
-                            })
+                        DropdownMenuItem(text = { Text("Snooze…") }, leadingIcon = { Icon(Icons.Outlined.Schedule, null) },
+                            onClick = { menu = false; snoozing = true })
                         DropdownMenuItem(text = { Text("Make a task for tomorrow") }, leadingIcon = { Icon(Icons.Outlined.TaskAlt, null) },
                             onClick = {
                                 menu = false
@@ -780,7 +940,7 @@ fun MailThreadScreen(ws: Workspace, nav: Nav, id: Long) {
                                     } catch (e: Exception) { snack.error(e) }
                                 }
                             })
-                        DropdownMenuItem(text = { Text("Report spam") }, leadingIcon = { Icon(Icons.Outlined.WarningAmber, null) },
+                        DropdownMenuItem(text = { Text("Report spam") }, leadingIcon = { Icon(Icons.Outlined.Report, null) },
                             onClick = { menu = false; act("spam", "Moved to Junk") })
                     }
                 }
@@ -791,29 +951,46 @@ fun MailThreadScreen(ws: Workspace, nav: Nav, id: Long) {
             d == null && error == null -> Loading()
             d == null -> ErrorState(error!!) { scope.launch { error = null; load() } }
             else -> LazyColumn(Modifier.fillMaxSize()) {
-                item {
-                    Text(d.thread.subject.ifBlank { "(no subject)" }, style = MaterialTheme.typography.headlineSmall, color = kern.text,
-                        modifier = Modifier.padding(start = 20.dp, end = 20.dp, bottom = 8.dp))
+                item(key = "subject") {
+                    Column(Modifier.fillMaxWidth().padding(start = 16.dp, end = 16.dp, top = 2.dp, bottom = 14.dp)) {
+                        Text(d.thread.subject.ifBlank { "(no subject)" }, fontSize = 19.sp, lineHeight = 24.sp, fontWeight = FontWeight(650), color = kern.text)
+                        val summary = threadSummary(d.messages, h24)
+                        if (summary.isNotBlank()) Text(summary, fontSize = 12.sp, color = kern.text3, modifier = Modifier.padding(top = 6.dp))
+                    }
                 }
-                val risky = d.messages.firstOrNull { it.risk.level == "high" || it.risk.level == "medium" }
-                if (risky != null) item {
-                    Row(Modifier.padding(horizontal = 16.dp, vertical = 4.dp).fillMaxWidth()
-                        .background(kern.tint(kern.danger), androidx.compose.foundation.shape.RoundedCornerShape(10.dp)).padding(12.dp),
-                        verticalAlignment = Alignment.CenterVertically) {
-                        Icon(Icons.Outlined.WarningAmber, null, tint = kern.danger)
+                d.thread.snoozeUntil?.let { until ->
+                    item(key = "snoozed") {
+                        Row(Modifier.padding(start = 16.dp, end = 16.dp, bottom = 12.dp).fillMaxWidth()
+                            .clip(androidx.compose.foundation.shape.RoundedCornerShape(10.dp)).background(kern.tint(kern.accent))
+                            .clickable { snoozing = true }.padding(horizontal = 14.dp, vertical = 10.dp),
+                            verticalAlignment = Alignment.CenterVertically) {
+                            Icon(Icons.Outlined.Schedule, null, tint = kern.accent, modifier = Modifier.size(16.dp))
+                            Spacer(Modifier.width(10.dp))
+                            Text("Snoozed until " + snoozeLabel(until, h24), style = MaterialTheme.typography.bodyMedium, modifier = Modifier.weight(1f))
+                            Ledger("Change", color = kern.accent)
+                        }
+                    }
+                }
+                val risky = d.messages.firstOrNull { !it.fromMe && (it.risk.level == "high" || it.risk.level == "medium") }
+                if (risky != null) item(key = "risk") {
+                    val tone = if (risky.risk.level == "high") kern.danger else kern.orange
+                    Row(Modifier.padding(start = 16.dp, end = 16.dp, bottom = 12.dp).fillMaxWidth()
+                        .background(kern.tint(tone), androidx.compose.foundation.shape.RoundedCornerShape(10.dp)).padding(12.dp),
+                        verticalAlignment = Alignment.Top) {
+                        Icon(Icons.Outlined.GppMaybe, null, tint = tone, modifier = Modifier.size(20.dp))
                         Spacer(Modifier.width(10.dp))
                         Column {
                             Text(if (risky.risk.level == "high") "This looks like phishing" else "Be careful with this message",
-                                fontWeight = FontWeight.SemiBold, color = kern.danger, style = MaterialTheme.typography.bodyMedium)
-                            risky.risk.findings.take(2).forEach { f ->
+                                fontWeight = FontWeight.SemiBold, color = tone, style = MaterialTheme.typography.bodyMedium)
+                            risky.risk.findings.take(3).forEach { f ->
                                 Text(f.str("title") ?: f.str("rule") ?: "", style = MaterialTheme.typography.bodySmall, color = kern.text2)
                             }
                         }
                     }
                 }
                 items(d.tasks.filter { it.source?.kind == "mail" }, key = { "task-" + it.id }) { task ->
-                    Row(Modifier.padding(horizontal = 16.dp, vertical = 2.dp).fillMaxWidth().clickable { nav.go("tasks?task=${task.id}") },
-                        verticalAlignment = Alignment.CenterVertically) {
+                    Row(Modifier.padding(horizontal = 8.dp).fillMaxWidth().clip(androidx.compose.foundation.shape.RoundedCornerShape(8.dp))
+                        .clickable { nav.go("tasks?task=${task.id}") }, verticalAlignment = Alignment.CenterVertically) {
                         Checkbox(task.done, onCheckedChange = { done ->
                             scope.launch { runCatching { ws.kern.updateTask(task.id, "done" to done) }; load() }
                         }, colors = CheckboxDefaults.colors(checkedColor = kern.accent))
@@ -821,88 +998,304 @@ fun MailThreadScreen(ws: Workspace, nav: Nav, id: Long) {
                             style = MaterialTheme.typography.bodyMedium, color = if (task.done) kern.text3 else kern.text)
                     }
                 }
+                item(key = "top-line") { HorizontalDivider(color = kern.border) }
                 items(d.messages, key = { it.id }) { m ->
-                    MessageItem(ws, m, expanded = m.id in open) { if (m.id in open) open.remove(m.id) else open.add(m.id) }
+                    MessageItem(ws, nav, m, mine, h24, expanded = m.id in open) { if (m.id in open) open.remove(m.id) else open.add(m.id) }
+                    HorizontalDivider(color = kern.border)
                 }
-                item {
+                item(key = "reply") {
                     val last = d.messages.lastOrNull()
                     if (last != null) Row(Modifier.fillMaxWidth().padding(16.dp), horizontalArrangement = Arrangement.spacedBy(8.dp)) {
-                        KButton("Reply", icon = Icons.AutoMirrored.Outlined.Reply) { nav.go("mail/compose?msg=${last.id}&mode=reply") }
-                        KButton("All", icon = Icons.AutoMirrored.Outlined.ReplyAll) { nav.go("mail/compose?msg=${last.id}&mode=reply_all") }
-                        KButton("Forward", icon = Icons.AutoMirrored.Outlined.Forward) { nav.go("mail/compose?msg=${last.id}&mode=forward") }
+                        KButton("Reply", Modifier.weight(1f), icon = Icons.AutoMirrored.Outlined.Reply) { nav.go("mail/compose?msg=${last.id}&mode=reply") }
+                        KButton("Reply all", Modifier.weight(1f), icon = Icons.AutoMirrored.Outlined.ReplyAll) { nav.go("mail/compose?msg=${last.id}&mode=reply_all") }
+                        KButton("Forward", Modifier.weight(1f), icon = Icons.AutoMirrored.Outlined.Forward) { nav.go("mail/compose?msg=${last.id}&mode=forward") }
                     }
                 }
-                item { Spacer(Modifier.height(32.dp)) }
+                item { Spacer(Modifier.height(32.dp).navigationBarsPadding()) }
+            }
+        }
+    }
+    if (snoozing) SnoozeSheet(h24, onDismiss = { snoozing = false }) { at ->
+        snoozing = false
+        act("snooze", "Snoozed until " + snoozeLabel(at, h24), "until" to at.isoOffset())
+    }
+}
+
+/** "3 messages · Ada, Grace and you · Nov 3 – 2 hours ago", the web's line under the subject. */
+private fun threadSummary(msgs: List<MailMessage>, h24: Boolean): String {
+    if (msgs.isEmpty()) return ""
+    val people = mutableListOf<String>()
+    val seen = HashSet<String>()
+    for (m in msgs) {
+        if (!seen.add(m.from.addr.lowercase())) continue
+        people += if (m.fromMe) "you" else m.from.name.ifBlank { m.from.addr }.split(Regex("[\\s,]+")).first()
+    }
+    if ("you" in people) { people.remove("you"); people.add("you") }
+    val names = if (people.size > 3) "${people.take(2).joinToString(", ")} and ${people.size - 2} others"
+        else people.joinToString(", ").replace(Regex(", ([^,]*)$"), " and $1")
+    val zone = java.time.ZoneId.systemDefault()
+    fun day(iso: String?) = runCatching { ZonedDateTime.parse(iso).withZoneSameInstant(zone).toLocalDate() }.getOrNull()
+    val lastLabel = ago(msgs.last().date)
+    val span = if (msgs.size > 1 && day(msgs.first().date) != day(msgs.last().date)) "${mailDate(msgs.first().date, h24)} – $lastLabel" else lastLabel
+    return listOf(if (msgs.size == 1) "1 message" else "${msgs.size} messages", names, span).filter { it.isNotBlank() }.joinToString("  ·  ")
+}
+
+private val PREVIEWABLE = setOf("image/png", "image/jpeg", "image/jpg", "image/gif", "image/webp")
+
+/** One message of a conversation: the web's MessageCard, edge to edge on the phone. */
+@Composable
+private fun MessageItem(ws: Workspace, nav: Nav, m: MailMessage, mine: Set<String>, h24: Boolean, expanded: Boolean, onToggle: () -> Unit) {
+    var body by remember(m.id) { mutableStateOf<MailBody?>(null) }
+    var failed by remember(m.id) { mutableStateOf(false) }
+    var original by remember(m.id) { mutableStateOf(false) }
+    var images by remember(m.id) { mutableStateOf(false) }
+    var details by remember(m.id) { mutableStateOf(false) }
+    var menu by remember(m.id) { mutableStateOf(false) }
+    var attempt by remember(m.id) { mutableStateOf(0) }
+    val ctx = LocalContext.current
+    val k = kern
+    // The server fits the email to the theme (no white sheet; dark mail keeps its colors), like the web app.
+    val colors = if (original) null else if (k.dark) (if (ctx.app.settings.mailDarkEmails) "dark" else null) else "light"
+    LaunchedEffect(m.id, expanded, colors, images, attempt) {
+        if (!expanded) return@LaunchedEffect
+        failed = false
+        body = runCatching { ws.kern.mailBody(m.id, colors, images) }.getOrElse { failed = true; body }
+    }
+    val files = m.attachments.filter { !it.inline }
+    val risk = !m.fromMe && (m.risk.level == "high" || m.risk.level == "medium")
+    fun person(a: MailAddr) = if (a.addr.lowercase() in mine) "me" else a.display
+    val toLine = "to " + (m.to + m.cc).joinToString(", ") { person(it) }.ifBlank { "undisclosed recipients" }
+
+    Column(Modifier.fillMaxWidth()) {
+        Row(
+            Modifier.fillMaxWidth().clickable(onClick = onToggle)
+                .padding(start = 16.dp, end = if (expanded) 4.dp else 16.dp, top = 12.dp, bottom = if (expanded) 6.dp else 12.dp),
+            verticalAlignment = Alignment.Top,
+        ) {
+            MailAvatar(m.from)
+            Spacer(Modifier.width(12.dp))
+            Column(Modifier.weight(1f).padding(top = 1.dp)) {
+                Row(verticalAlignment = Alignment.CenterVertically) {
+                    Text(m.from.display.ifBlank { "(unknown sender)" }, fontWeight = FontWeight.SemiBold, fontSize = 14.5.sp, color = k.text,
+                        maxLines = 1, overflow = TextOverflow.Ellipsis, modifier = Modifier.weight(1f, fill = false))
+                    if (risk) {
+                        Spacer(Modifier.width(6.dp))
+                        Ledger(if (m.risk.level == "high") "High risk" else "Suspicious", color = if (m.risk.level == "high") k.danger else k.orange)
+                    }
+                    if (m.isDraft) {
+                        Spacer(Modifier.width(6.dp))
+                        Ledger("Draft", color = k.danger)
+                    }
+                }
+                if (expanded) {
+                    if (m.from.name.isNotBlank()) Text(m.from.addr, fontSize = 12.5.sp, color = k.text3, maxLines = 1, overflow = TextOverflow.Ellipsis)
+                    Row(Modifier.clip(androidx.compose.foundation.shape.RoundedCornerShape(6.dp)).clickable { details = !details }.padding(vertical = 2.dp),
+                        verticalAlignment = Alignment.CenterVertically) {
+                        Text(toLine, fontSize = 12.5.sp, color = k.text3, maxLines = 1, overflow = TextOverflow.Ellipsis, modifier = Modifier.weight(1f, fill = false))
+                        Icon(if (details) Icons.Outlined.ExpandLess else Icons.Outlined.ExpandMore, if (details) "Hide details" else "Show details",
+                            tint = k.text3, modifier = Modifier.size(16.dp))
+                    }
+                } else {
+                    Text(m.snippet, fontSize = 13.sp, color = k.text3, maxLines = 1, overflow = TextOverflow.Ellipsis)
+                }
+            }
+            Spacer(Modifier.width(8.dp))
+            if (expanded) {
+                Text(mailDate(m.date, h24), fontSize = 11.5.sp, color = k.text3, modifier = Modifier.padding(top = 3.dp))
+                Box(Modifier.size(36.dp).clip(CircleShape).clickable { nav.go("mail/compose?msg=${m.id}&mode=reply") }, contentAlignment = Alignment.Center) {
+                    Icon(Icons.AutoMirrored.Outlined.Reply, "Reply", tint = k.text2, modifier = Modifier.size(18.dp))
+                }
+                Box {
+                    Box(Modifier.size(36.dp).clip(CircleShape).clickable { menu = true }, contentAlignment = Alignment.Center) {
+                        Icon(Icons.Outlined.MoreVert, "More", tint = k.text2, modifier = Modifier.size(18.dp))
+                    }
+                    DropdownMenu(expanded = menu, onDismissRequest = { menu = false }) {
+                        DropdownMenuItem(text = { Text("Reply all") }, leadingIcon = { Icon(Icons.AutoMirrored.Outlined.ReplyAll, null) },
+                            onClick = { menu = false; nav.go("mail/compose?msg=${m.id}&mode=reply_all") })
+                        DropdownMenuItem(text = { Text("Forward") }, leadingIcon = { Icon(Icons.AutoMirrored.Outlined.Forward, null) },
+                            onClick = { menu = false; nav.go("mail/compose?msg=${m.id}&mode=forward") })
+                        val b = body
+                        if (b?.html != null && (original || b.colors in setOf("adapted", "dark", "light"))) {
+                            DropdownMenuItem(text = { Text(if (original) "Fit colors to the theme" else "Show original colors") },
+                                leadingIcon = { Icon(if (original) Icons.Outlined.DarkMode else Icons.Outlined.LightMode, null) },
+                                onClick = { menu = false; original = !original })
+                        }
+                        if (b != null && b.remoteImages > 0 && !b.imagesLoaded) {
+                            DropdownMenuItem(text = { Text("Load images") }, leadingIcon = { Icon(Icons.Outlined.Image, null) },
+                                onClick = { menu = false; images = true })
+                        }
+                    }
+                }
+            } else {
+                if (files.isNotEmpty()) {
+                    Icon(Icons.Outlined.AttachFile, null, tint = k.text3, modifier = Modifier.padding(top = 2.dp, end = 4.dp).size(14.dp))
+                }
+                Text(mailDate(m.date, h24), fontSize = 11.5.sp, color = k.text3, modifier = Modifier.padding(top = 2.dp))
+            }
+        }
+        if (expanded) {
+            if (details) MessageDetails(m, Modifier.padding(start = 16.dp, end = 16.dp, bottom = 10.dp))
+            val b = body
+            when {
+                failed && b == null -> Row(Modifier.padding(horizontal = 16.dp, vertical = 8.dp), verticalAlignment = Alignment.CenterVertically) {
+                    Text("Couldn't load this message.", color = k.danger, style = MaterialTheme.typography.bodyMedium, modifier = Modifier.weight(1f))
+                    app.kern.ui.components.TextAction("Retry") { attempt++ }
+                }
+                b == null -> Column(Modifier.padding(start = 16.dp, end = 16.dp, top = 6.dp, bottom = 18.dp), verticalArrangement = Arrangement.spacedBy(9.dp)) {
+                    listOf(0.88f, 0.75f, 0.52f).forEach { w ->
+                        Box(Modifier.fillMaxWidth(w).height(10.dp).clip(androidx.compose.foundation.shape.RoundedCornerShape(5.dp)).background(k.surface2))
+                    }
+                }
+                else -> {
+                    if (b.remoteImages > 0 && !b.imagesLoaded) {
+                        Row(Modifier.padding(start = 16.dp, end = 16.dp, top = 2.dp, bottom = 8.dp).fillMaxWidth()
+                            .clip(androidx.compose.foundation.shape.RoundedCornerShape(8.dp)).background(k.surface2)
+                            .padding(start = 12.dp, end = 4.dp, top = 4.dp, bottom = 4.dp),
+                            verticalAlignment = Alignment.CenterVertically) {
+                            Icon(Icons.Outlined.Image, null, tint = k.text2, modifier = Modifier.size(16.dp))
+                            Spacer(Modifier.width(8.dp))
+                            Text("${b.remoteImages} remote image${if (b.remoteImages == 1) "" else "s"} blocked to protect your privacy.",
+                                fontSize = 12.5.sp, lineHeight = 16.sp, color = k.text2, modifier = Modifier.weight(1f))
+                            Text("Load images", color = k.accent, fontSize = 13.sp, fontWeight = FontWeight.SemiBold,
+                                modifier = Modifier.clip(androidx.compose.foundation.shape.RoundedCornerShape(6.dp)).clickable { images = true }
+                                    .padding(horizontal = 10.dp, vertical = 8.dp))
+                        }
+                    }
+                    val blank = b.html == null && (b.text ?: "").isBlank()
+                    if (blank && files.isEmpty()) Text("No message text.", style = MaterialTheme.typography.bodySmall, color = k.text3,
+                        modifier = Modifier.padding(start = 16.dp, end = 16.dp, bottom = 12.dp))
+                    else if (!blank) EmailView(b, original = original)
+                    if (files.isNotEmpty()) Attachments(m, files)
+                    Spacer(Modifier.height(6.dp))
+                }
             }
         }
     }
 }
 
 @Composable
-private fun MessageItem(ws: Workspace, m: MailMessage, expanded: Boolean, onToggle: () -> Unit) {
-    var body by remember(m.id) { mutableStateOf<MailBody?>(null) }
-    var failed by remember(m.id) { mutableStateOf(false) }
-    var original by remember(m.id) { mutableStateOf(false) }
-    val ctx = LocalContext.current
-    // The server fits the email to the theme (no white sheet; dark mail keeps its colors), like the web app.
-    val colors = if (original) null else if (kern.dark) (if (ctx.app.settings.mailDarkEmails) "dark" else null) else "light"
-    LaunchedEffect(m.id, expanded, colors) {
-        if (expanded) body = runCatching { ws.kern.mailBody(m.id, colors) }.getOrElse { failed = true; body }
+private fun MessageDetails(m: MailMessage, modifier: Modifier = Modifier) {
+    val k = kern
+    fun full(a: MailAddr) = if (a.name.isBlank()) a.addr else "${a.name} <${a.addr}>"
+    val rows = buildList {
+        add("From" to full(m.from))
+        if (m.replyTo.isNotEmpty()) add("Reply-To" to m.replyTo.joinToString(", ") { it.addr })
+        if (m.to.isNotEmpty()) add("To" to m.to.joinToString(", ") { full(it) })
+        if (m.cc.isNotEmpty()) add("Cc" to m.cc.joinToString(", ") { it.addr })
+        val whenText = runCatching {
+            ZonedDateTime.parse(m.date).withZoneSameInstant(java.time.ZoneId.systemDefault())
+                .format(java.time.format.DateTimeFormatter.ofLocalizedDateTime(java.time.format.FormatStyle.MEDIUM, java.time.format.FormatStyle.SHORT))
+        }.getOrNull()
+        if (whenText != null) add("Date" to "$whenText (${ago(m.date)})")
     }
-    Column(Modifier.padding(horizontal = 12.dp, vertical = 4.dp).fillMaxWidth()
-        .clip(androidx.compose.foundation.shape.RoundedCornerShape(12.dp))
-        .border(1.dp, kern.border, androidx.compose.foundation.shape.RoundedCornerShape(12.dp))) {
-        Row(Modifier.fillMaxWidth().clickable(onClick = onToggle).padding(12.dp), verticalAlignment = Alignment.CenterVertically) {
-            Column(Modifier.weight(1f)) {
-                Text(if (m.fromMe) "Me" else m.from.display.ifBlank { "(unknown sender)" }, fontWeight = FontWeight.SemiBold, maxLines = 1, overflow = TextOverflow.Ellipsis,
-                    style = MaterialTheme.typography.bodyMedium)
-                Text(if (expanded) "to " + (m.to + m.cc).joinToString(", ") { it.display }.ifBlank { "(no recipients)" } else m.snippet,
-                    maxLines = 1, overflow = TextOverflow.Ellipsis, style = MaterialTheme.typography.bodySmall, color = kern.text3)
+    Column(modifier.fillMaxWidth().clip(androidx.compose.foundation.shape.RoundedCornerShape(8.dp)).background(k.surface2).padding(horizontal = 12.dp, vertical = 10.dp),
+        verticalArrangement = Arrangement.spacedBy(3.dp)) {
+        rows.forEach { (label, value) ->
+            Row {
+                Text(label, fontSize = 12.5.sp, color = k.text3, modifier = Modifier.width(72.dp))
+                Text(value, fontSize = 12.5.sp, color = k.text, modifier = Modifier.weight(1f))
             }
-            Text(ago(m.date), style = MaterialTheme.typography.bodySmall, color = kern.text3)
         }
-        if (expanded) {
-            val b = body
-            when {
-                failed -> Text("Couldn't load this message.", color = kern.danger, modifier = Modifier.padding(12.dp))
-                b == null -> Loading(Modifier.height(80.dp))
-                else -> {
-                    val hasFiles = m.attachments.any { !it.inline }
-                    val blank = b.html == null && (b.text ?: "").isBlank()
-                    if (blank && !hasFiles) Text("No message text.", style = MaterialTheme.typography.bodySmall, color = kern.text3,
-                        modifier = Modifier.padding(start = 12.dp, end = 12.dp, bottom = 12.dp))
-                    else if (!blank) {
-                        if (b.html != null && (original || b.colors in setOf("adapted", "dark", "light"))) {
-                            Row(Modifier.fillMaxWidth().padding(horizontal = 12.dp), horizontalArrangement = Arrangement.End) {
-                                Text(if (original) "Fit to theme" else "Original colors", style = MaterialTheme.typography.labelMedium, color = kern.text3,
-                                    modifier = Modifier.clip(androidx.compose.foundation.shape.RoundedCornerShape(8.dp)).clickable { original = !original }.padding(horizontal = 8.dp, vertical = 4.dp))
-                            }
+    }
+}
+
+/** Files on a message: a thumbnail for pictures, the type for the rest; tap opens it in another app. */
+@Composable
+private fun Attachments(m: MailMessage, files: List<app.kern.data.MailAttachment>) {
+    val ctx = LocalContext.current
+    val scope = rememberCoroutineScope()
+    val snack = LocalSnack.current
+    val k = kern
+    var opening by remember { mutableStateOf<Long?>(null) }
+    val base = ctx.app.api.base
+    androidx.compose.foundation.layout.FlowRow(
+        Modifier.fillMaxWidth().padding(start = 16.dp, end = 16.dp, top = 4.dp, bottom = 8.dp),
+        horizontalArrangement = Arrangement.spacedBy(8.dp), verticalArrangement = Arrangement.spacedBy(8.dp),
+    ) {
+        files.forEach { a ->
+            val shape = androidx.compose.foundation.shape.RoundedCornerShape(10.dp)
+            Row(
+                Modifier.widthIn(max = 280.dp).clip(shape).border(1.dp, k.border, shape)
+                    .clickable(enabled = opening == null) {
+                        opening = a.id
+                        scope.launch {
+                            try { openAttachment(ctx, m.id, a) } catch (e: Exception) { snack.error(e) }
+                            opening = null
                         }
-                        EmailView(b, original = original)
                     }
-                    if (b.remoteImages > 0) Text("Images from the web stay hidden in the app. Open the message in Kern's web app to load them.",
-                        style = MaterialTheme.typography.bodySmall, color = kern.text3, modifier = Modifier.padding(start = 12.dp, end = 12.dp, bottom = 10.dp))
-                    m.attachments.filter { !it.inline }.takeIf { it.isNotEmpty() }?.let { atts ->
-                        Text(atts.joinToString("  ·  ") { "📎 " + it.filename }, style = MaterialTheme.typography.bodySmall, color = kern.text2,
-                            modifier = Modifier.padding(start = 12.dp, end = 12.dp, bottom = 12.dp))
+                    .padding(6.dp),
+                verticalAlignment = Alignment.CenterVertically,
+            ) {
+                Box(Modifier.size(40.dp).clip(androidx.compose.foundation.shape.RoundedCornerShape(6.dp)).background(k.surface2), contentAlignment = Alignment.Center) {
+                    if (a.contentType.lowercase() in PREVIEWABLE) {
+                        coil.compose.AsyncImage(model = "$base/api/mail/messages/${m.id}/attachments/${a.id}?inline=1", contentDescription = null,
+                            contentScale = androidx.compose.ui.layout.ContentScale.Crop, modifier = Modifier.fillMaxSize())
+                    } else {
+                        Text(a.filename.substringAfterLast('.', "file").take(4).uppercase(), fontSize = 10.sp, fontWeight = FontWeight.SemiBold, color = k.text2)
                     }
+                }
+                Spacer(Modifier.width(10.dp))
+                Column(Modifier.padding(end = 8.dp)) {
+                    Text(a.filename.ifBlank { "attachment" }, fontSize = 13.sp, color = k.text, maxLines = 1, overflow = TextOverflow.Ellipsis)
+                    Text(if (opening == a.id) "Opening…" else app.kern.ui.components.bytes(a.size), fontSize = 11.5.sp, color = k.text3)
                 }
             }
         }
+    }
+}
+
+/** Downloads an attachment into the app's cache and hands it to whichever app opens that type. */
+private suspend fun openAttachment(ctx: android.content.Context, message: Long, a: app.kern.data.MailAttachment) {
+    val api = ctx.app.api
+    val file = kotlinx.coroutines.withContext(kotlinx.coroutines.Dispatchers.IO) {
+        val dir = java.io.File(ctx.cacheDir, "mail/$message-${a.id}").apply { mkdirs() }
+        val name = a.filename.replace(Regex("[\\\\/:*?\"<>|\\p{Cntrl}]"), "_").trim().trimStart('.').ifBlank { "attachment" }.take(120)
+        val f = java.io.File(dir, name)
+        if (!f.exists() || f.length() == 0L) {
+            val req = okhttp3.Request.Builder().url("${api.base}/api/mail/messages/$message/attachments/${a.id}").build()
+            try {
+                api.http.newCall(req).execute().use { r ->
+                    if (!r.isSuccessful) throw ApiError(r.code, "Couldn't download ${a.filename}.")
+                    val tmp = java.io.File(dir, "$name.part")
+                    r.body!!.byteStream().use { input -> tmp.outputStream().use { input.copyTo(it) } }
+                    tmp.renameTo(f)
+                }
+            } catch (e: java.io.IOException) {
+                throw ApiError(0, "Cannot reach the server.")
+            }
+        }
+        f
+    }
+    val uri = androidx.core.content.FileProvider.getUriForFile(ctx, ctx.packageName + ".files", file)
+    val type = a.contentType.lowercase().ifBlank { null }
+        ?: android.webkit.MimeTypeMap.getSingleton().getMimeTypeFromExtension(file.extension.lowercase()) ?: "application/octet-stream"
+    val view = Intent(Intent.ACTION_VIEW).setDataAndType(uri, type)
+        .addFlags(Intent.FLAG_GRANT_READ_URI_PERMISSION or Intent.FLAG_ACTIVITY_NEW_TASK)
+    try {
+        ctx.startActivity(view)
+    } catch (e: android.content.ActivityNotFoundException) {
+        throw ApiError(0, "No app on this phone opens ${a.filename}.")
     }
 }
 
 /**
  * SECURITY (read carefully): the email's HTML has already been sanitized by the server
- * (backend/mail/sanitize.py). On top of that this WebView runs no JavaScript, may not load
- * anything from the network or from files (so no trackers, remote images or local files), and
- * opens links only in the browser, only for http(s) and mailto.
+ * (backend/mail/sanitize.py), which also rewrote every picture to Kern's own address: inline
+ * attachments, and remote images only through the signed image proxy once they're allowed.
+ * On top of that this WebView runs no JavaScript and reads no files, the page's CSP allows
+ * images only from the Kern server and data:, and every request the page makes goes through
+ * [shouldInterceptRequest]: only GETs for /api/mail/img and a message's attachments on the
+ * Kern server are answered (with the app's session, raster images only); everything else gets
+ * an empty 403. Links open only in the browser, only for http(s) and mailto.
  */
-@SuppressLint("SetJavaScriptEnabled")
 @Composable
 private fun EmailView(b: MailBody, original: Boolean = false) {
     val ctx = LocalContext.current
     val k = kern
+    val api = ctx.app.api
+    val server = remember(api.base) { runCatching { android.net.Uri.parse(api.base) }.getOrNull() }
+    val origin = server?.let { "${it.scheme}://${it.encodedAuthority}" } ?: ""
+    val prefix = server?.encodedPath?.trimEnd('/') ?: ""
     val inner = b.html ?: b.textHtml ?: android.text.Html.escapeHtml(b.text ?: "")
     fun hex(c: androidx.compose.ui.graphics.Color) = String.format("#%06X", 0xFFFFFF and c.toArgb())
     // The email sits on the app's own background: the server already fitted its colors to the theme
@@ -911,24 +1304,37 @@ private fun EmailView(b: MailBody, original: Boolean = false) {
     val bg = if (asSent) "#ffffff" else "transparent"
     val fg = if (asSent) "#222222" else hex(k.text)
     val link = if (asSent || !k.dark) "#2f4ad0" else "#8ab4f8"
+    val quote = if (asSent) "#c9c9cf" else hex(k.borderStrong)
+    val muted = if (asSent) "#555555" else hex(k.text2)
     val scheme = if (k.dark && !asSent) "dark" else "light"
+    // Edge to edge: HTML mail gets a narrow margin (newsletters bring their own), plain text the app's 16.
+    val pad = when {
+        asSent -> "12px 12px 14px"
+        b.html != null -> "2px 12px 12px"
+        else -> "2px 16px 12px"
+    }
     val page = """<!doctype html><html style="color-scheme:$scheme"><head><meta charset="utf-8">
-        <meta http-equiv="Content-Security-Policy" content="default-src 'none'; style-src 'unsafe-inline'; img-src data:">
+        <meta http-equiv="Content-Security-Policy" content="default-src 'none'; img-src $origin data:; style-src 'unsafe-inline'; font-src data:; form-action 'none'; base-uri 'none'">
         <meta name="color-scheme" content="$scheme">
         <meta name="viewport" content="width=device-width, initial-scale=1">
-        <style>html,body{margin:0;padding:4px 10px 10px;background:$bg;color:$fg;font:15px/1.5 sans-serif;overflow-wrap:anywhere}
-        a{color:$link}img{max-width:100%;height:auto}pre{white-space:pre-wrap}blockquote{margin:0 0 0 .6em;padding-left:.8em;border-left:2px solid #888;opacity:.8}</style>
+        <meta name="referrer" content="no-referrer">
+        <style>html,body{margin:0;background:$bg;color:$fg}
+        body{padding:$pad;font:15px/1.55 sans-serif;overflow-wrap:anywhere;word-break:break-word}
+        img{max-width:100%;height:auto}table{max-width:100%}pre{white-space:pre-wrap}
+        blockquote{margin:0 0 0 .6em;padding-left:.8em;border-left:2px solid $quote;color:$muted}a{color:$link}</style>
         </head><body>$inner</body></html>"""
+    val attachment = remember { Regex("^/api/mail/messages/\\d+/attachments/\\d+$") }
     key(page) {
         AndroidView(factory = { c ->
             WebView(c).apply {
                 settings.javaScriptEnabled = false
-                settings.blockNetworkLoads = true
                 settings.allowFileAccess = false
                 settings.allowContentAccess = false
                 settings.domStorageEnabled = false
-                settings.loadsImagesAutomatically = true // data: images only (network loads are blocked)
+                settings.loadsImagesAutomatically = true
+                settings.textZoom = 100
                 isVerticalScrollBarEnabled = false
+                isHorizontalScrollBarEnabled = false
                 setBackgroundColor(if (asSent) android.graphics.Color.WHITE else android.graphics.Color.TRANSPARENT)
                 webViewClient = object : WebViewClient() {
                     override fun shouldOverrideUrlLoading(view: WebView, request: WebResourceRequest): Boolean {
@@ -938,12 +1344,34 @@ private fun EmailView(b: MailBody, original: Boolean = false) {
                         }
                         return true
                     }
+
+                    override fun shouldInterceptRequest(view: WebView, request: WebResourceRequest): android.webkit.WebResourceResponse? {
+                        val u = request.url
+                        // The email page itself (loadDataWithBaseURL below) arrives here as a data: main frame.
+                        if (request.isForMainFrame && u.scheme == "data") return null
+                        val path = (u.encodedPath ?: "").let { p -> if (prefix.isNotEmpty() && p.startsWith("$prefix/")) p.removePrefix(prefix) else p }
+                        val ours = origin.isNotEmpty() && request.method == "GET" && "${u.scheme}://${u.encodedAuthority}" == origin &&
+                            (path == "/api/mail/img" || attachment.matches(path))
+                        if (!ours) return refused()
+                        return try {
+                            val url = api.base + path + (u.encodedQuery?.let { "?$it" } ?: "")
+                            val res = api.http.newCall(okhttp3.Request.Builder().url(url).header("Accept", "image/*").build()).execute()
+                            val type = res.header("Content-Type")?.substringBefore(';')?.trim()?.lowercase() ?: ""
+                            if (!res.isSuccessful || !type.startsWith("image/") || type.contains("svg")) {
+                                res.close(); refused()
+                            } else android.webkit.WebResourceResponse(type, null, res.body!!.byteStream())
+                        } catch (_: Exception) {
+                            refused()
+                        }
+                    }
                 }
-                loadDataWithBaseURL(null, page, "text/html", "utf-8", null)
+                loadDataWithBaseURL(if (origin.isNotEmpty()) "$origin/" else null, page, "text/html", "utf-8", null)
             }
-        }, modifier = Modifier.fillMaxWidth().padding(horizontal = 4.dp))
+        }, modifier = Modifier.fillMaxWidth())
     }
 }
+
+private fun refused() = android.webkit.WebResourceResponse("text/plain", "utf-8", 403, "Blocked", emptyMap(), java.io.ByteArrayInputStream(ByteArray(0)))
 
 private fun parseAddrs(s: String): List<MailAddr> = s.split(',', ';').map { it.trim() }.filter { it.isNotEmpty() }.map { part ->
     val m = Regex("^(.*)<([^>]+)>$").find(part)

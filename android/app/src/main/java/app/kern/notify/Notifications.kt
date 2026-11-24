@@ -27,6 +27,7 @@ object Notifications {
     // Kern Mail
     const val CH_MAIL_NEW = "mail_new"
     const val CH_PUSH = "mail_push"
+    const val CH_MAIL_NEWS = "mail_news"
     const val ID_PUSH = 6
     private const val GROUP_MAIL = "app.kern.MAIL"
     private const val ID_MAIL_SUMMARY = 7
@@ -43,6 +44,10 @@ object Notifications {
                 listOf(
                     NotificationChannel(CH_MAIL_NEW, "New mail", NotificationManager.IMPORTANCE_HIGH).apply {
                         description = "Each new conversation in your Inbox, as it arrives"
+                        lockscreenVisibility = NotificationCompat.VISIBILITY_PRIVATE
+                    },
+                    NotificationChannel(CH_MAIL_NEWS, "Packages and reminders", NotificationManager.IMPORTANCE_DEFAULT).apply {
+                        description = "Package updates, snoozed mail coming back, and conversations with no reply yet"
                         lockscreenVisibility = NotificationCompat.VISIBILITY_PRIVATE
                     },
                     NotificationChannel(CH_PUSH, "Connection", NotificationManager.IMPORTANCE_MIN).apply {
@@ -180,7 +185,7 @@ object Notifications {
             .setSmallIcon(R.drawable.ic_stat_kern)
             .setColor(ACCENT)
             .setContentTitle("New mail")
-            .setContentText(if (newCount == 1) "You have a new message in Kern." else "You have $newCount new messages in Kern.")
+            .setContentText(if (newCount == 1) "You have new mail in Kern." else "You have $newCount new messages in Kern.")
             .setAutoCancel(true)
             .setContentIntent(openIntent(ctx, "mail", 70))
             .build()
@@ -239,7 +244,7 @@ object Notifications {
                     .setSmallIcon(R.drawable.ic_stat_mail)
                     .setColor(ACCENT)
                     .setContentTitle("New mail")
-                    .setContentText("Unlock to read")
+                    .setContentText("You have new mail in Kern.")
                     .build()
                 val b = NotificationCompat.Builder(ctx, CH_MAIL_NEW)
                     .setSmallIcon(R.drawable.ic_stat_mail)
@@ -260,7 +265,7 @@ object Notifications {
                         .setStyle(NotificationCompat.BigTextStyle().bigText(subject + if (t.snippet.isNotBlank()) "\n" + t.snippet.take(300) else ""))
                     t.lastDate?.let { d -> runCatching { java.time.OffsetDateTime.parse(d).toInstant().toEpochMilli() }.getOrNull()?.let { b.setWhen(it).setShowWhen(true) } }
                 } else {
-                    b.setContentTitle("New mail").setContentText("You have a new message.")
+                    b.setContentTitle("New mail").setContentText("You have new mail in Kern.")
                 }
                 nm.notify(id, b.build())
                 notified += t.id
@@ -281,6 +286,34 @@ object Notifications {
         } catch (_: SecurityException) {
         }
         s.mailNotified = notified
+    }
+
+    /** What the web app says for package news (frontend/src/lib/mail/live.js PACKAGE_NEWS). */
+    val PACKAGE_NEWS = mapOf(
+        "out_for_delivery" to "A package is out for delivery.",
+        "delivered" to "A package was delivered.",
+        "ready_for_pickup" to "A package is ready to pick up.",
+        "exception" to "A package needs attention. Check with the carrier.",
+    )
+
+    /**
+     * The web app's other mail notifications, with its titles and words: "Package update",
+     * "Snoozed mail is back" and "No reply yet". One per package or conversation, replaced as it changes.
+     */
+    fun showMailNews(ctx: Context, kind: String, key: Long, title: String, text: String, route: String) {
+        if (!allowed(ctx)) return
+        val base = when (kind) { "package" -> 3_000_000; "snooze_wake" -> 4_000_000; else -> 5_000_000 }
+        val id = base + (key % 1_000_000).toInt()
+        val n = NotificationCompat.Builder(ctx, CH_MAIL_NEWS)
+            .setSmallIcon(R.drawable.ic_stat_mail)
+            .setColor(ACCENT)
+            .setContentTitle(title)
+            .setContentText(text)
+            .setAutoCancel(true)
+            .setCategory(if (kind == "package") NotificationCompat.CATEGORY_STATUS else NotificationCompat.CATEGORY_REMINDER)
+            .setContentIntent(openIntent(ctx, route, id))
+            .build()
+        try { NotificationManagerCompat.from(ctx).notify(id, n) } catch (_: SecurityException) {}
     }
 
     fun cancelMailThread(ctx: Context, thread: Long) {

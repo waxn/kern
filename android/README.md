@@ -33,7 +33,9 @@ doubles up to about 4.5 minutes while nothing between the phone and the server (
 timeout, a NAT) cuts requests short, so the radio wakes rarely. Android requires a notice while
 the service runs; it uses a silent "Connection" channel you can turn off by long-pressing it.
 Settings in the app turn instant notifications off (a 15-minute check stays as a backstop) or
-hide the sender and subject; the lock screen only ever shows "New mail". Behind nginx, raise
+hide the sender and subject; the lock screen only ever shows "New mail". Package updates,
+snoozed mail coming back and "No reply yet" reminders arrive the same way, with the web app's
+titles, on their own "Packages and reminders" channel. Behind nginx, raise
 `proxy_read_timeout` above 300 s (Caddy has no limit by default); otherwise the app settles on
 shorter holds by itself.
 
@@ -52,8 +54,11 @@ allowed because Kern is usually self-hosted on a home network; use HTTPS when it
 
 - **Sign in / sign up** (approval-pending and setup-needed servers are handled; the first-run
   setup wizard stays in the browser), with the two-factor code step when it's on.
-- **Mail** (More → Mail): folders, search, conversations (email HTML in a WebView with
-  JavaScript, network and file access off), archive, trash, star, mark unread, snooze, report
+- **Mail** (More → Mail): the web app's list (day headings, All | Unread, stars; swipe right to
+  archive, left to snooze with the web's choices, long-press for more), search, full-width
+  conversations (email HTML in a WebView with JavaScript and file access off that loads only
+  pictures from your Kern server: inline images, and remote ones through its image proxy after
+  "Load images"), attachments that open in other apps, archive, trash, star, mark unread, report
   spam, make a task, reply/reply all/forward and new messages (plain text, with your signature).
   A "New mail" notification (never the sender or subject), a Mail card on Home, and tasks made
   from an email open it. Connecting the account and two-factor setup are in the web app.
