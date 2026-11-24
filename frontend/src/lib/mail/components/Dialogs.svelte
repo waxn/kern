@@ -57,6 +57,19 @@
       if (current.thread?.id === tid) loadThread(tid, { quiet: true });
     });
   }
+  let savedRule = $state('');
+  async function sendFeedback() {
+    busy = true;
+    error = '';
+    try {
+      const r = await api.post(`/messages/${d.message.id}/private-feedback`, { text: text.trim() });
+      savedRule = r.rule;
+    } catch (e) {
+      error = e.message;
+    } finally {
+      busy = false;
+    }
+  }
   let nudgePresets = $state([]);
   const whenParsed = $derived.by(() => {
     const p = parseWhen(whenText);
@@ -92,6 +105,7 @@
     check = null;
     if (!dd) return;
     text = '';
+    savedRule = '';
     whenText = '';
     if (dd.type === 'snooze') presets = snoozePresets();
     if (dd.type === 'schedule') presets = schedulePresets();
@@ -360,6 +374,36 @@
         </footer>
       {/if}
 
+    {:else if d.type === 'private-sort'}
+      {@const ps = d.message.privateSort}
+      <header>
+        <h2 class="display">Private model</h2>
+        <button class="icon-btn" aria-label="Close" onclick={close}><Icon name="close" /></button>
+      </header>
+      <div class="verdict" class:junk={ps.verdict === 'junk'}>
+        <Icon name={ps.verdict === 'junk' ? 'shieldAlert' : 'shield'} size={16} />
+        <b>{ps.verdict === 'junk' ? 'Moved to Junk' : ps.verdict === 'unclear' ? 'Could not decide, so it stayed in the Inbox' : 'Kept in the Inbox'}</b>
+      </div>
+      <p class="reason">{ps.reason || 'It gave no reason.'}</p>
+      {#if savedRule}
+        <p class="muted small-p">Saved. Your private model will read this before every email from now on:</p>
+        <p class="rule">{savedRule}</p>
+        <p class="muted small-p">You can edit or remove it under Settings → Mail → Private model, in the box for your own sorting rules.</p>
+        <footer><button class="btn primary" onclick={close}>Done</button></footer>
+      {:else}
+        <form class="form" onsubmit={(e) => { e.preventDefault(); sendFeedback(); }}>
+          <label>
+            <span>Tell it what it should know</span>
+            <textarea class="input" rows="3" bind:value={text} autofocus
+                      placeholder={ps.verdict === 'junk' ? 'e.g. These are my bank statements, always keep them.' : "e.g. I don't use LinkedIn, so their normal emails can go to Junk."}></textarea>
+          </label>
+          <p class="muted small-p">It becomes a rule the model reads before sorting every email, together with who sent this one.
+            It doesn't move this email.</p>
+          {#if error}<p class="error">{error}</p>{/if}
+          <footer><button type="button" class="btn ghost" onclick={close}>Close</button><button class="btn primary" disabled={busy || !text.trim()}>Save feedback</button></footer>
+        </form>
+      {/if}
+
     {:else if d.type === 'prompt'}
       <header><h2>{d.title}</h2><button class="icon-btn" aria-label="Close" onclick={close}><Icon name="close" /></button></header>
       <form class="form" onsubmit={(e) => { e.preventDefault(); if (text.trim()) run(() => d.submit(text.trim())); }}>
@@ -431,6 +475,11 @@
     margin: 6px 0 0; max-height: 56vh; overflow: auto; padding: 12px; border-radius: var(--radius-sm);
     background: var(--bg-sunken); font: 12px/1.5 var(--mono); white-space: pre-wrap; overflow-wrap: anywhere;
   }
+  .verdict { display: flex; align-items: center; gap: 8px; padding: 8px 11px; border-radius: var(--radius-sm); background: var(--surface-2); font-size: 13.5px; }
+  .verdict.junk { background: var(--danger-soft); color: var(--danger); }
+  .reason { font-size: 14px; line-height: 1.5; margin: 10px 0 16px; }
+  .rule { padding: 9px 11px; border-radius: var(--radius-sm); background: var(--bg-sunken); font-size: 13px; overflow-wrap: anywhere; }
+  .form textarea { resize: vertical; font: inherit; font-weight: 400; color: var(--text); }
   .swatches { display: flex; flex-wrap: wrap; gap: 8px; margin: 8px 0 12px; }
   .sw { width: 30px; height: 30px; border-radius: 50%; border: 2px solid var(--bg-elev); background: var(--c); cursor: pointer; box-shadow: 0 0 0 1px var(--line-strong); }
   .sw.on { box-shadow: 0 0 0 2px var(--text); }

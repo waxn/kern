@@ -207,6 +207,25 @@
       privBusy = false;
     }
   }
+  let privTest = $state(null); // result of the sample-email test
+  async function testPrivate() {
+    privBusy = true;
+    privTest = null;
+    try {
+      const r = await api.post('/private-ai/test');
+      privTest = r;
+      if (r.settings) priv = { ...priv, activity: r.settings.activity };
+    } catch (e) {
+      privTest = { ok: false, error: e.message };
+    } finally {
+      privBusy = false;
+    }
+  }
+  const ACT = { junk: 'Junk', inbox: 'Inbox', unclear: 'No clear answer', offline: 'Offline', skipped: 'Skipped', feedback: 'Your feedback' };
+  function actTime(iso) {
+    const d = new Date(iso);
+    return d.toDateString() === new Date().toDateString() ? d.toLocaleTimeString([], { hour: 'numeric', minute: '2-digit' }) : d.toLocaleDateString([], { month: 'short', day: 'numeric' });
+  }
   function toggleFallback(f) {
     const cur = scraperFallbacks ?? tracking?.scraper?.fallbacks ?? ['UPU'];
     scraperFallbacks = cur.includes(f) ? cur.filter((x) => x !== f) : [...cur, f];
@@ -561,7 +580,7 @@
 
     <div class="section-title" id="private">Private model</div>
     <div class="group">
-      <div class="item col">
+      <div class="item col pa">
         <div><b>Your own AI endpoint</b><span>An OpenAI-compatible server you run yourself, such as LM Studio, Ollama or llama.cpp. It is kept apart from
           Intelligence: mail is only ever shown to this one, never to a hosted model. Plain http:// works, and Kern waits a good while for
           an answer. If it's switched off, nothing happens and mail is sorted the normal way. Kern runs on a server, so “localhost” means
@@ -569,29 +588,55 @@
         <div class="row">
           <input class="input wide" bind:value={privForm.baseUrl} placeholder="http://192.168.1.20:1234/v1" aria-label="Private model address" />
           {#if priv?.configured}
-            <span class="test" class:good={priv.online} class:bad={priv.online === false} aria-live="polite">
-              {#if priv.online}<CircleCheck size={13} /> Online{:else if priv.online === false}<CircleAlert size={13} /> Offline{/if}</span>
+            {#if priv.online}<span class="test good" aria-live="polite"><CircleCheck size={13} /> Online</span>
+            {:else if priv.online === false}<span class="test bad" aria-live="polite" title={priv.offlineReason || ''}><CircleAlert size={13} /> Offline</span>{/if}
           {/if}
         </div>
         <div class="row">
           <input class="input wide" bind:value={privForm.model} list="priv-models" placeholder="Model (empty: whichever is loaded)" aria-label="Private model name" />
-          <datalist id="priv-models">{#each priv?.models || [] as m (m)}<option value={m}></option>{/each}</datalist>
           <input class="input" type="password" bind:value={privForm.key} autocomplete="off" style="width:170px"
                  placeholder={priv?.hasKey ? 'Key saved' : 'API key (optional)'} aria-label="Private model API key" />
         </div>
+        <datalist id="priv-models">{#each priv?.models || [] as m (m)}<option value={m}></option>{/each}</datalist>
         <div class="row lim"><span class="faint">Wait up to</span><input class="input port" type="number" min="10" max="900" bind:value={privForm.timeout} aria-label="Seconds to wait for an answer" /><span class="faint">seconds for an answer</span>
         </div>
         <div class="row lim"><span class="faint">Let it write up to</span><input class="input port" style="width:90px" type="number" min="200" max="200000" bind:value={privForm.maxTokens} aria-label="Most tokens it may write" /><span class="faint">tokens per email (thinking models use thousands before answering)</span>
         </div>
-        <textarea class="input" rows="3" bind:value={privForm.guidance} placeholder="Your own sorting rules, optional. e.g. “Anything from pentel.com or a shop's newsletter is junk. Mail from my school is always inbox.”" aria-label="Your own sorting rules"></textarea>
+        <textarea class="input" rows="4" maxlength="6000" bind:value={privForm.guidance} placeholder="Your own sorting rules, optional. e.g. “Anything from pentel.com or a shop's newsletter is junk. Mail from my school is always inbox.”" aria-label="Your own sorting rules"></textarea>
+        <p class="hint">Feedback you give on an email (its ⋯ menu → Why it was sorted here) is added here as a line, so you can edit or delete it.</p>
         <div class="row lim">
           <button class="btn primary" disabled={privBusy || !privForm.baseUrl} onclick={() => savePrivate()}>{privBusy ? 'Checking…' : 'Save'}</button>
+          {#if priv?.configured}<button class="btn" disabled={privBusy} onclick={testPrivate} title="Sort a made-up promotional email now">{privBusy ? 'Working…' : 'Test with a sample ad'}</button>{/if}
           {#if priv?.configured}<button class="btn ghost" disabled={privBusy} onclick={() => { privForm.baseUrl = ''; privForm.key = ''; savePrivate({ baseUrl: '', key: '' }); }}>Remove</button>{/if}</div>
         {#if privMsg}<span class="test bad"><CircleAlert size={13} /> {privMsg.text}</span>{/if}
+        {#if priv?.online === false && priv.offlineReason}<span class="faint small">{priv.offlineReason}</span>{/if}
+        {#if privTest}
+          <span class="test" class:good={privTest.ok && privTest.verdict === 'junk'} class:bad={!privTest.ok}>
+            {#if privTest.ok}{#if privTest.verdict === 'junk'}<CircleCheck size={13} />{:else}<CircleAlert size={13} />{/if}
+              {`Answered ${ACT[privTest.verdict] || privTest.verdict}` + (privTest.entry?.secs ? ` in ${privTest.entry.secs} s` : '') + (privTest.entry?.tokens ? ` (${privTest.entry.tokens.toLocaleString()} tokens)` : '') + `: ${privTest.reason}`}
+            {:else}<CircleAlert size={13} /> {privTest.error}{/if}</span>
+        {/if}
       </div>
       {#if priv?.configured}
         <div class="item"><div><b>Sort incoming mail</b><span>New mail is shown to the private model, which decides Inbox or Junk. People you've written to are never judged.</span></div>
           <input type="checkbox" checked={priv.sortMail} onchange={(e) => savePrivate({ sortMail: e.currentTarget.checked })} /></div>
+        <details class="item col act">
+          <summary><b>Recent activity</b><span>{priv.activity?.length ? `What the private model did with the last ${priv.activity.length === 1 ? 'email' : priv.activity.length + ' emails'} it saw.` : 'Nothing yet. New mail shows up here as it arrives.'}</span></summary>
+          {#if priv.activity?.length}
+            <ul class="list actlist">
+              {#each priv.activity as a, i (a.at + i)}
+                <li>
+                  <span class="faint when">{actTime(a.at)}</span>
+                  <span class="ev ev-{a.event}">{ACT[a.event] || a.event}</span>
+                  <span class="what"><b class="inline">{a.test ? 'Test: ' : ''}{a.subject || '(no subject)'}</b> <span class="faint">{a.from}</span>
+                    {#if a.reason || a.error}<br /><span class="faint">{a.reason || a.error}</span>{/if}
+                    {#if a.secs != null}<br /><span class="faint small">{[`${a.secs} s`, a.tokens ? `${a.tokens.toLocaleString()} tokens` + (a.thinking ? ` (${a.thinking.toLocaleString()} thinking)` : '') : '', a.finish && a.finish !== 'stop' ? `stopped: ${a.finish}` : '', a.model || ''].filter(Boolean).join(' · ')}</span>{/if}</span>
+                </li>
+              {/each}
+            </ul>
+            <button class="btn ghost small" onclick={loadPrivate}>Refresh</button>
+          {/if}
+        </details>
       {/if}
     </div>
   {/if}
@@ -685,6 +730,20 @@
   .prov { padding: 5px 12px; border: 1px solid var(--border-strong); border-radius: var(--radius); color: var(--text-2); }
   .prov.on { border-color: var(--accent); color: var(--text); background: color-mix(in srgb, var(--accent) 10%, transparent); }
   .hint { margin: 0; font-size: 12.5px; color: var(--text-2); }
+  .pa > .row { width: 100%; }
+  .act summary { cursor: pointer; display: grid; gap: 2px; }
+  .actlist { margin-top: 8px; gap: 8px; }
+  .actlist li { align-items: flex-start; gap: 10px; }
+  .act .actlist li { display: flex; justify-content: flex-start; align-items: flex-start; }
+  .act .actlist li > :first-child { flex: none; }
+  .act .actlist .what { flex: 1; text-align: left; }
+  .act .actlist b.inline { display: inline; }
+  .actlist .when { flex: none; width: 64px; font-size: 12px; }
+  .actlist .what { flex: 1; min-width: 0; font-size: 13px; overflow-wrap: anywhere; }
+  .act .ev { flex: none; font-size: 11.5px; padding: 1px 7px; border-radius: 99px; background: var(--bg-sunken); color: var(--text-2); }
+  .act .ev-junk { color: var(--danger); }
+  .act .ev-inbox { color: var(--c-green); }
+  .act .ev-offline, .act .ev-unclear { color: var(--c-amber, var(--text-2)); }
   .test { display: inline-flex !important; align-items: center; gap: 5px; }
   .test.good { color: var(--c-green) !important; }
   .test.bad { color: var(--danger) !important; }

@@ -127,3 +127,63 @@ def test_token_limit_and_guidance_are_settings(api):
 
 def test_load_images_preference(loaded, api):
     assert api.patch("/api/preferences", {"load_images": True}).json()["load_images"] is True
+
+
+def test_activity_log_records_each_decision(loaded, on, engine, server, api, monkeypatch):
+    monkeypatch.setattr(private_ai, "complete", lambda s, p, **k: "VERDICT: junk\nREASON: An ad.")
+    server.deliver("INBOX", mail(9))
+    engine.sync_folder(inbox())
+    act = api.get("/api/private-ai").json()["activity"]
+    assert act[0]["event"] == "junk" and act[0]["reason"] == "An ad." and act[0]["from"] == "promo@stranger.test"
+
+
+def test_offline_is_logged_then_backed_off(loaded, on, engine, server, api):
+    server.deliver("INBOX", mail(10))
+    server.deliver("INBOX", mail(11))
+    engine.sync_folder(inbox())
+    events = [a["event"] for a in api.get("/api/private-ai").json()["activity"]]
+    assert events[:2] == ["skipped", "offline"]
+
+
+def test_test_button(api, on, monkeypatch):
+    monkeypatch.setattr(private_ai, "complete", lambda s, p, **k: "VERDICT: junk\nREASON: Sells pens.")
+    d = api.post("/api/private-ai/test").json()
+    assert d["ok"] and d["verdict"] == "junk" and d["entry"]["test"] is True
+
+
+LIVE = __import__("os").environ.get("KERN_LIVE_PRIVATE_AI", "")
+
+
+@pytest.mark.skipif(not LIVE, reason="set KERN_LIVE_PRIVATE_AI=http://host:1234/v1 to test a real model")
+def test_live_model_sorts_an_ad_into_junk(loaded, api, engine, server, monkeypatch):
+    monkeypatch.undo()  # talk to the real endpoint
+    api.post("/api/private-ai", {"baseUrl": LIVE, "model": __import__("os").environ.get("KERN_LIVE_MODEL", "")})
+    private_ai._state.clear()
+    server.deliver("INBOX", corpus.msg([("From", "Pentel <news@pentel.example>"), ("To", corpus.ME),
+                                        ("Subject", "New EnerGel colors! 20% off this week"),
+                                        ("Message-ID", "<live1@pentel.example>"), ("Date", "Mon, 16 Nov 2026 10:00:00 +0000")],
+                                       "Discover our new pastel collection. Shop now and save 20% with code PASTEL20. Unsubscribe"))
+    engine.sync_folder(inbox())
+    m = Message.objects.get(message_id="live1@pentel.example")
+    print(api.get("/api/private-ai").json()["activity"][0])
+    assert m.folder.role == FolderRole.JUNK
+    body = api.get(f"/api/threads/{m.thread_id}").json()
+    assert next(x for x in body["messages"] if x["id"] == m.pk)["privateSort"]["verdict"] == "junk"
+
+
+def test_feedback_becomes_a_rule_the_model_reads(loaded, on, engine, server, api, monkeypatch):
+    seen = []
+    monkeypatch.setattr(private_ai, "complete", lambda s, p, **k: seen.append(s) or "VERDICT: inbox\nREASON: A job alert.")
+    server.deliver("INBOX", mail(9, sender="jobs@linkedin.test", subject="New jobs for you"))
+    engine.sync_folder(inbox())
+    m = Message.objects.get(message_id="pa9@stranger.test")
+    r = api.post(f"/api/messages/{m.pk}/private-feedback", {"text": "I don't use LinkedIn, so their normal emails can go to junk."})
+    assert r.status_code == 200
+    rule = r.json()["rule"]
+    assert "jobs@linkedin.test" in rule and "the Inbox" in rule and "don't use LinkedIn" in rule
+    assert rule in api.get("/api/private-ai").json()["guidance"]
+    assert api.post(f"/api/messages/{m.pk}/private-feedback", {"text": "  "}).status_code == 400
+
+    server.deliver("INBOX", mail(10, sender="jobs@linkedin.test", subject="More jobs"))
+    engine.sync_folder(inbox())
+    assert "don't use LinkedIn" in seen[-1]

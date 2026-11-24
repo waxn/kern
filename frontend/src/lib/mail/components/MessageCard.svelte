@@ -123,6 +123,9 @@
               {#if m.fromMe}
                 <button role="menuitem" onclick={() => { menu = false; ui.dialog = { type: 'nudge', threadId: m.threadId }; }}><Icon name="bell" size={15} /> Nudge me if nobody replies…</button>
               {/if}
+              {#if m.privateSort}
+                <button role="menuitem" onclick={() => { menu = false; ui.dialog = { type: 'private-sort', message: m }; }}><Icon name="shield" size={15} /> Why it was sorted here…</button>
+              {/if}
               {#if !m.fromMe}
                 <button role="menuitem" onclick={() => { menu = false; ui.dialog = { type: 'spam', ids: [m.threadId], sender: m.from.addr }; }}><Icon name="spam" size={15} /> Report spam…</button>
               {/if}
@@ -158,13 +161,6 @@
       <div class="note warn">
         <Icon name="block" size={15} />
         Moved to Junk because {m.blockedBy.kind === 'domain' ? 'the domain' : 'the sender'} <b>{m.blockedBy.value}</b> is blocked.
-      </div>
-    {/if}
-    {#if m.privateSort && !m.blockedBy && m.folder.role === (m.privateSort.verdict === 'unclear' ? 'inbox' : m.privateSort.verdict)}
-      <div class="note" class:warn={m.privateSort.verdict === 'junk'}>
-        <Icon name={m.privateSort.verdict === 'junk' ? 'shieldAlert' : 'shield'} size={15} />
-        <span><b>{m.privateSort.verdict === 'junk' ? 'Your private model moved this to Junk' : m.privateSort.verdict === 'unclear' ? 'Your private model could not decide' : 'Your private model kept this in the Inbox'}.</b>
-          {m.privateSort.reason || ''}</span>
       </div>
     {/if}
     {#if showRisk}

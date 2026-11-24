@@ -30,6 +30,7 @@ DEFAULT_TOKENS = 10000  # reasoning models think for thousands of tokens before 
 DEFAULT_TIMEOUT = 300  # seconds to wait for an answer: local models can be slow to load and think
 OFFLINE_BACKOFF = 60  # after a failure, skip the endpoint for this long
 BODY_CHARS = 2500
+GUIDANCE_CHARS = 6000  # the owner's rules, typed in settings or added as feedback on a message
 
 # Per user: {"until": monotonic time to retry after, "online": bool, "checked": monotonic}
 _state: dict = {}
@@ -97,13 +98,15 @@ def settings_json(*, check: bool = False) -> dict:
         "configured": configured(c),
         "online": None,
         "models": [],
+        "activity": recent(),
     }
     if check and configured(c):
         try:
             out["models"] = list_models(c)
             out["online"] = True
-        except PrivateAIError:
+        except PrivateAIError as e:
             out["online"] = False
+            out["offlineReason"] = str(e)
     return out
 
 
@@ -129,7 +132,7 @@ def configure(data: dict) -> dict:
         except (TypeError, ValueError):
             raise PrivateAIError("The token limit must be a number.") from None
     if "guidance" in data:
-        c["guidance"] = str(data["guidance"] or "").strip()[:1500]
+        c["guidance"] = str(data["guidance"] or "").strip()[:GUIDANCE_CHARS]
     if "sortMail" in data:
         c["sort_mail"] = bool(data["sortMail"])
     if "key" in data and data["key"] is not None:
@@ -171,8 +174,9 @@ def list_models(c: dict | None = None) -> list[str]:
     return [m["id"] for m in items if isinstance(m, dict) and m.get("id")][:100]
 
 
-def complete(system: str, prompt: str, *, max_tokens: int = 400) -> str:
-    """One chat completion. Raises PrivateAIError when it can't be had."""
+def complete(system: str, prompt: str, *, max_tokens: int = 400, meta: dict | None = None) -> str:
+    """One chat completion. Raises PrivateAIError when it can't be had. ``meta``, when given, is
+    filled with how it went (seconds, finish reason, token counts) for the activity log."""
     c = _cfg()
     if not configured(c):
         raise PrivateAIError("No private model is set up.")
@@ -184,11 +188,63 @@ def complete(system: str, prompt: str, *, max_tokens: int = 400) -> str:
     }
     if c.get("model"):
         payload["model"] = c["model"]
-    data = _request(c, "/chat/completions", payload, int(c.get("timeout") or DEFAULT_TIMEOUT))
+    t0 = time.monotonic()
     try:
-        return (data["choices"][0]["message"]["content"] or "").strip()
-    except (KeyError, IndexError, TypeError):
+        data = _request(c, "/chat/completions", payload, int(c.get("timeout") or DEFAULT_TIMEOUT))
+    finally:
+        if meta is not None:
+            meta["secs"] = round(time.monotonic() - t0, 1)
+    try:
+        choice = data["choices"][0]
+        text = (choice["message"].get("content") or "").strip()
+    except (KeyError, IndexError, TypeError, AttributeError):
         raise PrivateAIError("The private model sent an answer Kern could not read.") from None
+    if meta is not None:
+        usage = data.get("usage") or {}
+        meta.update(finish=choice.get("finish_reason") or "", model=data.get("model") or c.get("model") or "",
+                    tokens=usage.get("completion_tokens"),
+                    thinking=(usage.get("completion_tokens_details") or {}).get("reasoning_tokens"))
+    return text
+
+
+# --- activity log -------------------------------------------------------------------------
+# What the private model did, newest last: one JSON line per event in the user's own data folder
+# (not the database, so the worker writing here can never clash with settings being saved).
+
+LOG_KEEP = 200
+
+
+def _log_path():
+    return tenancy.data_dir() / "private_ai.log"
+
+
+def activity(event: str, **fields) -> None:
+    from django.utils import timezone
+
+    entry = {"at": timezone.now().isoformat(timespec="seconds"), "event": event, **fields}
+    log.info("private model %s: %s", event, json.dumps(fields, ensure_ascii=False, default=str))
+    try:
+        path = _log_path()
+        lines = path.read_text("utf-8").splitlines()[-(LOG_KEEP - 1):] if path.exists() else []
+        lines.append(json.dumps(entry, ensure_ascii=False, default=str))
+        path.write_text("\n".join(lines) + "\n", "utf-8")
+    except Exception:  # noqa: BLE001 - logging must never break mail
+        log.exception("could not write the private model log")
+
+
+def recent(n: int = 30) -> list[dict]:
+    try:
+        path = _log_path()
+        lines = path.read_text("utf-8").splitlines()[-n:] if path.exists() else []
+    except Exception:  # noqa: BLE001
+        return []
+    out = []
+    for ln in reversed(lines):
+        try:
+            out.append(json.loads(ln))
+        except ValueError:
+            pass
+    return out
 
 
 # --- sorting ------------------------------------------------------------------------------
@@ -230,27 +286,58 @@ def _skip_until() -> float:
     return _state.get(_key(), {}).get("until", 0.0)
 
 
-def classify(message, body_text: str) -> tuple[str, str] | None:
-    """("junk" | "inbox", why), or None (endpoint off, backing off, or no clear answer)."""
-    now = time.monotonic()
-    if now < _skip_until():
+def classify(message, body_text: str, *, test: bool = False) -> tuple[str, str] | None:
+    """("junk" | "inbox" | "unclear", why), or None when the endpoint is off (or was a moment ago)."""
+    who = {"from": message.from_addr, "subject": (message.subject or "")[:120]}
+    if test:
+        who["test"] = True
+    left = _skip_until() - time.monotonic()
+    if left > 0 and not test:
+        activity("skipped", reason=f"offline a moment ago; trying again in {int(left)} s", **who)
         return None
+    c = _cfg()
     snippet = " ".join((body_text or "").split())[:BODY_CHARS]
-    guidance = _cfg().get("guidance", "")
+    guidance = c.get("guidance", "")
     system = SORT_SYSTEM + (f"\nThe owner's own rules, which take priority:\n{guidance}" if guidance else "")
     prompt = (f"From: {message.from_name} <{message.from_addr}>\nSubject: {message.subject}\n\n{snippet}\n\n"
               "Reply in the two-line format.")
+    meta: dict = {}
     try:
-        answer = complete(system, prompt, max_tokens=int(_cfg().get("max_tokens") or DEFAULT_TOKENS))
+        answer = complete(system, prompt, max_tokens=int(c.get("max_tokens") or DEFAULT_TOKENS), meta=meta)
     except PrivateAIError as e:
-        log.info("private model unavailable: %s", e)
         _state[_key()] = {"until": time.monotonic() + OFFLINE_BACKOFF}
+        activity("offline", error=str(e), **who, **meta)
         return None
     _state.pop(_key(), None)
     v = verdict(answer)
-    if v is None:  # said nothing usable (often: ran out of tokens while thinking). Keep it, and say so.
-        return "unclear", "The private model gave no clear answer, so this stayed in the Inbox. If it keeps happening, raise the token limit in Settings → Mail → Private model."
-    return v, reason(answer)
+    if v is None:  # said nothing usable: usually it ran out of tokens while thinking
+        if meta.get("finish") == "length":
+            why = (f"The private model used all {c.get('max_tokens') or DEFAULT_TOKENS} tokens before answering, so this "
+                   "stayed in the Inbox. Raise the token limit in Settings → Mail → Private model.")
+        else:
+            why = "The private model's answer had no inbox or junk in it, so this stayed in the Inbox."
+        activity("unclear", reason=why, answer=_clean(answer).strip()[:300], **who, **meta)
+        return "unclear", why
+    why = reason(answer)
+    activity(v, reason=why, **who, **meta)
+    return v, why
+
+
+SAMPLE = {"from_name": "Pentel", "from_addr": "news@pentel.example", "subject": "New EnerGel colors are here! 20% off this week",
+          "body": "Discover our brand new EnerGel pastel collection. Shop now and save 20% with code PASTEL20. "
+                  "Free shipping on orders over $25. Unsubscribe | View in browser"}
+
+
+def test_sample() -> dict:
+    """Sort a made-up promotional email right now, so the settings page can show it working."""
+    from types import SimpleNamespace
+
+    m = SimpleNamespace(**{k: v for k, v in SAMPLE.items() if k != "body"})
+    got = classify(m, SAMPLE["body"], test=True)
+    entry = (recent(1) or [{}])[0]
+    if got is None:
+        return {"ok": False, "error": entry.get("error") or "The private model didn't answer.", "entry": entry}
+    return {"ok": True, "verdict": got[0], "reason": got[1], "entry": entry}
 
 
 def note_for(message) -> dict | None:
@@ -259,6 +346,28 @@ def note_for(message) -> dict | None:
         if f.get("rule") == "private-sort":
             return {"verdict": f.get("verdict"), "reason": f.get("reason", "")}
     return None
+
+
+def feedback(message, text: str) -> str:
+    """Turn the owner's feedback on one sorted message into a standing rule: a line added to the
+    rules the model reads before every email, naming the sender so it knows what it's about."""
+    text = " ".join(str(text or "").split())[:500]
+    if not text:
+        raise PrivateAIError("Write what the model should know.")
+    note = note_for(message) or {}
+    put = {"junk": "Junk", "inbox": "the Inbox"}.get(note.get("verdict"), "")
+    about = f"mail from {message.from_name + ' ' if message.from_name else ''}<{message.from_addr}>"
+    if message.subject:
+        about += f' (like "{message.subject[:80]}")'
+    line = f"- About {about}{', which you put in ' + put if put else ''}: {text}"
+    c = _cfg()
+    rules = (c.get("guidance", "") + "\n" + line).strip()
+    while len(rules) > GUIDANCE_CHARS and "\n" in rules:  # oldest feedback goes first
+        rules = rules.split("\n", 1)[1]
+    c["guidance"] = rules[-GUIDANCE_CHARS:]
+    _save(c)
+    activity("feedback", reason=text, **{"from": message.from_addr, "subject": (message.subject or "")[:120]})
+    return line
 
 
 def record(message, v: str, why: str) -> None:

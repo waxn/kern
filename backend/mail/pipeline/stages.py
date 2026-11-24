@@ -178,7 +178,8 @@ class PrivateSortStage(Stage):
         m = ctx.message
         corr = Correspondent.objects.filter(address=m.from_addr).first()
         if corr and corr.sent_count > 0:
-            private_ai.log.info("private sort: skipped %s (you have written to them)", m.from_addr)
+            private_ai.activity("skipped", reason="you have written to this sender before", **{"from": m.from_addr},
+                                subject=(m.subject or "")[:120])
             return
         got = private_ai.classify(m, ctx.parsed.text or (m.snippet or ""))
         if got is None:
@@ -186,6 +187,7 @@ class PrivateSortStage(Stage):
         private_ai.record(m, *got)
         if got[0] == "junk":
             actions.move_messages([m], actions.role_folder(FolderRole.JUNK))
+            private_ai.log.info("private model moved message %s to Junk", m.pk)
 
 
 class PackageStage(Stage):

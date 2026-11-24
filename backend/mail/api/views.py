@@ -1071,6 +1071,30 @@ def private_ai_view(request):
     return private_ai.settings_json(check=True)
 
 
+@api(("POST",))
+def private_ai_test(request):
+    """Sort a sample promotional email with the private model now; says what it answered."""
+    from .. import private_ai
+
+    if not private_ai.configured():
+        raise ApiError("Set up the private model first.")
+    return {**private_ai.test_sample(), "settings": private_ai.settings_json(check=False)}
+
+
+@api(("POST",))
+def private_ai_feedback(request, pk: int):
+    """{text}: the owner's correction on how the private model sorted this message. It becomes a
+    rule the model reads before every email."""
+    from .. import private_ai
+
+    m = _message(pk)
+    try:
+        line = private_ai.feedback(m, body(request).get("text", ""))
+    except private_ai.PrivateAIError as exc:
+        raise ApiError(str(exc)) from exc
+    return {"rule": line, "guidance": private_ai.settings_json(check=False)["guidance"]}
+
+
 @api(("GET", "POST"))
 def packages_tracking(request):
     """Live tracking settings: {provider: "parcels"|"trackingmore"|"scraper"|"", key?, country?, limit?,
