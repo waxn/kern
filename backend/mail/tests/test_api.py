@@ -240,9 +240,11 @@ def test_files_page_media_kind(loaded, api):
 def test_stats(api, loaded):
     from django.utils import timezone
 
+    from mail import stats
     from mail.models import Message
 
     Message.objects.update(sort_date=timezone.now())  # corpus dates are old; bring them into the window
+    stats.run()
     s = api.get("/api/mail/stats", days=30).json()
     assert s["days"] == 30 and len(s["series"]) == 30
     assert s["received"] > 0 and sum(d["received"] for d in s["series"]) == s["received"]

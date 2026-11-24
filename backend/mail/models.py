@@ -495,3 +495,59 @@ class GeoPlace(models.Model):
     lat = models.FloatField(null=True)
     lon = models.FloatField(null=True)
     looked_up = models.DateTimeField(auto_now=True)
+
+
+# --- Stats: running totals kept by mail/stats.py (one nightly pass over new mail) ---
+
+
+class StatsState(models.Model):
+    """Singleton (pk=1): how far the stored totals reach."""
+
+    last_pk = models.BigIntegerField(default=0)  # high-water mark: every Message.pk <= this is counted
+    run_top = models.BigIntegerField(null=True)  # set while a run is in progress: its upper pk
+    updated = models.DateTimeField(null=True)  # when the last run finished (None: never)
+    totals = models.JSONField(default=dict)  # mailbox-wide counts, taken at the end of each run
+
+
+class StatsDay(models.Model):
+    """Totals for one local calendar day (by sort_date)."""
+
+    day = models.DateField(unique=True)
+    received = models.IntegerField(default=0)
+    sent = models.IntegerField(default=0)
+    read = models.IntegerField(default=0)
+    newsletters = models.IntegerField(default=0)
+    with_files = models.IntegerField(default=0)
+    hours = models.JSONField(default=list)  # 24 counts of received mail by local hour
+
+
+class StatsSender(models.Model):
+    """Received mail from one address on one day."""
+
+    day = models.DateField()
+    addr = models.CharField(max_length=512)
+    domain = models.CharField(max_length=512, db_index=True)
+    name = models.CharField(max_length=512, blank=True, default="")
+    count = models.IntegerField(default=0)
+    unread = models.IntegerField(default=0)
+
+    class Meta:
+        constraints = [models.UniqueConstraint(fields=["day", "addr"], name="stats_sender_day_addr")]
+
+
+class StatsReply(models.Model):
+    """One of my replies. The wait is filled in once the message it answers has been counted."""
+
+    day = models.DateField(db_index=True)  # the reply's day
+    at = models.DateTimeField()  # the reply's sort_date
+    parent_key = models.CharField(max_length=998)
+    parent_day = models.DateField(null=True)
+    seconds = models.FloatField(null=True)  # None: parent not seen (yet)
+
+
+class StatsSeen(models.Model):
+    """Ledger of counted messages, so a copy in another folder (or a move) is never counted twice."""
+
+    key = models.CharField(max_length=998, unique=True)  # Message.message_key
+    day = models.DateField(db_index=True)
+    received_at = models.DateTimeField(null=True)  # set for received mail: the parent of a reply

@@ -162,6 +162,19 @@ class Worker:
         if inbox:
             engine.sync_folder(inbox)
 
+    def update_stats(self) -> bool:
+        """One slice of the nightly stats run (mail/stats.py). True while there is more to do."""
+        from . import stats
+
+        try:
+            if not stats.due():
+                return False
+            set_status("working", "Updating stats")
+            return not stats.run(budget=3.0)
+        except Exception:  # noqa: BLE001 - stats must never take the worker down
+            log.exception("stats update failed")
+            return False
+
     def loop(self, server: MailServer):
         engine = SyncEngine(server)
         executor = outbox.Executor(server, self.sender)
@@ -169,6 +182,7 @@ class Worker:
         engine.sync_all()
         last_full = time.monotonic()
         last_prune = 0.0
+        last_stats, stats_busy = 0.0, False
         while not self.stop.is_set():
             close_old_connections()
             # 1. Write-back queue.
@@ -199,6 +213,10 @@ class Worker:
                 set_status("syncing", "Checking folders")
                 engine.sync_all(between=lambda: self.sync_pushed(engine))
                 last_full = time.monotonic()
+            # 5. Stats totals: once a night (the first run is the backfill), a few seconds at a time.
+            if stats_busy or time.monotonic() - last_stats > 300:
+                last_stats = time.monotonic()
+                stats_busy = self.update_stats()
             if time.monotonic() - last_prune > 3600:
                 events.prune()
                 last_prune = time.monotonic()

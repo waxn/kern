@@ -40,6 +40,14 @@
   function hourLabel(h) {
     return new Date(2000, 0, 1, h).toLocaleTimeString([], { hour: 'numeric' });
   }
+  // The totals are counted once a night by the mail worker; mail since then is left out.
+  function updatedLabel(iso) {
+    const t = new Date(iso);
+    const day = t.toDateString() === new Date().toDateString()
+      ? 'today'
+      : t.toLocaleDateString([], { weekday: 'short', day: 'numeric', month: 'short' });
+    return `Updated ${day} at ${t.toLocaleTimeString([], { hour: 'numeric', minute: '2-digit' })}`;
+  }
   function searchFrom(addr) {
     navigate({ page: 'mail', view: 'search', q: `from:${addr}`, threadId: null });
   }
@@ -50,7 +58,9 @@
     <div class="titlerow">
       <div>
         <h1>Stats</h1>
-        <p class="sub">Computed on your server from the mail stored here.</p>
+        <p class="sub">
+          Counted on your server from the mail stored here{#if s?.ready}. {updatedLabel(s.updated)}; newer mail is added overnight.{:else}.{/if}
+        </p>
       </div>
       <div class="seg" role="group" aria-label="Period">
         {#each [[7, '7 days'], [30, '30 days'], [90, '90 days'], [365, 'Year']] as [n, label] (n)}
@@ -61,6 +71,8 @@
 
     {#if error}
       <p class="err">{error} <button class="btn small" onclick={load}>Retry</button></p>
+    {:else if s && !s.ready}
+      <p class="sub">The stats are being counted for the first time. This runs in the background and can take a few minutes for a big mailbox. <button class="btn small" onclick={load}>Check again</button></p>
     {:else if !s}
       <div class="tiles">{#each Array(4) as _}<div class="tile"><span class="skel" style="width:60%;height:22px"></span><span class="skel" style="width:40%;height:10px"></span></div>{/each}</div>
     {:else}
