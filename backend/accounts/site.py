@@ -16,7 +16,9 @@ DEFAULTS = {
     "allow_mail": True,         # let users connect a mail account (mail/)
     "allow_local_mail": False,  # allow mail servers on private addresses (mail/hosts.py)
     "allow_local_git_remotes": False,  # allow git mirrors and webhooks to private addresses (notes/remote_guard.py)
+    "apps_access": "admins",    # who may create and run apps (kernapps/): off | admins | everyone
 }
+APPS_ACCESS = ("off", "admins", "everyone")
 SIGNUP_MODES = ("closed", "open", "approval")
 
 
@@ -41,6 +43,10 @@ def update(values: dict) -> dict:
         if values["signup_mode"] not in SIGNUP_MODES:
             raise ValueError("Sign-ups must be closed, open or need approval.")
         clean["signup_mode"] = values["signup_mode"]
+    if "apps_access" in values:
+        if values["apps_access"] not in APPS_ACCESS:
+            raise ValueError("Apps must be off, for administrators or for everyone.")
+        clean["apps_access"] = values["apps_access"]
     for k, v in clean.items():
         SiteSetting.objects.update_or_create(key=k, defaults={"value": v})
     return get_all()

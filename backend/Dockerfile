@@ -30,6 +30,10 @@ RUN apt-get update && apt-get install -y --no-install-recommends ffmpeg git libs
 	$(if [ "$PARCEL_SCRAPER_BROWSER" = 1 ]; then echo chromium fonts-liberation; fi) \
 	&& rm -rf /var/lib/apt/lists/*
 COPY --from=parcel-scraper /usr/local/bin/node /usr/local/bin/node
+# npm and npx, for apps (kernapps/) whose package.json has dependencies.
+COPY --from=parcel-scraper /usr/local/lib/node_modules/npm /usr/local/lib/node_modules/npm
+RUN ln -s ../lib/node_modules/npm/bin/npm-cli.js /usr/local/bin/npm \
+	&& ln -s ../lib/node_modules/npm/bin/npx-cli.js /usr/local/bin/npx
 COPY --from=parcel-scraper /opt/parcel-scraper /opt/parcel-scraper
 ENV KERN_PARCEL_SCRAPER=/opt/parcel-scraper/node_modules/universal-parcel-scraper/dist/cli/index.js
 # Passed to the scraper only when the browser is really there (mail/trackers/scraper.py).

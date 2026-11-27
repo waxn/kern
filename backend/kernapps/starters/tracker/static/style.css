@@ -1,0 +1,39 @@
+:root {
+	color-scheme: light dark;
+	--bg: #fbfaf8; --card: #fff; --text: #22211e; --muted: #75726b; --line: #e7e3dc; --accent: #c0782a;
+	font: 15px/1.5 ui-sans-serif, system-ui, -apple-system, "Segoe UI", sans-serif;
+}
+@media (prefers-color-scheme: dark) {
+	:root { --bg: #101012; --card: #18181b; --text: #e8e6e1; --muted: #9c9a94; --line: #2a2a2f; --accent: #e5aa5c; }
+}
+* { box-sizing: border-box; }
+body { margin: 0; background: var(--bg); color: var(--text); }
+main { max-width: 860px; margin: 0 auto; padding: 32px 16px 64px; }
+header h1 { margin: 0; font-size: 24px; letter-spacing: -0.01em; }
+header p { margin: 2px 0 20px; color: var(--muted); }
+h2 { font-size: 13px; text-transform: uppercase; letter-spacing: 0.05em; color: var(--muted); margin: 0 0 8px; }
+form { display: flex; flex-wrap: wrap; gap: 10px; align-items: end; margin-bottom: 8px; }
+label { display: flex; flex-direction: column; gap: 3px; font-size: 12px; color: var(--muted); min-width: 110px; }
+label.grow { flex: 1; min-width: 150px; } label.unit { min-width: 70px; width: 80px; } label.wide { flex-basis: 100%; }
+input { height: 36px; padding: 0 10px; border-radius: 8px; border: 1px solid var(--line); background: var(--card); color: var(--text); font: inherit; }
+input:focus { outline: 2px solid color-mix(in srgb, var(--accent) 55%, transparent); border-color: transparent; }
+button { height: 36px; padding: 0 18px; border: 0; border-radius: 8px; background: var(--accent); color: #1a130a; font: inherit; font-weight: 600; cursor: pointer; }
+button:hover { filter: brightness(1.06); }
+.card { background: var(--card); border: 1px solid var(--line); border-radius: 12px; padding: 16px; margin-top: 16px; }
+.legend { display: flex; flex-wrap: wrap; gap: 6px; margin-bottom: 10px; }
+.legend button { height: 26px; padding: 0 10px; border-radius: 13px; background: color-mix(in srgb, var(--c) 16%, transparent); color: var(--text); font-weight: 500; font-size: 13px; display: inline-flex; align-items: center; gap: 6px; }
+.legend button::before { content: ""; width: 8px; height: 8px; border-radius: 50%; background: var(--c); }
+.legend button.off { opacity: 0.4; }
+svg { width: 100%; height: 240px; display: block; overflow: visible; }
+svg .grid { stroke: var(--line); stroke-width: 1; }
+svg text { fill: var(--muted); font-size: 11px; }
+.empty { color: var(--muted); text-align: center; margin: 0; }
+table { width: 100%; border-collapse: collapse; }
+td { padding: 8px 6px; border-top: 1px solid var(--line); vertical-align: top; }
+td.num { text-align: right; font-variant-numeric: tabular-nums; white-space: nowrap; }
+td.day { color: var(--muted); white-space: nowrap; }
+td.note { color: var(--muted); }
+td .x { background: none; color: var(--muted); height: auto; padding: 0 4px; font-weight: 400; }
+td .x:hover { color: #d9534f; }
+.dot { display: inline-block; width: 8px; height: 8px; border-radius: 50%; margin-right: 6px; background: var(--c); }
+.error { color: #d9534f; margin: 4px 0 0; }

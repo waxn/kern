@@ -71,6 +71,8 @@ def repo_detail(request, name):
         from . import ci
         ci.purge_repo(name)  # runs, logs, artifacts and secrets go with the repository
         sshkeys.delete_for_repo(request.user.id, name)
+        from kernapps.events import repo_deleted
+        repo_deleted(request.user.id, name)
         return Response(status=204)
     if request.method == "PATCH":
         data = request.data if isinstance(request.data, dict) else {}
@@ -120,6 +122,8 @@ def _rename_repo(uid: int, old: str, new: str):
     hooks_rename(old, new)
     git_releases.rename_repo(old, new)
     ci.rename_repo(old, new)
+    from kernapps.events import repo_renamed
+    repo_renamed(uid, old, new)
     return path
 
 

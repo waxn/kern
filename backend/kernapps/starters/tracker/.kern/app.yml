@@ -1,0 +1,4 @@
+# How Kern runs this app. Everything here is optional; see docs/apps.md.
+runtime: python
+start: python app.py
+health: /healthz

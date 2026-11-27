@@ -1,0 +1,40 @@
+<!doctype html>
+<html lang="en">
+<head>
+	<meta charset="utf-8">
+	<meta name="viewport" content="width=device-width, initial-scale=1">
+	<title>Tracker</title>
+	<link rel="stylesheet" href="style.css">
+</head>
+<body>
+	<main>
+		<header>
+			<h1>Tracker</h1>
+			<p>Log a number, see how it changes.</p>
+		</header>
+
+		<form id="add" autocomplete="off">
+			<label class="grow"><span>For</span><input name="subject" list="subjects" placeholder="Henrietta" required maxlength="80"></label>
+			<label><span>Value</span><input name="value" type="number" step="any" inputmode="decimal" placeholder="2.4" required></label>
+			<label class="unit"><span>Unit</span><input name="unit" placeholder="kg" maxlength="12"></label>
+			<label><span>Date</span><input name="day" type="date" required></label>
+			<label class="grow wide"><span>Note</span><input name="note" placeholder="optional" maxlength="300"></label>
+			<button type="submit">Add</button>
+			<datalist id="subjects"></datalist>
+		</form>
+		<p id="error" class="error" hidden></p>
+
+		<section class="card">
+			<div class="legend" id="legend"></div>
+			<svg id="chart" viewBox="0 0 640 240" preserveAspectRatio="none" role="img" aria-label="Chart of the values"></svg>
+			<p class="empty" id="empty">No entries yet. Add the first one above.</p>
+		</section>
+
+		<section class="card">
+			<h2>Entries</h2>
+			<table id="table"><tbody></tbody></table>
+		</section>
+	</main>
+	<script src="app.js"></script>
+</body>
+</html>

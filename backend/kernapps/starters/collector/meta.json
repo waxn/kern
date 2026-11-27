@@ -1,0 +1,2 @@
+{"name": "Collector", "icon": "📡", "order": 2, "public_paths": ["/api/ingest"],
+ "description": "Devices and scripts send numbers to an endpoint with a token; the dashboard adds them up by day. A start for syncing usage stats from your machines. Python, SQLite."}

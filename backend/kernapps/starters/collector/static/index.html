@@ -1,0 +1,21 @@
+<!doctype html>
+<html lang="en">
+<head>
+	<meta charset="utf-8">
+	<meta name="viewport" content="width=device-width, initial-scale=1">
+	<title>Collector</title>
+	<link rel="stylesheet" href="style.css">
+</head>
+<body>
+	<main>
+		<header><h1>Collector</h1><p>Numbers your devices send, added up by day.</p></header>
+		<section class="card"><h2>Last 30 days</h2><div id="metrics"></div><div id="bars" class="bars"></div><p class="empty" id="empty">Nothing received yet.</p></section>
+		<section class="card"><h2>Sources</h2><table id="sources"><tbody></tbody></table></section>
+		<section class="card"><h2>Send data</h2>
+			<p class="muted">POST JSON with the token. A list of points works too.</p>
+			<pre id="snippet"></pre>
+		</section>
+	</main>
+	<script src="app.js"></script>
+</body>
+</html>

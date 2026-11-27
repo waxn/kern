@@ -38,11 +38,45 @@
 		}
 	}
 
-	handle {
+	# Kern's own built files are served straight from disk.
+	@built file {
+		root /srv
+		try_files {path}
+	}
+	handle @built {
 		root * /srv
 		@immutable path /_app/immutable/*
 		header @immutable Cache-Control "public, max-age=31536000, immutable"
-		try_files {path} /index.html
 		file_server
+	}
+
+	# Everything else may be an app (/<slug>/…, docs/apps.md): the apps service answers it, streaming
+	# both ways (server-sent events, WebSockets, uploads). When the path is no app it says so with
+	# X-Kern-Noapp and Kern's own page is served instead, like any route of the single-page app.
+	handle {
+		reverse_proxy apps:8100 {
+			flush_interval -1
+			transport http {
+				dial_timeout 3s
+				read_timeout 1h
+				write_timeout 1h
+			}
+			@noapp header X-Kern-Noapp 1
+			handle_response @noapp {
+				root * /srv
+				rewrite * /index.html
+				file_server
+			}
+		}
+	}
+
+	# The apps service is not running (or not part of this setup): Kern's pages still work.
+	handle_errors 502 503 504 {
+		@page not path /api/* /git/* /media/* /_apps/*
+		handle @page {
+			root * /srv
+			rewrite * /index.html
+			file_server
+		}
 	}
 }

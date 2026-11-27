@@ -1,0 +1,42 @@
+<!doctype html>
+<html lang="en">
+<head>
+	<meta charset="utf-8">
+	<meta name="viewport" content="width=device-width, initial-scale=1">
+	<title>Guestbook</title>
+	<style>
+		:root { color-scheme: light dark; --bg: #fbfaf8; --card: #fff; --text: #22211e; --muted: #75726b; --line: #e7e3dc; --accent: #c0782a; font: 15px/1.5 ui-sans-serif, system-ui, sans-serif; }
+		@media (prefers-color-scheme: dark) { :root { --bg: #101012; --card: #18181b; --text: #e8e6e1; --muted: #9c9a94; --line: #2a2a2f; --accent: #e5aa5c; } }
+		body { margin: 0; background: var(--bg); color: var(--text); }
+		main { max-width: 560px; margin: 0 auto; padding: 32px 16px; }
+		h1 { margin: 0 0 16px; }
+		form { display: grid; gap: 8px; margin-bottom: 20px; }
+		input, textarea { padding: 9px 10px; border-radius: 8px; border: 1px solid var(--line); background: var(--card); color: var(--text); font: inherit; }
+		button { justify-self: start; height: 36px; padding: 0 18px; border: 0; border-radius: 8px; background: var(--accent); color: #1a130a; font: inherit; font-weight: 600; cursor: pointer; }
+		.msg { padding: 12px 0; border-top: 1px solid var(--line); }
+		.msg b { font-weight: 600; } .msg time { color: var(--muted); font-size: 12px; margin-left: 6px; }
+		.msg p { margin: 2px 0 0; white-space: pre-wrap; }
+	</style>
+</head>
+<body>
+	<main>
+		<h1>Guestbook</h1>
+		<form id="f"><input name="name" placeholder="Your name (optional)" maxlength="60"><textarea name="text" rows="3" placeholder="Say hello" required maxlength="500"></textarea><button>Sign</button></form>
+		<div id="list"></div>
+	</main>
+	<script>
+		const esc = (s) => String(s).replace(/[&<>"']/g, (c) => ({ '&': '&amp;', '<': '&lt;', '>': '&gt;', '"': '&quot;', "'": '&#39;' })[c]);
+		async function load() {
+			const msgs = await (await fetch('api/messages')).json();
+			document.getElementById('list').innerHTML = msgs.map((m) => `<div class="msg"><b>${esc(m.name)}</b><time>${new Date(m.at).toLocaleString()}</time><p>${esc(m.text)}</p></div>`).join('');
+		}
+		document.getElementById('f').addEventListener('submit', async (e) => {
+			e.preventDefault();
+			const body = Object.fromEntries(new FormData(e.target));
+			const r = await fetch('api/messages', { method: 'POST', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify(body) });
+			if (r.ok) { e.target.reset(); load(); }
+		});
+		load();
+	</script>
+</body>
+</html>

@@ -63,7 +63,12 @@
 
 	// Signed in on a sign-in page: go home.
 	$effect(() => {
-		if (view === 'app' && (path === '/login' || path === '/signup')) goto('/', { replaceState: true });
+		if (view !== 'app' || (path !== '/login' && path !== '/signup')) return;
+		// Sent here by an app (/<slug>/…) that needs a Kern sign-in: go back to it with a full page load,
+		// since the app is not part of this page.
+		const next = page.url.searchParams.get('next');
+		if (next && /^\/[^/\\]/.test(next) && !/^\/(login|signup)\b/.test(next)) window.location.replace(next);
+		else goto('/', { replaceState: true });
 	});
 </script>
 

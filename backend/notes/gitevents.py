@@ -26,6 +26,7 @@ LISTENER_MODULES: list[str] = [
     "notes.ci",
     "notes.gitmirrors",
     "notes.gitwebhooks",
+    "kernapps.events",
 ]
 
 _listeners = []

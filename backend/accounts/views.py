@@ -50,8 +50,14 @@ def site_json(request, user=None) -> dict:
         "signup_mode": cfg["signup_mode"],
         "allow_git": cfg["allow_git"],
         "allow_mail": cfg["allow_mail"],
+        "apps": _apps_allowed(u, cfg) if signed_in else False,
         "user": user_json(u) if signed_in else None,
     }
+
+
+def _apps_allowed(u, cfg) -> bool:
+    mode = cfg.get("apps_access", "admins")
+    return mode == "everyone" or (mode == "admins" and bool(u.is_staff))
 
 
 def check_username(name: str, exclude_id=None) -> str:
@@ -421,6 +427,8 @@ def admin_user_detail(request, user_id):
         tenancy.forget_db(u.id)
         shutil.rmtree(tenancy.user_dir(u.id), ignore_errors=True)
         GitToken.objects.filter(owner=u.id).delete()
+        from kernapps.models import App
+        App.objects.filter(owner=u.id).delete()  # the apps service stops them and removes their files
         u.delete()
         return Response(status=204)
     data = request.data if isinstance(request.data, dict) else {}

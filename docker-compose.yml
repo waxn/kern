@@ -18,6 +18,8 @@ services:
       # Used to build ssh:// clone URLs (host defaults to the one you browse Kern with).
       KERN_SSH_HOST: ${KERN_SSH_HOST:-}
       KERN_SSH_PORT: ${KERN_SSH_PORT:-2222}
+      # Where the apps service listens for the backend (start, stop, live numbers).
+      KERN_APPS_CONTROL: http://apps:8101
     volumes:
       - kern_data:/data
     extra_hosts:
@@ -50,6 +52,29 @@ services:
     extra_hosts:
       # Lets a test mail server on this machine be reached as host.docker.internal
       # (also needs Settings → Server → "Mail servers on the local network").
+      - "host.docker.internal:host-gateway"
+
+  # Runs your apps (Apps in the sidebar, docs/apps.md): every app is a process in this one container,
+  # under a user of its own, served at http://<this machine>:8420/<app path>/ through the web container.
+  # Also runs builds and the AI app builder. Don't want apps? Remove this service.
+  apps:
+    build:
+      context: ./backend
+      args:
+        PARCEL_SCRAPER_VERSION: ${PARCEL_SCRAPER_VERSION:-0.1225.0}
+    command: ["apps-worker"]
+    restart: unless-stopped
+    stop_grace_period: 20s
+    depends_on:
+      backend:
+        condition: service_healthy
+    environment:
+      KERN_DATA_DIR: /data
+      # KERN_APPS_BUILD_TIMEOUT: 900   # seconds a build step may take
+      # KERN_APPS_START_TIMEOUT: 60    # seconds a new release has to start answering
+    volumes:
+      - kern_data:/data
+    extra_hosts:
       - "host.docker.internal:host-gateway"
 
   # Runs the CI pipelines of the git server (.kern/ci.yml, see docs/git-ci.md). Each job runs in a
@@ -85,6 +110,7 @@ services:
         condition: service_healthy
     environment:
       KERN_DATA_DIR: /data
+      KERN_APPS_CONTROL: http://apps:8101  # pushes over SSH deploy apps right away
     volumes:
       - kern_data:/data
     ports:

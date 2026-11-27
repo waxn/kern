@@ -1,0 +1,2 @@
+{"name": "Node.js server", "icon": "🟩", "order": 4,
+ "description": "A small Node.js server with a JSON API and a page, no packages needed. Add a package.json dependency and Kern runs npm install for you."}

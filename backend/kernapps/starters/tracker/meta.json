@@ -1,0 +1,2 @@
+{"name": "Tracker", "icon": "📈", "order": 1,
+ "description": "Log numbers over time and see them on a chart: weights of your chickens, plant heights, mileage. Python, no dependencies, SQLite."}

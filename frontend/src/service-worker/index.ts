@@ -4,6 +4,7 @@
 /// <reference lib="webworker" />
 import { version } from '$app/env';
 import { assets, immutable } from '$app/manifest';
+import { isKernPath } from '../lib/kernRoutes';
 
 const sw = self as unknown as ServiceWorkerGlobalScope;
 const SHELL = `kern-shell-${version}`;
@@ -31,6 +32,8 @@ sw.addEventListener('fetch', (event) => {
 	if (req.method !== 'GET') return;
 	const url = new URL(req.url);
 	if (url.origin !== location.origin) return;
+	// Apps (/<slug>/…) are other programs that happen to share this address: never cache or answer for them.
+	if (!isKernPath(url.pathname)) return;
 
 	if (url.pathname.startsWith('/media/')) {
 		// Audio/video stream with HTTP range requests (seeking, big files): straight to the network.

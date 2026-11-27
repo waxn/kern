@@ -148,6 +148,18 @@ coming back today, and the sidebar counts unread mail. Each user connects their 
 two-factor sign-in is required. The `mail` service in `docker-compose.yml` keeps every mailbox in
 sync. Details, and the security decisions behind it: [docs/mail.md](docs/mail.md).
 
+### Apps
+
+**Apps** in the sidebar runs small programs of your own on the server, each at its own address
+(`http://<server>:8420/chickens/`), as a page of its own with no Kern around it: a tracker for
+your chickens' weights, a dashboard your machines report usage to, anything. Describe one and the
+**AI builder** writes, deploys and tests it; or start from a template, one of your git
+repositories (deployed on every push) or any git URL. Kern builds Python, Node.js and static apps,
+keeps them running (restarts, zero-downtime deploys, one-click rollback), shows their logs, CPU and
+memory, and lets you choose per app who can open it: only you, signed-in users or everyone, with
+public paths for device APIs. Every app runs in the one `apps` service under a user of its own.
+Details: [docs/apps.md](docs/apps.md).
+
 ### Bookmarks
 
 **Bookmarks** in the sidebar saves web pages, images and videos from a URL.
@@ -370,6 +382,7 @@ The Vite dev server proxies `/api`, `/media` and git traffic (`/git/<name>.git/â
 backend with gunicorn (as in Docker) to test those.
 Backend tests: `cd backend && .venv/bin/python manage.py test` (accounts, per-user isolation, and the notes app),
 and for mail `KERN_TESTING=1 .venv/bin/python -m pytest` (needs `requirements-dev.txt`).
+Apps run separately: `.venv/bin/python manage.py apps_worker` (the Vite dev server sends app paths to it).
 Mail sync runs separately: `.venv/bin/python manage.py mail_worker`, or `manage.py demo --user <name>` for a
 demo mailbox with no mail server (see [docs/mail.md](docs/mail.md)).
 The setup code for a development server is printed by `kern_boot` (or set `KERN_SETUP_CODE`).
@@ -380,7 +393,8 @@ Frontend checks: `cd frontend && npm run check`; unit tests: `npm test`.
 ## Layout
 
 ```
-backend/   Django project (kern/), apps notes/, accounts/ and mail/
+backend/   Django project (kern/), apps notes/, accounts/, mail/ and kernapps/
+  kernapps/           Apps: registry, builds, supervisor + gateway (apps_worker), AI builder, starters/
   mail/               mail: IMAP sync, sending, search, sanitizer, phishing rules, snooze, packagesâ€¦
   mail/api/           /api/mail endpoints; guard.py requires two-factor sign-in
   accounts/totp.py    two-factor sign-in

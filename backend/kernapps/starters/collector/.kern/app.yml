@@ -1,0 +1,3 @@
+runtime: python
+start: python app.py
+health: /healthz

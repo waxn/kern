@@ -18,6 +18,8 @@ export interface Site {
 	signup_mode: 'closed' | 'open' | 'approval';
 	allow_git: boolean;
 	allow_mail?: boolean;
+	/** May this user create and run apps (Settings → Server → Apps)? */
+	apps?: boolean;
 	user: User | null;
 }
 

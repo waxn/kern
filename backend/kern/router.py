@@ -1,7 +1,7 @@
 from . import tenancy
 
 TENANT_APPS = {"notes", "mail"}  # live in each user's own database
-SHARED_APPS = {"auth", "contenttypes", "sessions", "accounts", "admin", "migrations"}
+SHARED_APPS = {"auth", "contenttypes", "sessions", "accounts", "admin", "migrations", "kernapps"}
 
 
 class TenantRouter:

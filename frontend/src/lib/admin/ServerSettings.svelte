@@ -5,7 +5,7 @@
 	import { session } from '#lib/state/session.svelte.ts';
 	import { ui } from '#lib/state/ui.svelte.ts';
 
-	interface Cfg { site_name: string; landing_enabled: boolean; signup_mode: 'closed' | 'approval' | 'open'; allow_git: boolean; allow_mail: boolean; allow_local_mail: boolean; allow_local_git_remotes: boolean }
+	interface Cfg { site_name: string; landing_enabled: boolean; signup_mode: 'closed' | 'approval' | 'open'; allow_git: boolean; allow_mail: boolean; allow_local_mail: boolean; allow_local_git_remotes: boolean; apps_access: 'off' | 'admins' | 'everyone' }
 	let cfg = $state<Cfg | null>(null);
 	let name = $state('');
 
@@ -21,7 +21,7 @@
 	async function save(patch: Partial<Cfg>) {
 		try {
 			cfg = await api.patch<Cfg>('/admin/site', patch);
-			if (session.site) session.site = { ...session.site, ...cfg };
+			if (session.site) session.site = { ...session.site, ...cfg, apps: cfg.apps_access === 'everyone' || (cfg.apps_access === 'admins' && !!session.user?.is_admin) };
 		} catch (e) {
 			ui.error(e);
 		}
@@ -50,6 +50,14 @@
 		<div class="item">
 			<div><b>Git hosting</b><span>Let people host repositories and push to them over HTTP. Turning it off also blocks git clients.</span></div>
 			<Toggle checked={cfg.allow_git} label="Git hosting" onchange={(v) => save({ allow_git: v })} />
+		</div>
+		<div class="item">
+			<div><b>Apps</b><span>Who may create apps: programs that run on this server, each at its own address (<code>/&lt;name&gt;/</code>). An app runs code on the server, so give this only to people you trust. Needs the <code>apps</code> service in docker-compose.yml.</span></div>
+			<div class="seg">
+				{#each [['off', 'Off'], ['admins', 'Administrators'], ['everyone', 'Everyone']] as [v, label] (v)}
+					<button class:on={cfg.apps_access === v} onclick={() => save({ apps_access: v as Cfg['apps_access'] })}>{label}</button>
+				{/each}
+			</div>
 		</div>
 		<div class="item">
 			<div><b>Mail</b><span>Let people connect their own mailbox (Settings → Mail). It needs two-factor sign-in, and the <code>mail</code> service in docker-compose.yml does the syncing.</span></div>
