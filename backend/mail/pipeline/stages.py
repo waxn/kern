@@ -9,7 +9,7 @@ from .. import risk, spam
 from ..models import Correspondent, FolderRole, Message
 from ..risk import auth as auth_mod
 from ..risk.domains import org_domain
-from . import Context, Stage
+from . import PENDING, Context, Stage
 from mail.account import cfg as _mail_cfg
 
 
@@ -158,10 +158,34 @@ class BlockListStage(Stage):
         actions.move_messages([ctx.message], actions.role_folder(FolderRole.JUNK))
 
 
+class SpamFilterStage(Stage):
+    """The built-in spam rules (mail/spamfilter.py): your provider's own verdict, new senders that
+    look like phishing, and senders you have junked before. Only new mail, never a first sync's
+    backlog, and never anyone you have written to."""
+
+    name = "spam-filter"
+    version = 1
+
+    def applies(self, ctx: Context) -> bool:
+        return not ctx.initial and not ctx.from_me and ctx.message.folder.role == FolderRole.INBOX
+
+    def run(self, ctx: Context) -> None:
+        from .. import actions, spamfilter
+
+        m = ctx.message
+        got = spamfilter.judge(m, ctx.parsed.headers or {}, ctx.me)
+        if got is None:
+            return
+        spamfilter.record(m, *got)
+        actions.move_messages([m], actions.role_folder(FolderRole.JUNK))
+        spamfilter.log.info("spam filter (%s) moved message %s to Junk", got[0], m.pk)
+
+
 class PrivateSortStage(Stage):
-    """Asks your private model (mail/private_ai.py) whether new mail is Inbox or Junk. Only new
-    mail, never a first sync's backlog, and never someone you've written to. If the model is off
-    the mail just stays where the normal rules put it."""
+    """Queues new mail for your private model (mail/private_ai.py). The model can take a minute
+    and may be switched off, so it is never asked here: the mail worker's sorting thread asks it
+    (private_ai.sort_pending) and retries while the model is off. This stage only marks the mail
+    as waiting, with PENDING in Message.pipeline, until a verdict is in."""
 
     name = "private-sort"
     version = 1
@@ -172,22 +196,8 @@ class PrivateSortStage(Stage):
         return (not ctx.initial and not ctx.from_me and ctx.message.folder.role == FolderRole.INBOX
                 and private_ai.sorting_on())
 
-    def run(self, ctx: Context) -> None:
-        from .. import actions, private_ai
-
-        m = ctx.message
-        corr = Correspondent.objects.filter(address=m.from_addr).first()
-        if corr and corr.sent_count > 0:
-            private_ai.activity("skipped", reason="you have written to this sender before", **{"from": m.from_addr},
-                                subject=(m.subject or "")[:120])
-            return
-        got = private_ai.classify(m, ctx.parsed.text or (m.snippet or ""))
-        if got is None:
-            return
-        private_ai.record(m, *got)
-        if got[0] == "junk":
-            actions.move_messages([m], actions.role_folder(FolderRole.JUNK))
-            private_ai.log.info("private model moved message %s to Junk", m.pk)
+    def run(self, ctx: Context):
+        return PENDING
 
 
 class PackageStage(Stage):
@@ -277,4 +287,4 @@ class SnoozeReplyStage(Stage):
             snooze.wake_for_new_message(ctx.message)
 
 
-__all__ = ["RiskStage", "ContactsStage", "BlockListStage", "PrivateSortStage", "SnoozeReplyStage", "Q"]
+__all__ = ["RiskStage", "ContactsStage", "BlockListStage", "SpamFilterStage", "PrivateSortStage", "SnoozeReplyStage", "Q"]

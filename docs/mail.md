@@ -137,6 +137,16 @@ Mail makes Kern a much more valuable target, so these are deliberate:
   or the file named by `KERN_SECRET_BOX_KEY_FILE` (e.g. a Docker secret). A copy of a database
   or a backup zip alone doesn't reveal them. The password is write-only: the browser is only
   told whether one is stored.
+- **Spam filtering** has two layers, both only for new mail (never a first sync's backlog) and
+  never for anyone you've written to or a conversation you replied in. The built-in rules
+  (`backend/mail/spamfilter.py`) need no model: your provider's own spam verdict
+  (`X-Spam-Flag`, `X-Spam`, `X-Spam-Status`, `X-Rspamd-Action`), new senders that look like
+  phishing (high risk score), and senders you've junked at least twice and never kept anything
+  from. The optional private model then reads what's left. The model runs in the mail worker's
+  own thread, so a slow or switched-off model never delays syncing, and mail that arrived while
+  it was off is sorted when it's back (within 12 hours). To try the built-in rules on your real
+  mail before trusting them: `python manage.py spam_sweep --user <name>` (dry run; add `--apply`
+  to move what it found).
 - **Email HTML is untrusted.** It's cleaned on the server with an allowlist sanitizer
   (`backend/mail/sanitize.py`: no scripts, event handlers, forms, frames, `javascript:` URLs or
   dangerous CSS) and then shown in a sandboxed iframe that may never run scripts, with its own

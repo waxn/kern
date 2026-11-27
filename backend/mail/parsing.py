@@ -57,6 +57,7 @@ KEPT_HEADERS = (
     "return-path", "sender", "precedence", "auto-submitted",
     "x-mailer", "user-agent", "received-spf",
     "delivered-to", "x-forwarded-to", "x-original-to",
+    "x-spam-flag", "x-spam", "x-spam-status", "x-rspamd-action",  # your provider's spam verdict
 )
 
 _CTRL = re.compile(r"[\x00-\x08\x0b\x0c\x0e-\x1f\x7f]")

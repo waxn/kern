@@ -8,6 +8,8 @@ settings.MAIL_PIPELINE, in order. A stage is a small class:
         version = 1                # bump to make `reprocess` re-run it
         def applies(self, ctx): ...  # optional filter
         def run(self, ctx): ...      # mutate ctx.message (save what you change)
+                                     # return PENDING if the work is not finished yet and
+                                     # something else will finish it later
 
 The context gives each stage the stored Message and the parsed MIME
 (ParsedMessage) so nothing is re-parsed. Completed stages are recorded in
@@ -32,6 +34,9 @@ from django.utils.module_loading import import_string
 from ..identity import my_addresses
 
 log = logging.getLogger("kern.mail.pipeline")
+
+
+PENDING = 0  # recorded in Message.pipeline instead of the version: "started, not finished"
 
 
 @dataclass
@@ -73,7 +78,7 @@ def run_pipeline(message, parsed, *, initial: bool = False, only: set[str] | Non
             continue
         if not stage.applies(ctx):
             continue
-        stage.run(ctx)
-        done[stage.name] = stage.version
+        result = stage.run(ctx)
+        done[stage.name] = PENDING if result is PENDING else stage.version
     message.pipeline = done
     message.save(update_fields=["pipeline"])

@@ -370,6 +370,66 @@ def feedback(message, text: str) -> str:
     return line
 
 
+SORT_WINDOW = 12 * 3600  # mail older than this when the model comes back is left alone
+STAGE = "private-sort"
+
+
+def _finish(pk: int) -> None:
+    """Mark a queued message as sorted (or deliberately left alone), so it is not asked again."""
+    from .models import Message
+    from .pipeline import load_stages
+
+    version = next((st.version for st in load_stages() if st.name == STAGE), 1)
+    m = Message.objects.filter(pk=pk).first()
+    if m is not None:
+        m.pipeline = {**(m.pipeline or {}), STAGE: version}
+        m.save(update_fields=["pipeline"])
+
+
+def sort_pending(limit: int = 20) -> int:
+    """Ask the model about mail PrivateSortStage queued. Called over and over by the mail worker's
+    sorting thread, so mail that arrives while the model is off or busy is sorted when it is back
+    (within SORT_WINDOW). Returns how many messages got an answer; stops at the first failure,
+    since the rest would only fail too."""
+    from datetime import timedelta
+
+    from django.utils import timezone
+
+    from . import actions
+    from .models import Correspondent, FolderRole, Message
+
+    if not sorting_on():
+        return 0
+    since = timezone.now() - timedelta(seconds=SORT_WINDOW)
+    queued = [m for m in Message.objects.filter(folder__role=FolderRole.INBOX, created__gte=since)
+              .select_related("folder").order_by("-sort_date", "-id")[:200]
+              if STAGE in (m.pipeline or {}) and (m.pipeline or {})[STAGE] == 0][:limit]
+    done = 0
+    for m in queued:
+        who = {"from": m.from_addr, "subject": (m.subject or "")[:120]}
+        corr = Correspondent.objects.filter(address=m.from_addr).first()
+        if corr and corr.sent_count > 0:
+            activity("skipped", reason="you have written to this sender before", **who)
+            _finish(m.pk)
+            continue
+        if m.seen or m.flagged or m.answered:  # the answer can take a minute; you may have got there first
+            activity("skipped", reason="you had already dealt with it", **who)
+            _finish(m.pk)
+            continue
+        got = classify(m, m.body_text or m.snippet or "")
+        if got is None:
+            break  # off, or backing off: stays queued
+        record(m, *got)
+        fresh = Message.objects.filter(pk=m.pk).select_related("folder").first()
+        if got[0] == "junk" and fresh is not None and fresh.folder.role == FolderRole.INBOX \
+                and not (fresh.seen or fresh.flagged or fresh.answered):
+            actions.move_messages([fresh], actions.role_folder(FolderRole.JUNK))
+            log.info("private model moved message %s to Junk", m.pk)
+        _finish(m.pk)
+        done += 1
+    return done
+
+
 def record(message, v: str, why: str) -> None:
     """Remember the verdict on the message. A weight-0 finding: it never changes the risk score."""
     keep = [f for f in (message.risk_findings or []) if f.get("rule") != "private-sort"]

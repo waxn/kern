@@ -121,6 +121,7 @@ MAIL_PIPELINE = [
     "mail.pipeline.stages.RiskStage",
     "mail.pipeline.stages.ContactsStage",
     "mail.pipeline.stages.BlockListStage",
+    "mail.pipeline.stages.SpamFilterStage",
     "mail.pipeline.stages.PrivateSortStage",
     "mail.pipeline.stages.PackageStage",
     "mail.pipeline.stages.MuteStage",

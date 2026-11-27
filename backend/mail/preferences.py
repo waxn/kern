@@ -61,7 +61,10 @@ def update(changes: dict) -> dict:
             if value not in ("open", "delay", "manual"):
                 raise ValueError("mark_read must be 'open', 'delay' or 'manual'")
         data[key] = value
-    Preferences.objects.update_or_create(pk=1, defaults={"data": data})
+    # The row also holds other features' settings (private_ai, tracking, geo): change only our keys.
+    row, _ = Preferences.objects.get_or_create(pk=1, defaults={"data": {}})
+    row.data = {**(row.data or {}), **data}
+    row.save(update_fields=["data", "updated"])
     return data
 
 

@@ -115,6 +115,22 @@ class Worker:
                 close_old_connections()
             self.stop.wait(5)
 
+    def sort_private(self):
+        """Private-model sorting, in its own thread: the model can take a minute per message and
+        may be switched off, so it must never hold up syncing. Mail waits (PrivateSortStage) and
+        is sorted here, retried while the model is off."""
+        from . import private_ai
+
+        while not self.stop.is_set():
+            busy = False
+            try:
+                busy = private_ai.sort_pending() > 0
+            except Exception:  # noqa: BLE001 - sorting must never take the worker down
+                log.exception("private model sorting failed")
+            finally:
+                close_old_connections()
+            self.stop.wait(1 if busy else 5)
+
     def run_forever(self):
         if self.require_config and not _mail_cfg()["USERNAME"]:
             log.error("MAIL_USERNAME not set; worker idle. See .env.example.")
@@ -129,6 +145,7 @@ class Worker:
             from kern import tenancy
 
             tenancy.spawn(self.track_packages)
+            tenancy.spawn(self.sort_private)
         backoff = 5
         while not self.stop.is_set():
             server: MailServer | None = None

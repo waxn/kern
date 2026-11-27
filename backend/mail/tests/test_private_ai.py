@@ -52,6 +52,7 @@ def test_junk_verdict_moves_new_mail(loaded, on, engine, server, monkeypatch):
     monkeypatch.setattr(private_ai, "complete", lambda s, p, **k: "junk")
     server.deliver("INBOX", mail(1))
     engine.sync_folder(inbox())
+    private_ai.sort_pending()
     assert Message.objects.get(message_id="pa1@stranger.test").folder.role == FolderRole.JUNK
 
 
@@ -63,10 +64,12 @@ def test_inbox_verdict_and_offline_leave_mail_alone(loaded, on, engine, server, 
         raise private_ai.PrivateAIError("off")
 
     engine.sync_folder(inbox())
+    private_ai.sort_pending()
     monkeypatch.setattr(private_ai, "complete", down)
     server.deliver("INBOX", mail(3))
     server.deliver("INBOX", mail(4))
     engine.sync_folder(inbox())
+    private_ai.sort_pending()
     for n in (2, 3, 4):
         assert Message.objects.get(message_id=f"pa{n}@stranger.test").folder.role == FolderRole.INBOX
 
@@ -75,6 +78,7 @@ def test_people_you_wrote_to_are_never_judged(loaded, on, engine, server, monkey
     monkeypatch.setattr(private_ai, "complete", lambda s, p, **k: "junk")
     server.deliver("INBOX", mail(5, sender="alice@friends.test", subject="hi"))
     engine.sync_folder(inbox())
+    private_ai.sort_pending()
     assert Message.objects.get(message_id="pa5@stranger.test").folder.role == FolderRole.INBOX
 
 
@@ -83,6 +87,7 @@ def test_sorting_off_does_nothing(loaded, api, on, engine, server, monkeypatch):
     monkeypatch.setattr(private_ai, "complete", lambda s, p, **k: "junk")
     server.deliver("INBOX", mail(6))
     engine.sync_folder(inbox())
+    private_ai.sort_pending()
     assert Message.objects.get(message_id="pa6@stranger.test").folder.role == FolderRole.INBOX
 
 
@@ -97,6 +102,7 @@ def test_reason_is_kept_and_shown(loaded, on, engine, server, api, monkeypatch):
     monkeypatch.setattr(private_ai, "complete", lambda s, p, **k: "<think>hm</think>VERDICT: junk\nREASON: Unsolicited prize offer from an unknown sender.")
     server.deliver("INBOX", mail(7))
     engine.sync_folder(inbox())
+    private_ai.sort_pending()
     m = Message.objects.get(message_id="pa7@stranger.test")
     assert m.folder.role == FolderRole.JUNK and m.risk_score == Message.objects.get(pk=m.pk).risk_score
     body = api.get(f"/api/threads/{m.thread_id}").json()
@@ -114,6 +120,7 @@ def test_unreadable_answer_is_explained(loaded, on, engine, server, api, monkeyp
     monkeypatch.setattr(private_ai, "complete", lambda s, p, **k: "<think>let me think about this")
     server.deliver("INBOX", mail(8))
     engine.sync_folder(inbox())
+    private_ai.sort_pending()
     m = Message.objects.get(message_id="pa8@stranger.test")
     assert m.folder.role == FolderRole.INBOX
     assert private_ai.note_for(m)["verdict"] == "unclear"
@@ -133,6 +140,7 @@ def test_activity_log_records_each_decision(loaded, on, engine, server, api, mon
     monkeypatch.setattr(private_ai, "complete", lambda s, p, **k: "VERDICT: junk\nREASON: An ad.")
     server.deliver("INBOX", mail(9))
     engine.sync_folder(inbox())
+    private_ai.sort_pending()
     act = api.get("/api/private-ai").json()["activity"]
     assert act[0]["event"] == "junk" and act[0]["reason"] == "An ad." and act[0]["from"] == "promo@stranger.test"
 
@@ -141,6 +149,8 @@ def test_offline_is_logged_then_backed_off(loaded, on, engine, server, api):
     server.deliver("INBOX", mail(10))
     server.deliver("INBOX", mail(11))
     engine.sync_folder(inbox())
+    private_ai.sort_pending()
+    private_ai.sort_pending()
     events = [a["event"] for a in api.get("/api/private-ai").json()["activity"]]
     assert events[:2] == ["skipped", "offline"]
 
@@ -164,6 +174,7 @@ def test_live_model_sorts_an_ad_into_junk(loaded, api, engine, server, monkeypat
                                         ("Message-ID", "<live1@pentel.example>"), ("Date", "Mon, 16 Nov 2026 10:00:00 +0000")],
                                        "Discover our new pastel collection. Shop now and save 20% with code PASTEL20. Unsubscribe"))
     engine.sync_folder(inbox())
+    private_ai.sort_pending()
     m = Message.objects.get(message_id="live1@pentel.example")
     print(api.get("/api/private-ai").json()["activity"][0])
     assert m.folder.role == FolderRole.JUNK
@@ -174,16 +185,76 @@ def test_live_model_sorts_an_ad_into_junk(loaded, api, engine, server, monkeypat
 def test_feedback_becomes_a_rule_the_model_reads(loaded, on, engine, server, api, monkeypatch):
     seen = []
     monkeypatch.setattr(private_ai, "complete", lambda s, p, **k: seen.append(s) or "VERDICT: inbox\nREASON: A job alert.")
-    server.deliver("INBOX", mail(9, sender="jobs@linkedin.test", subject="New jobs for you"))
+    server.deliver("INBOX", mail(9, sender="jobs@jobboard.test", subject="New jobs for you"))
     engine.sync_folder(inbox())
+    private_ai.sort_pending()
     m = Message.objects.get(message_id="pa9@stranger.test")
     r = api.post(f"/api/messages/{m.pk}/private-feedback", {"text": "I don't use LinkedIn, so their normal emails can go to junk."})
     assert r.status_code == 200
     rule = r.json()["rule"]
-    assert "jobs@linkedin.test" in rule and "the Inbox" in rule and "don't use LinkedIn" in rule
+    assert "jobs@jobboard.test" in rule and "the Inbox" in rule and "don't use LinkedIn" in rule
     assert rule in api.get("/api/private-ai").json()["guidance"]
     assert api.post(f"/api/messages/{m.pk}/private-feedback", {"text": "  "}).status_code == 400
 
-    server.deliver("INBOX", mail(10, sender="jobs@linkedin.test", subject="More jobs"))
+    server.deliver("INBOX", mail(10, sender="jobs@jobboard.test", subject="More jobs"))
     engine.sync_folder(inbox())
+    private_ai.sort_pending()
     assert "don't use LinkedIn" in seen[-1]
+
+
+def test_mail_that_arrived_while_the_model_was_off_is_sorted_when_it_is_back(loaded, on, engine, server, monkeypatch):
+    def down(*a, **k):
+        raise private_ai.PrivateAIError("off")
+
+    monkeypatch.setattr(private_ai, "complete", down)
+    server.deliver("INBOX", mail(20))
+    engine.sync_folder(inbox())
+    assert private_ai.sort_pending() == 0
+    m = Message.objects.get(message_id="pa20@stranger.test")
+    assert m.folder.role == FolderRole.INBOX and m.pipeline["private-sort"] == 0  # still waiting, not "done"
+
+    private_ai._state.clear()  # the backoff ran out
+    monkeypatch.setattr(private_ai, "complete", lambda s, p, **k: "VERDICT: junk\nREASON: An ad.")
+    assert private_ai.sort_pending() == 1
+    m.refresh_from_db()
+    assert m.folder.role == FolderRole.JUNK and m.pipeline["private-sort"] == 1
+    assert private_ai.sort_pending() == 0  # answered once, not asked again
+
+
+def test_a_slow_answer_never_pulls_back_mail_you_already_moved_or_read(loaded, on, engine, server, monkeypatch):
+    from mail import actions
+
+    server.deliver("INBOX", mail(21))
+    server.deliver("INBOX", mail(22))
+    engine.sync_folder(inbox())
+    moved = Message.objects.get(message_id="pa21@stranger.test")
+    read = Message.objects.get(message_id="pa22@stranger.test")
+
+    def slow(s, p, **k):  # while the model "thinks", you archive one and open the other
+        actions.move_messages([Message.objects.get(pk=moved.pk)], actions.role_folder(FolderRole.ARCHIVE))
+        Message.objects.filter(pk=read.pk).update(seen=True)
+        return "VERDICT: junk\nREASON: An ad."
+
+    monkeypatch.setattr(private_ai, "complete", slow)
+    private_ai.sort_pending()
+    moved.refresh_from_db()
+    read.refresh_from_db()
+    assert moved.folder.role == FolderRole.ARCHIVE
+    assert read.folder.role == FolderRole.INBOX
+
+
+def test_sorting_thread_survives_a_crash(loaded, on, monkeypatch):
+    from mail.worker import Worker
+
+    w = Worker(connect=None, sender=None, use_idle=False, require_config=False)
+    calls = []
+
+    def boom():
+        calls.append(1)
+        w.stop.set()
+        raise RuntimeError("boom")
+
+    monkeypatch.setattr(private_ai, "sort_pending", boom)
+    w.sort_private()
+    assert calls == [1]
+
