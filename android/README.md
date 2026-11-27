@@ -39,8 +39,12 @@ titles, on their own "Packages and reminders" channel. Behind nginx, raise
 `proxy_read_timeout` above 300 s (Caddy has no limit by default); otherwise the app settles on
 shorter holds by itself.
 
-The release build is signed with the debug key so it installs straight away; set up your
-own `signingConfig` in `app/build.gradle.kts` before distributing it.
+Releases must always be signed with the same key, or Android (and Obtainium) refuses to update
+an installed app. CI reads it from four repository secrets: `KERN_KEYSTORE_B64` (the keystore,
+base64), `KERN_KEYSTORE_PASSWORD`, `KERN_KEY_ALIAS` and `KERN_KEY_PASSWORD`. Local builds, and
+builds without those secrets, fall back to the debug key, which installs fine but can't update
+an app signed with the real key. Keep a backup of the keystore: lose it and everyone has to
+uninstall and reinstall.
 
 GitHub Actions (`.github/workflows/android.yml`) runs the tests and builds both APKs on every
 push to `main` that touches `android/`; download them from the run's **kern-android** artifact.

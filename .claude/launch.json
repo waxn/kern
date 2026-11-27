@@ -290,6 +290,78 @@
         "--strictPort"
       ],
       "port": 5263
+    },
+    {
+      "name": "kern-mailpolish-backend",
+      "runtimeExecutable": "env",
+      "runtimeArgs": [
+        "KERN_DATA_DIR=/tmp/claude-1000/-home-linus--claude-spares-spare-PslWo6/7bee29ec-28d5-4fc0-9239-581249dfc271/scratchpad/maildata",
+        "KERN_NO_AUTO_BACKUP=1",
+        "sh",
+        "-c",
+        "backend/.venv/bin/python /tmp/claude-1000/-home-linus--claude-spares-spare-PslWo6/7bee29ec-28d5-4fc0-9239-581249dfc271/scratchpad/bootstrap.py && (cd backend && .venv/bin/python manage.py demo --user demo &) && exec backend/.venv/bin/python backend/manage.py runserver 127.0.0.1:8541 --noreload"
+      ],
+      "port": 8541
+    },
+    {
+      "name": "kern-mailpolish-frontend",
+      "runtimeExecutable": "env",
+      "runtimeArgs": [
+        "KERN_BACKEND=http://127.0.0.1:8541",
+        "npm",
+        "--prefix",
+        "frontend",
+        "run",
+        "dev",
+        "--",
+        "--port",
+        "5273",
+        "--strictPort"
+      ],
+      "port": 5273
+    },
+    {
+      "name": "kern-apps-backend",
+      "runtimeExecutable": "env",
+      "runtimeArgs": [
+        "KERN_DATA_DIR=/tmp/claude-1000/-home-linus--claude-spares-spare-3wHDIL/b5e7dd2d-ab34-47ef-9778-138a75693477/scratchpad/appsdata",
+        "KERN_NO_AUTO_BACKUP=1",
+        "KERN_SETUP_CODE=TESTCODE",
+        "sh",
+        "-c",
+        "backend/.venv/bin/python backend/manage.py kern_boot && exec backend/.venv/bin/python backend/manage.py runserver 127.0.0.1:8561 --noreload"
+      ],
+      "port": 8561
+    },
+    {
+      "name": "kern-apps-worker",
+      "runtimeExecutable": "env",
+      "runtimeArgs": [
+        "KERN_DATA_DIR=/tmp/claude-1000/-home-linus--claude-spares-spare-3wHDIL/b5e7dd2d-ab34-47ef-9778-138a75693477/scratchpad/appsdata",
+        "KERN_NO_AUTO_BACKUP=1",
+        "sh",
+        "-c",
+        "exec backend/.venv/bin/python backend/manage.py apps_worker"
+      ],
+      "port": 8100
+    },
+    {
+      "name": "kern-apps-frontend",
+      "runtimeExecutable": "env",
+      "runtimeArgs": [
+        "KERN_BACKEND=http://127.0.0.1:8561",
+        "KERN_APPS_GATEWAY=http://127.0.0.1:8100",
+        "npm",
+        "--prefix",
+        "frontend",
+        "run",
+        "dev",
+        "--",
+        "--port",
+        "5283",
+        "--strictPort"
+      ],
+      "port": 5283
     }
   ]
 }

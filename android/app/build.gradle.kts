@@ -13,8 +13,8 @@ android {
         applicationId = "app.kern"
         minSdk = 26
         targetSdk = 35
-        versionCode = 7
-        versionName = "1.6"
+        versionCode = 8
+        versionName = "1.7"
     }
 
     // Two apps from one codebase: Kern (everything) and Kern Mail (mail only, with
@@ -35,14 +35,27 @@ android {
         }
     }
 
+    // One permanent key for every release, so phones (and Obtainium) can update in place:
+    // Android refuses an update signed with a different key. CI supplies it through these
+    // environment variables; without them (local builds, forks) release falls back to the debug key.
+    val releaseKeystore = System.getenv("KERN_KEYSTORE_FILE")?.takeIf { file(it).exists() }
+    if (releaseKeystore != null) {
+        signingConfigs {
+            create("release") {
+                storeFile = file(releaseKeystore)
+                storePassword = System.getenv("KERN_KEYSTORE_PASSWORD")
+                keyAlias = System.getenv("KERN_KEY_ALIAS")
+                keyPassword = System.getenv("KERN_KEY_PASSWORD")
+            }
+        }
+    }
+
     buildTypes {
         release {
             isMinifyEnabled = true
             isShrinkResources = true
             proguardFiles(getDefaultProguardFile("proguard-android-optimize.txt"), "proguard-rules.pro")
-            // Signed with the debug key so `assembleRelease` produces an installable APK.
-            // Replace with your own signing config before publishing.
-            signingConfig = signingConfigs.getByName("debug")
+            signingConfig = signingConfigs.getByName(if (releaseKeystore != null) "release" else "debug")
         }
     }
     compileOptions {

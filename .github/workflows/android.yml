@@ -36,7 +36,20 @@ jobs:
         run: ./gradlew --no-daemon testKernDebugUnitTest testMailDebugUnitTest
 
       - name: Build APKs
-        run: ./gradlew --no-daemon assembleDebug assembleRelease
+        env:
+          KERN_KEYSTORE_B64: ${{ secrets.KERN_KEYSTORE_B64 }}
+          KERN_KEYSTORE_PASSWORD: ${{ secrets.KERN_KEYSTORE_PASSWORD }}
+          KERN_KEY_ALIAS: ${{ secrets.KERN_KEY_ALIAS }}
+          KERN_KEY_PASSWORD: ${{ secrets.KERN_KEY_PASSWORD }}
+        run: |
+          # The permanent release key (see android/README.md). Absent on forks: debug key then.
+          if [ -n "$KERN_KEYSTORE_B64" ]; then
+            echo "$KERN_KEYSTORE_B64" | base64 -d > "$RUNNER_TEMP/kern-release.jks"
+            export KERN_KEYSTORE_FILE="$RUNNER_TEMP/kern-release.jks"
+          else
+            echo "::warning::No KERN_KEYSTORE_B64 secret; release APKs use the debug key and cannot update installed apps."
+          fi
+          ./gradlew --no-daemon assembleDebug assembleRelease
 
       - name: Name the APKs
         run: |
