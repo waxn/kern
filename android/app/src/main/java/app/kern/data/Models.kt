@@ -556,3 +556,69 @@ data class Storage(
     @SerialName("backups_bytes") val backupsBytes: Long = 0,
     val counts: StorageCounts = StorageCounts(),
 )
+
+// ---- Apps (the small programs Kern runs for you at /<path>/)
+
+@Serializable
+data class AppDeploy(
+    val number: Int = 0,
+    val sha: String = "",
+    val short: String = "",
+    val subject: String = "",
+    val trigger: String = "",
+    val who: String = "",
+    val status: String = "",
+    val error: String = "",
+    val runtime: String = "",
+    val created: String? = null,
+    val started: String? = null,
+    val finished: String? = null,
+    val seconds: Double? = null,
+)
+
+/** What the apps service reports about a running app; null when it is down or has nothing to say. */
+@Serializable
+data class AppMetrics(
+    val running: Boolean = false,
+    val uptime: Double = 0.0,
+    val cpu: Double = 0.0,
+    val rss: Double = 0.0,
+    val restarts: Int = 0,
+    val held: Boolean = false,
+)
+
+@Serializable
+data class HostedApp(
+    val slug: String,
+    val id: Int = 0,
+    val name: String = "",
+    val description: String = "",
+    val icon: String = "",
+    val color: String = "",
+    val path: String = "",
+    val access: String = "private",
+    val enabled: Boolean = true,
+    val state: String = "new",
+    @SerialName("state_detail") val stateDetail: String = "",
+    @SerialName("state_at") val stateAt: String? = null,
+    val source: String = "",
+    val repo: String = "",
+    @SerialName("git_url") val gitUrl: String = "",
+    val branch: String = "",
+    val runtime: String = "",
+    val updated: String? = null,
+    val live: AppDeploy? = null,
+    val latest: AppDeploy? = null,
+    val metrics: AppMetrics? = null,
+    /** Detail only: whether the apps service answered. */
+    val worker: Boolean? = null,
+) {
+    val displayName: String get() = name.ifBlank { slug }
+}
+
+@Serializable
+data class AppsList(val apps: List<HostedApp> = emptyList(), val worker: Boolean = true)
+
+/** `GET /apps/<slug>/logs`: the end of the log, as lines of "<time> <mark> <text>". */
+@Serializable
+data class AppLog(val text: String = "", val offset: Long = 0, val size: Long = 0)

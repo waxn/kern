@@ -169,6 +169,13 @@ class Kern(val api: Api) {
     suspend fun repoCommits(name: String, ref: String?): JsonObject = api.get("/git/repos/$name/commits" + qs("ref" to ref, "per" to 50))
     suspend fun createRepo(name: String, description: String): Repo = api.post("/git/repos", jsonOf("name" to name, "description" to description))
 
+    // ---- apps (403 "not available for your account" when an administrator hasn't turned them on)
+    suspend fun apps(): AppsList = parseApps(api.raw("GET", "/apps"))
+    suspend fun app(slug: String): HostedApp = api.get("/apps/$slug")
+    /** [action] is start, stop, restart or deploy; the answer is the app as it is afterwards. */
+    suspend fun appAction(slug: String, action: String): HostedApp = api.post("/apps/$slug/$action")
+    suspend fun appLogs(slug: String): AppLog = api.get("/apps/$slug/logs")
+
     // ---- mail (needs two-factor sign-in; /mail/account/status answers without it)
     suspend fun mailStatus(): MailStatus = api.get("/mail/account/status")
     suspend fun mailToday(): MailToday = api.get("/mail/today")

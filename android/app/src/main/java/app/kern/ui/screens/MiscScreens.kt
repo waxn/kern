@@ -22,7 +22,8 @@ import androidx.compose.material.icons.Icons
 import androidx.compose.material.icons.automirrored.outlined.InsertDriveFile
 import androidx.compose.material.icons.outlined.Archive
 import androidx.compose.material.icons.outlined.AudioFile
-import androidx.compose.material.icons.outlined.AutoAwesome
+import app.kern.ui.components.sparkleIcon
+import app.kern.ui.components.tintOr
 import androidx.compose.material.icons.outlined.Email
 import androidx.compose.material.icons.outlined.Bookmark
 import androidx.compose.material.icons.outlined.ChevronRight
@@ -38,6 +39,7 @@ import androidx.compose.material.icons.outlined.Insights
 import androidx.compose.material.icons.outlined.Storage
 import androidx.compose.material.icons.outlined.Tag
 import androidx.compose.material.icons.outlined.Unarchive
+import androidx.compose.material.icons.outlined.Widgets
 import androidx.compose.material.icons.automirrored.outlined.ViewQuilt
 import androidx.compose.material.icons.outlined.AccountTree
 import androidx.compose.material.icons.outlined.Search
@@ -63,7 +65,10 @@ import androidx.compose.ui.layout.ContentScale
 import androidx.compose.ui.platform.LocalContext
 import androidx.compose.ui.text.style.TextOverflow
 import androidx.compose.ui.unit.dp
+import app.kern.data.ApiError
+import app.kern.data.AppsList
 import app.kern.data.Doc
+import app.kern.data.appsSummary
 import app.kern.data.LibraryFile
 import app.kern.data.Tag
 import app.kern.data.KernJson
@@ -92,6 +97,12 @@ fun MoreScreen(ws: Workspace, nav: Nav) {
     val session by ws.session.collectAsState()
     val site by ws.site.collectAsState()
     val user = (session as? Session.SignedIn)?.user
+    // The Apps tile shows how many are running, and goes away when the server doesn't offer apps to this account (403).
+    var apps by remember { mutableStateOf<AppsList?>(null) }
+    var appsOff by remember { mutableStateOf(false) }
+    LaunchedEffect(Unit) {
+        try { apps = ws.kern.apps() } catch (e: ApiError) { appsOff = e.status == 403 } catch (_: Exception) {}
+    }
     LazyColumn(Modifier.fillMaxSize().background(kern.bg).statusBarsPadding()) {
         item {
             Row(Modifier.fillMaxWidth().padding(20.dp), verticalAlignment = Alignment.CenterVertically) {
@@ -108,11 +119,12 @@ fun MoreScreen(ws: Workspace, nav: Nav) {
         item {
             Bordered {
                 if (site?.allowMail != false) MoreRow(Icons.Outlined.Email, "Mail") { nav.go("mail") }
-                MoreRow(Icons.Outlined.AutoAwesome, "Intelligence", kern.accent) { nav.go("intelligence") }
+                MoreRow(sparkleIcon, "Intelligence") { nav.go("intelligence") }
                 MoreRow(Icons.Outlined.Bookmark, "Bookmarks") { nav.go("bookmarks") }
                 MoreRow(Icons.AutoMirrored.Outlined.ViewQuilt, "Templates") { nav.go("templates") }
                 MoreRow(Icons.Outlined.FolderOpen, "Files") { nav.go("files") }
                 if (site?.allowGit != false) MoreRow(Icons.Outlined.AccountTree, "Git") { nav.go("git") }
+                if (!appsOff) MoreRow(Icons.Outlined.Widgets, "Apps", subtitle = apps?.let { appsSummary(it) }) { nav.go("apps") }
                 MoreRow(Icons.Outlined.Tag, "Tags") { nav.go("tags") }
             }
         }
@@ -135,11 +147,12 @@ fun MoreScreen(ws: Workspace, nav: Nav) {
 }
 
 @Composable
-private fun MoreRow(icon: ImageVector, label: String, tint: androidx.compose.ui.graphics.Color? = null, onClick: () -> Unit) {
+private fun MoreRow(icon: ImageVector, label: String, tint: androidx.compose.ui.graphics.Color? = null, subtitle: String? = null, onClick: () -> Unit) {
     Row(Modifier.fillMaxWidth().clickable(onClick = onClick).padding(horizontal = 14.dp, vertical = 14.dp), verticalAlignment = Alignment.CenterVertically) {
-        Icon(icon, null, tint = tint ?: kern.text2, modifier = Modifier.size(20.dp))
+        Icon(icon, null, tint = icon.tintOr(tint ?: kern.text2), modifier = Modifier.size(20.dp))
         Spacer(Modifier.width(14.dp))
         Text(label, style = MaterialTheme.typography.bodyLarge, modifier = Modifier.weight(1f))
+        if (subtitle != null) { Text(subtitle, style = MaterialTheme.typography.bodySmall, color = kern.text3); Spacer(Modifier.width(6.dp)) }
         Icon(Icons.Outlined.ChevronRight, null, tint = kern.text3, modifier = Modifier.size(18.dp))
     }
 }

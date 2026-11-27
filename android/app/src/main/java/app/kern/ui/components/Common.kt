@@ -37,6 +37,7 @@ import androidx.compose.material3.CircularProgressIndicator
 import androidx.compose.material3.ExperimentalMaterial3Api
 import androidx.compose.material3.HorizontalDivider
 import androidx.compose.material3.Icon
+import androidx.compose.material3.LocalContentColor
 import androidx.compose.material3.IconButton
 import androidx.compose.material3.MaterialTheme
 import androidx.compose.material3.OutlinedTextField
@@ -195,7 +196,7 @@ fun Loading(modifier: Modifier = Modifier) {
 fun EmptyState(icon: ImageVector, title: String, body: String? = null, modifier: Modifier = Modifier, action: Pair<String, () -> Unit>? = null) {
     Column(modifier.fillMaxWidth().padding(horizontal = 32.dp, vertical = 48.dp), horizontalAlignment = Alignment.CenterHorizontally) {
         Box(Modifier.size(56.dp).clip(CircleShape).background(kern.surface2), contentAlignment = Alignment.Center) {
-            Icon(icon, null, tint = kern.text3, modifier = Modifier.size(26.dp))
+            Icon(icon, null, tint = icon.tintOr(kern.text3), modifier = Modifier.size(26.dp))
         }
         Spacer(Modifier.height(14.dp))
         Text(title, style = MaterialTheme.typography.titleMedium, color = kern.text, textAlign = TextAlign.Center)
@@ -230,7 +231,7 @@ fun KButton(text: String, modifier: Modifier = Modifier, primary: Boolean = fals
         modifier = modifier.height(44.dp),
     ) {
         Row(Modifier.padding(horizontal = 16.dp), verticalAlignment = Alignment.CenterVertically, horizontalArrangement = Arrangement.Center) {
-            if (icon != null) { Icon(icon, null, Modifier.size(18.dp)); Spacer(Modifier.width(8.dp)) }
+            if (icon != null) { Icon(icon, null, Modifier.size(18.dp), tint = icon.tintOr(LocalContentColor.current)); Spacer(Modifier.width(8.dp)) }
             Text(text, style = MaterialTheme.typography.labelLarge, fontWeight = if (primary || danger) FontWeight.SemiBold else FontWeight.Medium)
         }
     }

@@ -37,7 +37,8 @@ import androidx.compose.material.icons.Icons
 import androidx.compose.material.icons.automirrored.outlined.ArrowBack
 import androidx.compose.material.icons.automirrored.outlined.Send
 import androidx.compose.material.icons.outlined.Add
-import androidx.compose.material.icons.outlined.AutoAwesome
+import app.kern.ui.components.Sparkle
+import app.kern.ui.components.sparkleIcon
 import androidx.compose.material.icons.outlined.Delete
 import androidx.compose.material.icons.outlined.Language
 import androidx.compose.material.icons.outlined.Quiz
@@ -102,11 +103,11 @@ fun IntelligenceScreen(ws: Workspace, nav: Nav) {
         when {
             chats == null && err != null -> ErrorState(err!!) { scope.launch { load() } }
             chats == null -> Loading()
-            chats!!.isEmpty() -> EmptyState(Icons.Outlined.AutoAwesome, "Ask about your notes", "Intelligence can search, read and edit your workspace, add tasks and make flashcards. Set up an AI provider in the web app's settings first.", action = "Start a chat" to { new() })
+            chats!!.isEmpty() -> EmptyState(sparkleIcon, "Ask about your notes", "Intelligence can search, read and edit your workspace, add tasks and make flashcards. Set up an AI provider in the web app's settings first.", action = "Start a chat" to { new() })
             else -> LazyColumn {
                 items(chats!!, key = { it.id }) { c ->
                     Row(Modifier.fillMaxWidth().clickable { nav.go("chat/${c.id}") }.padding(horizontal = 20.dp, vertical = 14.dp), verticalAlignment = Alignment.CenterVertically) {
-                        Icon(Icons.Outlined.AutoAwesome, null, tint = kern.accent, modifier = Modifier.size(18.dp))
+                        Sparkle(18.dp)
                         Spacer(Modifier.width(14.dp))
                         Column(Modifier.weight(1f)) {
                             Text(c.title, style = MaterialTheme.typography.bodyLarge, maxLines = 1, overflow = TextOverflow.Ellipsis)
@@ -286,7 +287,7 @@ fun ChatScreen(ws: Workspace, nav: Nav, id: String, page: String?, mailThread: L
                 chat == null && err != null -> ErrorState(err!!) { }
                 chat == null -> Loading()
                 msgs.isEmpty() && pending == null -> Column(Modifier.fillMaxSize().padding(20.dp), verticalArrangement = Arrangement.Center, horizontalAlignment = Alignment.CenterHorizontally) {
-                    Icon(Icons.Outlined.AutoAwesome, null, tint = k.accent, modifier = Modifier.size(36.dp))
+                    Sparkle(36.dp)
                     Spacer(Modifier.height(12.dp))
                     Text(if (mailThread != null) "Ask about this email" else if (page != null) "Ask about this page" else "What can I help with?", style = MaterialTheme.typography.titleLarge)
                     if (mailThread != null) Text("It reads this conversation; it can't send or change mail.", style = MaterialTheme.typography.bodySmall, color = k.text3)

@@ -9,7 +9,7 @@ import androidx.compose.material.icons.Icons
 import androidx.compose.material.icons.outlined.Bookmark
 import androidx.compose.material.icons.outlined.CheckCircle
 import androidx.compose.material.icons.outlined.Description
-import androidx.compose.material.icons.outlined.AutoAwesome
+import app.kern.ui.components.sparkleIcon
 import androidx.compose.material3.MaterialTheme
 import androidx.compose.material3.Text
 import androidx.compose.runtime.Composable
@@ -78,7 +78,7 @@ fun ShareSheet(ws: Workspace, nav: Nav, text: String, subject: String?, onDone: 
                         .onFailure { snack.error(it) }
                 }
             }
-            SheetItem(Icons.Outlined.AutoAwesome, "Ask Intelligence about it") {
+            SheetItem(sparkleIcon, "Ask Intelligence about it") {
                 onDone()
                 scope.launch {
                     runCatching { ws.kern.createChat() }.onSuccess { c ->

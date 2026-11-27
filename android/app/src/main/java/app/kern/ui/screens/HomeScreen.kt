@@ -21,7 +21,7 @@ import androidx.compose.foundation.lazy.items
 import androidx.compose.foundation.shape.RoundedCornerShape
 import androidx.compose.material.icons.Icons
 import androidx.compose.material.icons.outlined.Add
-import androidx.compose.material.icons.outlined.AutoAwesome
+import app.kern.ui.components.sparkleIcon
 import androidx.compose.material.icons.outlined.Layers
 import androidx.compose.material.icons.automirrored.outlined.NoteAdd
 import androidx.compose.material.icons.outlined.Search
@@ -124,7 +124,7 @@ fun HomeScreen(ws: Workspace, nav: Nav) {
                                 scope.launch { try { nav.doc(ws.newPage().id) } catch (e: Exception) { snack.error(e) } }
                             }
                             KButton("Search", icon = Icons.Outlined.Search) { nav.go("search") }
-                            KButton("Ask", icon = Icons.Outlined.AutoAwesome) { nav.go("intelligence") }
+                            KButton("Ask", icon = sparkleIcon) { nav.go("intelligence") }
                         }
                     }
                 }

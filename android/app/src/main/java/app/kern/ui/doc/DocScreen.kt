@@ -41,7 +41,8 @@ import androidx.compose.material.icons.automirrored.outlined.FormatListBulleted
 import androidx.compose.material.icons.automirrored.outlined.OpenInNew
 import androidx.compose.material.icons.outlined.Add
 import androidx.compose.material.icons.outlined.Archive
-import androidx.compose.material.icons.outlined.AutoAwesome
+import app.kern.ui.components.sparkleIcon
+import app.kern.ui.components.tintOr
 import androidx.compose.material.icons.outlined.CheckBox
 import androidx.compose.material.icons.outlined.Code
 import androidx.compose.material.icons.outlined.ContentCopy
@@ -216,7 +217,7 @@ fun DocScreen(ws: Workspace, nav: Nav, id: String) {
                         IconButton(onClick = {
                             done()
                             scope.launch { runCatching { ws.kern.createChat() }.onSuccess { nav.go("chat/${it.id}?page=$id") }.onFailure { snack.error(it) } }
-                        }) { Icon(Icons.Outlined.AutoAwesome, "Ask Intelligence about this page", tint = kern.text2) }
+                        }) { Icon(sparkleIcon, "Ask Intelligence about this page", tint = sparkleIcon.tintOr(kern.text2)) }
                         IconButton(onClick = { sheet = Sheet.PageMenu }) { Icon(Icons.Outlined.MoreVert, "More") }
                     }
                 },
@@ -517,7 +518,7 @@ fun KSheet(onDismiss: () -> Unit, title: String? = null, content: @Composable ()
 @Composable
 fun SheetItem(icon: ImageVector, label: String, danger: Boolean = false, hint: String? = null, onClick: () -> Unit) {
     Row(Modifier.fillMaxWidth().clickable(onClick = onClick).padding(horizontal = 20.dp, vertical = 13.dp), verticalAlignment = Alignment.CenterVertically) {
-        Icon(icon, null, tint = if (danger) kern.danger else kern.text2, modifier = Modifier.size(20.dp))
+        Icon(icon, null, tint = icon.tintOr(if (danger) kern.danger else kern.text2), modifier = Modifier.size(20.dp))
         Spacer(Modifier.width(16.dp))
         Text(label, style = MaterialTheme.typography.bodyLarge, color = if (danger) kern.danger else kern.text, modifier = Modifier.weight(1f))
         if (hint != null) Text(hint, style = MaterialTheme.typography.bodySmall, color = kern.text3)

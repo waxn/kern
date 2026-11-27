@@ -60,6 +60,8 @@ import app.kern.Launch
 import app.kern.ui.components.LocalSnack
 import app.kern.ui.components.Snack
 import app.kern.ui.doc.DocScreen
+import app.kern.ui.screens.AppScreen
+import app.kern.ui.screens.AppsScreen
 import app.kern.ui.screens.ArchiveScreen
 import app.kern.ui.screens.BlobScreen
 import app.kern.ui.screens.BookmarkScreen
@@ -269,6 +271,8 @@ private fun SignedIn(ws: Workspace, launch: MutableStateFlow<Launch?>, host: Sna
                 navArgument("path") { type = NavType.StringType; defaultValue = "" },
                 navArgument("ref") { type = NavType.StringType; nullable = true; defaultValue = null },
             )) { BlobScreen(ws, n, it.arguments!!.getString("name")!!, it.arguments?.getString("path") ?: "", it.arguments?.getString("ref")) }
+            composable("apps") { AppsScreen(ws, n) }
+            composable("app/{slug}") { AppScreen(ws, n, it.arguments!!.getString("slug")!!) }
             composable("trash") { TrashScreen(ws, n) }
             composable("archive") { ArchiveScreen(ws, n) }
             composable("templates") { TemplatesScreen(ws, n) }

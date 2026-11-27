@@ -31,7 +31,8 @@ import androidx.compose.foundation.layout.Arrangement
 import androidx.compose.material.icons.outlined.Settings
 import kotlinx.serialization.decodeFromString
 import kotlinx.coroutines.async
-import androidx.compose.material.icons.outlined.AutoAwesome
+import app.kern.ui.components.sparkleIcon
+import app.kern.ui.components.tintOr
 import androidx.compose.ui.draw.clip
 import app.kern.app
 import androidx.compose.foundation.layout.Box
@@ -954,7 +955,7 @@ fun MailThreadScreen(ws: Workspace, nav: Nav, id: Long) {
         val t = detail?.thread
         KTopBar("", onBack = { nav.back() }) {
             if (t != null) {
-                IconButton(onClick = { ask() }, enabled = !asking) { Icon(Icons.Outlined.AutoAwesome, "Ask Intelligence about this email", tint = kern.accent) }
+                IconButton(onClick = { ask() }, enabled = !asking) { Icon(sparkleIcon, "Ask Intelligence about this email", tint = sparkleIcon.tintOr(kern.accent)) }
                 IconButton(onClick = { act("archive", "Archived") }) { Icon(Icons.Outlined.Archive, "Archive", tint = kern.text2) }
                 IconButton(onClick = { act("trash", "Moved to Trash") }) { Icon(Icons.Outlined.Delete, "Trash", tint = kern.text2) }
                 IconButton(onClick = { act(if (t.starred) "unstar" else "star", if (t.starred) "Unstarred" else "Starred") }) {

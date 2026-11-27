@@ -91,6 +91,8 @@ allowed because Kern is usually self-hosted on a home network; use HTTPS when it
 - **Search** across pages, blocks, tags, cards and tasks, with highlights and recent searches.
 - **Tags, Files, Git** (repositories, file browser, commits, README, code view),
   **Templates, Archive, Trash**.
+- **Apps** (More → Apps): your Kern apps with their status, open in the browser, start, stop and
+  restart, the latest deploy and the end of the log. Creating and editing apps stays on the web.
 - **Stats** (Settings → Your numbers, the More tab, or the chart icon on Cards): flashcard
   streaks, reviews per day, accuracy, a 26-week heatmap, the 30-day due forecast, card states,
   memory strength (FSRS stability), when you study and the hardest cards; task completions,
