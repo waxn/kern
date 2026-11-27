@@ -221,6 +221,28 @@ class ApiTests(AppsRoot, TestCase):
         self.assertEqual(r.status_code, 409)
         self.assertFalse(self.c.get("/api/apps/check-slug?slug=taken").json()["ok"])
 
+    def test_app_ai_config_follows_workspace_until_overridden(self):
+        from notes import ai
+        from notes.models import Setting
+
+        self.c.post("/api/apps", {"kind": "template", "template": "static", "name": "A", "slug": "a"}, format="json")
+        Setting.objects.update_or_create(key="ai", defaults={"value": {"provider": "ollama", "model": "llama", "base_url": "http://x/v1"}})
+        r = self.c.get("/api/apps/a/ai").json()
+        self.assertTrue(r["inherited"])
+        self.assertEqual((r["provider"], r["model"]), ("ollama", "llama"))
+        r = self.c.put("/api/apps/a/ai", {"provider": "openai", "model": "gpt-5", "base_url": "https://api.openai.com/v1",
+                                          "api_key": "sk-test-12345678"}, format="json").json()
+        self.assertFalse(r["inherited"])
+        self.assertEqual((r["provider"], r["model"]), ("openai", "gpt-5"))
+        self.assertTrue(r["own_key"])
+        # Only this app changed: the workspace keeps its provider.
+        self.assertEqual(ai.config()["provider"], "ollama")
+        self.assertEqual(ai.config("a")["provider"], "openai")
+        # Back to the workspace settings.
+        r = self.c.put("/api/apps/a/ai", {"inherit": True}, format="json").json()
+        self.assertTrue(r["inherited"])
+        self.assertEqual(r["provider"], "ollama")
+
     def test_settings_env_and_edit(self):
         self.c.post("/api/apps", {"kind": "template", "template": "static", "name": "S", "slug": "s"}, format="json")
         r = self.c.patch("/api/apps/s", {"access": "public", "public_paths": ["api/in"], "slug": "s2"}, format="json")

@@ -359,10 +359,9 @@ def _context(app: App, sess: Session) -> str:
 # ---------------------------------------------------------------------- loops
 
 
-def _anthropic_loop(cfg, sess: Session, messages: list) -> str:
+def _anthropic_loop(cfg, sess: Session, messages: list, key: str) -> str:
     import anthropic
 
-    key = ai._get("ai_secret").get("api_key", "")
     client = anthropic.Anthropic(api_key=key, timeout=600.0, max_retries=2)
     use_fallbacks = cfg["model"] in ("claude-opus-5-5", "claude-opus-5", "claude-fable-5-1", "claude-fable-5-2", "claude-sonnet-5-5")
     reply = ""
@@ -417,11 +416,10 @@ def _anthropic_loop(cfg, sess: Session, messages: list) -> str:
     return (reply + "\n\n(I stopped after many steps. Ask me to continue.)").strip()
 
 
-def _openai_loop(cfg, sess: Session, messages: list) -> str:
+def _openai_loop(cfg, sess: Session, messages: list, key: str) -> str:
     import urllib.error
     import urllib.request
 
-    key = ai._get("ai_secret").get("api_key", "")
     tools = [{"type": "function", "function": {"name": t["name"], "description": t["description"], "parameters": t["input_schema"]}}
              for t in TOOLS]
     reply = ""
@@ -490,9 +488,10 @@ def run_turn(chat_id: int, call) -> None:
         error = False
         with tenancy.use(app.owner):
             try:
-                cfg = ai.config()
-                if not ai.public_config()["configured"]:
+                cfg = ai.config(app.slug)
+                if not ai.public_config(app.slug)["configured"]:
                     raise ai.AIError("The AI assistant is not set up yet. Choose a provider in Settings → AI.")
+                key = ai.api_key(app.slug)
                 family = "anthropic" if cfg["provider"] == "anthropic" else "openai"
                 history = chat.history if chat.provider == family else [
                     {"role": t["role"], "content": t["text"]} for t in chat.transcript[:-1] if t.get("text")]
@@ -502,7 +501,7 @@ def run_turn(chat_id: int, call) -> None:
                 messages = [*history, {"role": "user", "content": f"<context>\n{_context(app, sess)}\n</context>\n\n{text}"}]
                 loop = _anthropic_loop if family == "anthropic" else _openai_loop
                 try:
-                    reply = loop(cfg, sess, messages)
+                    reply = loop(cfg, sess, messages, key)
                 except Stop:
                     reply = "Stopped."
                     _close_dangling(family, messages)

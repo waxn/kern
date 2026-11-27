@@ -3,11 +3,12 @@
 	// reads and writes the app's files, deploys, reads the logs and tries the app, then answers.
 	import {
 		ArrowDown, ArrowUp, Check, ChevronRight, CircleAlert, Cpu, Database, FileMinus, FilePen, FileSearch, Loader,
-		RotateCcw, Rocket, ScrollText, Settings, Square, TestTube
+		RotateCcw, Rocket, ScrollText, Settings, Square, TestTube, X
 	} from '@lucide/svelte';
+	import { goto } from '$app/navigation';
 	import { onMount, tick } from 'svelte';
 	import { api } from '#lib/api.ts';
-	import { ai } from '#lib/ai/ai.svelte.ts';
+	import { ai, type AiConfig } from '#lib/ai/ai.svelte.ts';
 	import { renderMarkdown } from '#lib/ai/md.ts';
 	import Sparkle from '#lib/ai/Sparkle.svelte';
 	import { ui } from '#lib/state/ui.svelte.ts';
@@ -55,13 +56,88 @@
 		timer = setTimeout(load, busy ? 1200 : 5000);
 	}
 
+	let appAi = $state<AiConfig | null>(null);
+	let aiPanel = $state(false);
+	let aiScope = $state<'inherit' | 'app'>('inherit');
+	let aiForm = $state({ provider: '', model: '', base_url: '', api_key: '' });
+	let aiSaving = $state(false);
+
+	const MODEL_HINTS: Record<string, string[]> = {
+		anthropic: ['claude-opus-5-5', 'claude-sonnet-5-5', 'claude-haiku-5-5', 'claude-fable-5-1'],
+		openai: [], gemini: [], openrouter: [], ollama: ['llama3.3', 'qwen3', 'mistral'], custom: []
+	};
+
+	let aiReady = $derived((appAi ?? ai.config)?.configured ?? false);
+	let aiMissing = $derived(!!(appAi ?? ai.config) && !aiReady);
+
+	type ProviderInfo = { label: string; base_url: string; model: string; needs_key: boolean };
+	let aiProviders = $derived((ai.config?.providers ?? appAi?.providers ?? {}) as Record<string, ProviderInfo>);
+
+	function fillAiForm(c: AiConfig) {
+		aiScope = c.inherited ? 'inherit' : 'app';
+		aiForm = { provider: c.provider, model: c.model, base_url: c.base_url, api_key: '' };
+	}
+
+	async function loadAppAi() {
+		try {
+			const c = await api.get<AiConfig>(`/apps/${app.slug}/ai`);
+			appAi = c;
+			if (!aiPanel) fillAiForm(c);
+		} catch {
+			/* the workspace settings still apply */
+		}
+	}
+
+	function openAi() {
+		if (appAi) fillAiForm(appAi);
+		aiPanel = !aiPanel;
+	}
+
+	function pickProvider(p: string) {
+		const info = aiProviders[p];
+		aiForm = {
+			...aiForm, provider: p,
+			model: p === aiForm.provider ? aiForm.model : (info?.model ?? ''),
+			base_url: p === aiForm.provider ? aiForm.base_url : (info?.base_url ?? '')
+		};
+	}
+
+	async function saveAppAi() {
+		aiSaving = true;
+		try {
+			const body: Record<string, unknown> = aiScope === 'inherit'
+				? { inherit: true }
+				: { provider: aiForm.provider, model: aiForm.model, base_url: aiForm.base_url };
+			if (aiScope === 'app' && aiForm.api_key.trim()) body.api_key = aiForm.api_key.trim();
+			const c = await api.put<AiConfig>(`/apps/${app.slug}/ai`, body);
+			appAi = c;
+			fillAiForm(c);
+			aiPanel = false;
+			ui.toast(aiScope === 'inherit' ? 'This app follows the workspace AI settings.' : 'Saved. Only Build with AI uses this model.');
+		} catch (e) {
+			ui.error(e);
+		} finally {
+			aiSaving = false;
+		}
+	}
+
+	async function canBuild(): Promise<boolean> {
+		if (!appAi) await loadAppAi();
+		if (appAi?.configured) return true;
+		if (!appAi) {
+			if (!ai.config) await ai.load();
+			if (ai.config?.configured) return true;
+		}
+		ui.toast('Set up an AI provider first.');
+		goto('/settings?s=ai');
+		return false;
+	}
+
 	onMount(() => {
 		ai.load();
-		load().then(() => scroll(true));
+		loadAppAi().then(() => load().then(() => scroll(true)));
 		return () => timer && clearTimeout(timer);
 	});
-
-	// ---- scrolling ----
 
 	function onscroll() {
 		if (box) atBottom = box.scrollHeight - box.scrollTop - box.clientHeight < 120;
@@ -88,7 +164,7 @@
 	async function send(msg = text) {
 		msg = msg.trim();
 		if (!msg || busy || sending) return;
-		if (!(await ai.ready())) return;
+		if (!(await canBuild())) return;
 		sending = true;
 		try {
 			chat = await api.post<Chat>(`/apps/${app.slug}/builder`, { message: msg });
@@ -307,10 +383,62 @@
 		<span class="state">{status.label}</span>
 		{#if status.sub}<span class="stateSub truncate">{status.sub}</span>{/if}
 		<span class="grow"></span>
+		<button class="btn ghost sm aiBtn" onclick={openAi} title="The AI model Build with AI uses for this app">
+			<Cpu size={13} /><span class="lbl truncate">{appAi ? (appAi.inherited ? 'Workspace AI' : appAi.model || 'AI model') : 'AI'}</span>
+		</button>
 		{#if chat.transcript.length && !busy}
 			<button class="btn ghost sm" onclick={clear} title="Start a new conversation"><RotateCcw size={13} /><span class="lbl">New conversation</span></button>
 		{/if}
 	</div>
+
+	{#if aiPanel}
+		<div class="aiPanel">
+			<div class="aiHead">
+				<Cpu size={14} />
+				<b>AI for Build with AI</b>
+				<span class="grow"></span>
+				<button class="icon-btn" title="Close" onclick={() => (aiPanel = false)}><X size={14} /></button>
+			</div>
+			<div class="aiScope">
+				<button class="scope" class:on={aiScope === 'inherit'} onclick={() => (aiScope = 'inherit')}>Workspace default</button>
+				<button class="scope" class:on={aiScope === 'app'} onclick={() => (aiScope = 'app')}>Just this app</button>
+			</div>
+			{#if aiScope === 'app'}
+				<div class="providers">
+					{#each Object.entries(aiProviders) as [k, p] (k)}
+						<button class="prov" class:on={aiForm.provider === k} onclick={() => pickProvider(k)}>{p.label}</button>
+					{/each}
+				</div>
+				{#if aiForm.provider}
+					{@const info = aiProviders[aiForm.provider]}
+					<div class="aiGrid">
+						<label class="field span"><span>Model</span>
+							<input class="input mono" list="app-ai-models" bind:value={aiForm.model} placeholder="model name" />
+							<datalist id="app-ai-models">{#each MODEL_HINTS[aiForm.provider] ?? [] as m (m)}<option value={m}></option>{/each}</datalist>
+						</label>
+						{#if aiForm.provider !== 'anthropic'}
+							<label class="field span"><span>Base URL</span>
+								<input class="input mono" bind:value={aiForm.base_url} placeholder="https://…/v1" />
+							</label>
+						{/if}
+						{#if info?.needs_key || aiForm.provider === 'custom' || aiForm.provider === 'ollama'}
+							<label class="field span"><span>API key <em>{appAi?.own_key ? 'saved for this app; leave empty to keep it' : 'empty uses the workspace key'}</em></span>
+								<input class="input mono" type="password" autocomplete="off" bind:value={aiForm.api_key} placeholder={appAi?.own_key ? '••••••••' : info?.needs_key ? 'API key' : 'optional'} />
+							</label>
+						{/if}
+					</div>
+				{/if}
+			{:else}
+				<p class="aiNote">{aiReady ? `Uses the workspace settings${ai.config ? ` (${ai.config.model || ai.config.provider})` : ''}.` : 'The workspace has no AI provider yet.'} <a href="/settings?s=ai">Open AI settings</a></p>
+			{/if}
+			<div class="aiActs">
+				<span class="aiHint">Only Build with AI uses this; the rest of Kern keeps the workspace model.</span>
+				<span class="grow"></span>
+				<button class="btn ghost" onclick={() => { if (appAi) fillAiForm(appAi); aiPanel = false; }}>Cancel</button>
+				<button class="btn primary" disabled={aiSaving || (aiScope === 'app' && !aiForm.provider)} onclick={saveAppAi}>{aiSaving ? 'Saving…' : 'Save'}</button>
+			</div>
+		</div>
+	{/if}
 
 	<div class="stage">
 		<div class="thread" role="log" aria-label="Conversation" bind:this={box} {onscroll}>
@@ -325,8 +453,12 @@
 							<li><span class="ci"><I size={15} /></span><span><b>{c.title}</b>{c.body}</span></li>
 						{/each}
 					</ul>
-					{#if ai.config && !ai.config.configured}
-						<p class="warn"><CircleAlert size={14} />No AI provider is set up yet. <a href="/settings?s=ai">Choose one in Settings → AI.</a></p>
+					{#if aiMissing}
+						{#if appAi && !appAi.inherited}
+							<p class="warn"><CircleAlert size={14} />This app's AI model is not fully set up. <button class="linkish" onclick={openAi}>Finish its setup.</button></p>
+						{:else}
+							<p class="warn"><CircleAlert size={14} />No AI provider is set up yet. <a href="/settings?s=ai">Choose one in Settings → AI.</a></p>
+						{/if}
 					{/if}
 				</div>
 			{/if}
@@ -407,6 +539,30 @@
 	@keyframes pulse { 50% { opacity: 0.35; } }
 	.grow { flex: 1; }
 	.btn.sm { height: 26px; padding: 0 9px; font-size: 12.5px; }
+	.aiBtn { max-width: 210px; }
+	.aiBtn .lbl { min-width: 0; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+
+	/* per-app AI settings */
+	.aiPanel { flex: none; padding: 10px 14px; border-bottom: 1px solid var(--border); background: var(--surface); display: flex; flex-direction: column; gap: 10px; }
+	.aiHead { display: flex; align-items: center; gap: 7px; font-size: 13px; }
+	.aiHead :global(svg) { color: var(--accent); }
+	.aiScope { display: flex; gap: 6px; }
+	.scope { height: 28px; padding: 0 12px; border-radius: 14px; border: 1px solid var(--border-strong); background: var(--bg); color: var(--text-2); font-size: 12.5px; }
+	.scope:hover { background: var(--hover); }
+	.scope.on { border-color: var(--accent); background: color-mix(in srgb, var(--accent) 10%, transparent); color: var(--text); }
+	.providers { display: flex; flex-wrap: wrap; gap: 6px; }
+	.prov { height: 26px; padding: 0 10px; border-radius: 13px; border: 1px solid var(--border); background: var(--bg); color: var(--text-2); font-size: 12px; }
+	.prov:hover { background: var(--hover); }
+	.prov.on { border-color: var(--accent); background: color-mix(in srgb, var(--accent) 9%, transparent); color: var(--text); }
+	.aiGrid { display: grid; grid-template-columns: 1fr; gap: 8px; max-width: 640px; }
+	.aiGrid .span { grid-column: 1 / -1; }
+	.aiGrid .field { display: flex; flex-direction: column; gap: 3px; font-size: 12px; font-weight: 550; color: var(--text-2); }
+	.aiGrid .field em { font-style: normal; font-weight: 400; color: var(--text-3); }
+	.aiGrid .input { width: 100%; }
+	.aiNote { margin: 0; font-size: 12.5px; color: var(--text-2); }
+	.aiNote a { color: var(--accent); }
+	.aiActs { display: flex; align-items: center; gap: 6px; flex-wrap: wrap; }
+	.aiHint { font-size: 11.5px; color: var(--text-3); }
 
 	/* conversation */
 	.stage { position: relative; flex: 1; min-height: 0; }
@@ -426,6 +582,8 @@
 	.ci { flex: none; display: grid; place-items: center; width: 24px; height: 24px; border-radius: 7px; color: var(--accent); background: color-mix(in srgb, var(--accent) 12%, transparent); }
 	.warn { display: flex; align-items: center; justify-content: center; flex-wrap: wrap; gap: 6px; margin-top: 14px !important; color: var(--c-yellow); }
 	.warn a { color: var(--accent); }
+	.linkish { padding: 0; border: 0; background: none; color: var(--accent); font: inherit; cursor: pointer; }
+	.linkish:hover { text-decoration: underline; }
 
 	.msg { display: flex; gap: 10px; max-width: 780px; width: 100%; margin: 0 auto; min-width: 0; }
 	.msg.user { justify-content: flex-end; }

@@ -555,6 +555,25 @@ def app_env(request, slug):
                      "builtin": sorted(core.OWN_ENV)})
 
 
+# ---------------------------------------------------------------------- app AI
+
+
+@api_view(["GET", "PUT"])
+@handle
+def app_ai(request, slug):
+    """The provider and model the builder uses for this app; without one it follows the workspace settings."""
+    from notes import ai
+
+    a = _app(request, slug)
+    with tenancy.use(a.owner):
+        if request.method == "PUT":
+            try:
+                return Response(ai.save_config(_body(request), a.slug))
+            except ai.AIError as e:
+                return bad(str(e), e.status)
+        return Response(ai.public_config(a.slug))
+
+
 # ---------------------------------------------------------------------- files
 
 
@@ -645,7 +664,7 @@ def _builder_send(a: App, text: str, user) -> BuilderChat:
     from notes import ai
 
     with tenancy.use(a.owner):
-        if not ai.public_config()["configured"]:
+        if not ai.public_config(a.slug)["configured"]:
             raise ApiError("The AI assistant is not set up yet. Choose a provider in Settings → AI.", 409)
     with transaction.atomic():
         c, _ = BuilderChat.objects.get_or_create(app=a)

@@ -32,13 +32,43 @@ class AIError(Exception):
 # ----------------------------------------------------------------- config
 
 
-def _get(key: str) -> dict:
+def _setting(key: str) -> dict:
     v = Setting.objects.filter(key=key).values_list("value", flat=True).first()
     return v if isinstance(v, dict) else {}
 
 
-def config() -> dict:
-    cfg = _get("ai")
+def _app_key(app_slug: str) -> str:
+    return f"app:{app_slug}:ai"
+
+
+def _app_secret_key(app_slug: str) -> str:
+    return f"app:{app_slug}:ai_secret"
+
+
+def _get(key: str, app_slug: str | None = None) -> dict:
+    """The setting under ``key``; for an app its own provider wins over the workspace one."""
+    if app_slug:
+        own = _setting(_app_key(app_slug))
+        if own.get("provider"):
+            return own
+    return _setting(key)
+
+
+def has_override(app_slug: str) -> bool:
+    return bool(_setting(_app_key(app_slug)).get("provider"))
+
+
+def api_key(app_slug: str | None = None) -> str:
+    """The key saved for the app, else the workspace key (a key is never copied to an app by itself)."""
+    if app_slug:
+        own = _setting(_app_secret_key(app_slug))
+        if own.get("api_key"):
+            return own["api_key"]
+    return _setting("ai_secret").get("api_key", "")
+
+
+def config(app_slug: str | None = None) -> dict:
+    cfg = _get("ai", app_slug)
     provider = cfg.get("provider") if cfg.get("provider") in PROVIDERS else ""
     return {
         "provider": provider,
@@ -47,21 +77,29 @@ def config() -> dict:
     }
 
 
-def public_config() -> dict:
+def public_config(app_slug: str | None = None) -> dict:
     """What the browser may see: never the key itself."""
-    cfg = config()
-    key = _get("ai_secret").get("api_key", "")
+    cfg = config(app_slug)
+    key = api_key(app_slug)
     p = cfg["provider"]
     ready = bool(p) and bool(cfg["model"]) and (bool(key) or p not in NEEDS_KEY) and (p == "anthropic" or bool(cfg["base_url"]))
-    return {
+    out = {
         **cfg, "configured": ready, "has_key": bool(key), "key_hint": key[-4:] if len(key) > 8 else "",
         "web_search": ready,
         "providers": {k: {**v, "needs_key": k in NEEDS_KEY} for k, v in PROVIDERS.items()},
     }
+    if app_slug:
+        out["inherited"] = not has_override(app_slug)
+        out["own_key"] = bool(_setting(_app_secret_key(app_slug)).get("api_key"))
+    return out
 
 
-def save_config(data: dict) -> dict:
-    current = _get("ai")
+def save_config(data: dict, app_slug: str | None = None) -> dict:
+    if app_slug and data.get("inherit"):
+        Setting.objects.filter(key__in=(_app_key(app_slug), _app_secret_key(app_slug))).delete()
+        return public_config(app_slug)
+    key = _app_key(app_slug) if app_slug else "ai"
+    current = _setting(key)
     provider = data.get("provider", current.get("provider", ""))
     if provider and provider not in PROVIDERS:
         raise AIError("Unknown provider.")
@@ -72,23 +110,24 @@ def save_config(data: dict) -> dict:
     }
     if new["base_url"] and not re.match(r"^https?://", new["base_url"]):
         raise AIError("The base URL must start with http:// or https://.")
-    Setting.objects.update_or_create(key="ai", defaults={"value": new})
+    Setting.objects.update_or_create(key=key, defaults={"value": new})
+    secret_key = _app_secret_key(app_slug) if app_slug else "ai_secret"
     if "api_key" in data:
-        key = str(data["api_key"] or "").strip()
-        if key:
-            Setting.objects.update_or_create(key="ai_secret", defaults={"value": {"api_key": key}})
+        key_val = str(data["api_key"] or "").strip()
+        if key_val:
+            Setting.objects.update_or_create(key=secret_key, defaults={"value": {"api_key": key_val}})
     if data.get("clear_key"):
-        Setting.objects.filter(key="ai_secret").delete()
-    return public_config()
+        Setting.objects.filter(key=secret_key).delete()
+    return public_config(app_slug)
 
 
 # -------------------------------------------------------------- providers
 
 
-def complete(system: str, prompt: str) -> str:
-    cfg = config()
-    key = _get("ai_secret").get("api_key", "")
-    if not public_config()["configured"]:
+def complete(system: str, prompt: str, app_slug: str | None = None) -> str:
+    cfg = config(app_slug)
+    key = api_key(app_slug)
+    if not public_config(app_slug)["configured"]:
         raise AIError("The AI assistant is not set up yet. Choose a provider in Settings → AI.", 409)
     if cfg["provider"] == "anthropic":
         return _anthropic(cfg, key, system, prompt)

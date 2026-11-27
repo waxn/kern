@@ -10,6 +10,10 @@ export interface AiConfig {
 	has_key: boolean;
 	key_hint: string;
 	web_search?: boolean;
+	/** Only on an app's own config: true when no app override is saved. */
+	inherited?: boolean;
+	/** Only on an app's own config: a key saved for the app itself. */
+	own_key?: boolean;
 	providers: Record<string, { label: string; base_url: string; model: string; needs_key: boolean }>;
 }
 
