@@ -22,7 +22,7 @@ from ..models import (
     Attachment, BlockRule, Correspondent, Draft, DraftStatus, Folder, FolderRole, Label, Message,
     MailIdentity, OpStatus, OutboxOp, Thread, ThreadFolder, TrustedImageSender, Upload, WorkerStatus,
 )
-from .util import ApiError, api, body, int_or_none, iso
+from .util import ApiError, api, body, ids_of, int_or_none, iso
 from mail.account import cfg as _mail_cfg
 
 PAGE = 50
@@ -360,7 +360,7 @@ def folder_read_all(request, pk: int):
 def labels(request):
     if request.method == "POST":
         data = body(request)
-        name = str(data.get("name", "")).strip()
+        name = str(data.get("name") or "").strip()
         if not name or len(name) > 100:
             raise ApiError("Invalid label name.")
         lb = labels_mod.get_or_create(name)
@@ -610,7 +610,7 @@ def thread_actions(request):
             raise ApiError("Select conversations one page at a time for this action.")
         ids = _view_thread_ids(str(scope.get("view", "")), str(scope.get("q", ""))[:500], bool(scope.get("unread")))
     else:
-        ids = [int(i) for i in data.get("ids", [])][:500]
+        ids = ids_of(data.get("ids"))
     context = Folder.objects.filter(pk=int_or_none(data.get("context"))).first() if data.get("context") else None
     result: dict = {"ok": True, "count": len(ids)}
     if action in ("read", "unread"):
@@ -626,6 +626,8 @@ def thread_actions(request):
         msgs = list(Message.objects.filter(thread=t).select_related("folder"))
         if action == "star":
             live = [m for m in msgs if m.folder.role not in (FolderRole.TRASH, FolderRole.JUNK)] or msgs
+            if not live:
+                continue
             latest = max(live, key=lambda m: (m.sort_date, m.id))
             if not latest.flagged:
                 actions.set_flags([latest], add=["\\Flagged"])
@@ -686,7 +688,7 @@ def thread_actions(request):
 def message_actions(request):
     data = body(request)
     action = data.get("action")
-    msgs = list(Message.objects.filter(pk__in=[int(i) for i in data.get("ids", [])][:500]).select_related("folder"))
+    msgs = list(Message.objects.filter(pk__in=ids_of(data.get("ids"))).select_related("folder"))
     flag_map = {
         "read": ({"add": ["\\Seen"]}), "unread": ({"remove": ["\\Seen"]}),
         "star": ({"add": ["\\Flagged"]}), "unstar": ({"remove": ["\\Flagged"]}),
@@ -1399,7 +1401,7 @@ def _apply_draft_fields(d: Draft, data: dict) -> None:
             d.followup_at = fa
     if "forwardAttachments" in data and d.forward_attachments_of_id:
         allowed = set(Attachment.objects.filter(message_id=d.forward_attachments_of_id).values_list("id", flat=True))
-        d.forward_attachment_ids = [int(i) for i in data["forwardAttachments"] if int(i) in allowed]
+        d.forward_attachment_ids = [i for i in ids_of(data["forwardAttachments"]) if i in allowed]
 
 
 @api()
@@ -1407,7 +1409,7 @@ def compose_prefill(request):
     mode = request.GET.get("mode", "reply")
     if mode not in ("reply", "reply_all", "forward"):
         raise ApiError("Bad mode.")
-    m = _message(int(request.GET.get("message", 0)))
+    m = _message(int_or_none(request.GET.get("message")) or 0)
     pm = parsing.parse_message(store.get(m.blob_id))
     if pm.html:
         quoted = sanitize.sanitize_html(pm.html, message_pk=m.pk, load_images=False).html

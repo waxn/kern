@@ -63,3 +63,17 @@ def int_or_none(v):
         return int(v)
     except (TypeError, ValueError):
         return None
+
+
+def ids_of(value, limit: int = 500) -> list[int]:
+    """A list of ids from a request body; anything else is a 400 the user can read."""
+    if value is None:
+        return []
+    if not isinstance(value, list):
+        raise ApiError("Expected a list of ids.")
+    out = []
+    for v in value[:limit]:
+        if isinstance(v, bool) or int_or_none(v) is None:
+            raise ApiError("Expected a list of ids.")
+        out.append(int(v))
+    return out

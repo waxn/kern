@@ -36,8 +36,13 @@ def clean_compose_html(markup: str) -> str:
 
 
 def validate_recipients(items) -> list[dict]:
+    if isinstance(items, str):
+        # "Ada <ada@x.org>, b@y.org" from a plain field, not one character at a time.
+        items = [{"name": n, "addr": a} for n, a in email.utils.getaddresses([items]) if n or a]
+    elif not isinstance(items, (list, tuple)):
+        items = [] if items is None else [items]
     out = []
-    for item in items or []:
+    for item in items:
         if isinstance(item, dict):
             name, addr = str(item.get("name", "")), str(item.get("addr", ""))
         else:
@@ -131,7 +136,11 @@ def build_mime(draft: Draft, *, for_draft: bool = False) -> bytes:
 
 
 def build_for_send(draft: Draft) -> tuple[bytes, str, list[str]]:
-    recipients = [a["addr"] for a in draft.to_addrs + draft.cc_addrs + draft.bcc_addrs]
+    # Someone in both To and Cc (or Bcc) gets one copy.
+    first: dict[str, str] = {}
+    for a in draft.to_addrs + draft.cc_addrs + draft.bcc_addrs:
+        first.setdefault(a["addr"].lower(), a["addr"])
+    recipients = list(first.values())
     if not recipients:
         raise ComposeError("No recipients.")
     return build_mime(draft), _sender(draft)[0], recipients

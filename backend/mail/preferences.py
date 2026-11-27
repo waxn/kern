@@ -47,7 +47,13 @@ def update(changes: dict) -> dict:
         elif key in ("signature_on_replies", "load_images"):
             value = bool(value)
         elif key == "undo_seconds":
-            value = None if value in (None, "") else max(0, min(60, int(value)))
+            if value in (None, ""):
+                value = None
+            else:
+                try:
+                    value = max(0, min(60, int(value)))
+                except (TypeError, ValueError):
+                    raise ValueError("Undo time is a number of seconds, 0 to 60.") from None
         elif key == "after_action":
             if value not in ("next", "list"):
                 raise ValueError("after_action must be 'next' or 'list'")

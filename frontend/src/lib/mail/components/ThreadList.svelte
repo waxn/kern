@@ -508,8 +508,18 @@
   .bulk .acts::-webkit-scrollbar { display: none; }
   .notice { font-size: 12px; padding: 8px var(--mail-pad) 8px 24px; border-bottom: 1px dashed var(--line-strong); color: var(--text-3); font-style: italic; }
   .rows { flex: 1; }
-  .sub { display: flex; gap: 0 6px; min-width: 0; overflow: hidden; white-space: nowrap; text-overflow: ellipsis; font-size: 12px; color: var(--text-3); }
-  .sub .sep { opacity: .5; }
+  .sub { display: block; min-width: 0; overflow: hidden; white-space: nowrap; text-overflow: ellipsis; font-size: 12px; color: var(--text-3); }
+  .sub .sep { opacity: .5; margin: 0 6px; }
+  /* Phones: the title, its count, All | Unread and both buttons on one line. */
+  @media (max-width: 420px) {
+    .head { gap: 4px; }
+    .seg button { padding: 3px 7px; }
+  }
+  /* Too narrow for both: the folder's name wins over its count. */
+  @media (max-width: 360px) {
+    .titles .sub { display: none; }
+    h2 { max-width: none; flex: 0 1 auto; }
+  }
   .filters { display: flex; gap: 4px; padding: 7px var(--mail-pad) 7px 24px; overflow-x: auto; scrollbar-width: none; border-bottom: 1px solid var(--line); flex: none; }
   .filters button { flex: none; padding: 2px 10px; border-radius: 12px; color: var(--text-2); font-size: 12px; border: 1px solid var(--line); white-space: nowrap; }
   .filters button:hover { background: var(--bg-hover); color: var(--text); }
