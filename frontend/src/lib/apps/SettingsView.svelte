@@ -1,5 +1,5 @@
 <script lang="ts">
-	import { Copy, Download, Eye, EyeOff, Globe, Lock, Plus, Trash2, Users, X } from '@lucide/svelte';
+	import { Copy, Database, Download, Eye, EyeOff, GitBranch, Globe, KeyRound, Lock, Plus, Route, SlidersHorizontal, Terminal, Trash2, TriangleAlert, Users, X } from '@lucide/svelte';
 	import { onMount } from 'svelte';
 	import { goto } from '$app/navigation';
 	import { api } from '#lib/api.ts';
@@ -116,7 +116,7 @@
 
 <div class="settings">
 	<section>
-		<h3>General</h3>
+		<h3><SlidersHorizontal size={14} />General</h3>
 		<div class="grid">
 			<label class="field icon"><span>Icon</span>
 				<button class="emoji" onclick={(e) => { const r = (e.currentTarget as HTMLElement).getBoundingClientRect(); picker = { x: r.left, y: r.bottom + 4 }; }}>{app.icon || '◇'}</button>
@@ -128,9 +128,9 @@
 	</section>
 
 	<section>
-		<h3>Address and access</h3>
+		<h3><Globe size={14} />Address and access</h3>
 		<label class="field"><span>Address</span>
-			<div class="slug"><span class="faint">{location.host}/</span><input class="mono" bind:value={slug} maxlength="40" spellcheck="false" oninput={() => (slug = slug.toLowerCase())} /><span class="faint">/</span>
+			<div class="slug"><span class="faint host">{location.host}/</span><input class="mono" bind:value={slug} maxlength="40" spellcheck="false" oninput={() => (slug = slug.toLowerCase())} /><span class="faint">/</span>
 				{#if slug !== app.slug}<button class="btn primary sm" onclick={() => save({ slug }, `Moved to /${slug}/`)}>Move</button>{/if}
 			</div>
 			<em>Bookmarks and links to the old address stop working when you change it.</em>
@@ -142,26 +142,32 @@
 				</button>
 			{/each}
 		</div>
-		{#if app.access !== 'public'}
-			<div class="field">
-				<span>Public paths <em>reachable by anyone even though the app is not public, e.g. an API your devices post to. The app checks its own token there.</em></span>
-				{#each publicPaths as _, i (i)}
-					<div class="pp"><span class="faint mono">/{app.slug}</span><input class="input mono" bind:value={publicPaths[i]} placeholder="/api/ingest" /><button class="icon-btn" title="Remove" onclick={() => (publicPaths = publicPaths.filter((__, j) => j !== i))}><X size={14} /></button></div>
-				{/each}
-				<div class="acts left">
-					<button class="btn ghost" onclick={() => (publicPaths = [...publicPaths, ''])}><Plus size={13} />Add a path</button>
-					{#if pathsDirty}<button class="btn primary" onclick={() => save({ public_paths: publicPaths.filter((p) => p.trim()) })}>Save paths</button>{/if}
-				</div>
-			</div>
-		{/if}
 		<div class="item">
 			<div><b>Remove /{app.slug} from paths</b><span>The app sees <code>/api/x</code> for <code>/{app.slug}/api/x</code>. Turn off if the app handles its base path itself (it is in <code>KERN_BASE_PATH</code>).</span></div>
 			<Toggle checked={app.strip_prefix} label="Remove the path prefix" onchange={(v) => save({ strip_prefix: v })} />
 		</div>
 	</section>
 
+	{#if app.access !== 'public'}
+		<section>
+			<h3><Route size={14} />Public paths</h3>
+			<p class="muted">Reachable by anyone even though the app is not public, e.g. an API your devices post to. The app checks its own token there.</p>
+			{#if publicPaths.length}
+				<div class="paths">
+					{#each publicPaths as _, i (i)}
+						<div class="pp"><span class="faint mono">/{app.slug}</span><input class="input mono" bind:value={publicPaths[i]} placeholder="/api/ingest" /><button class="icon-btn" title="Remove" onclick={() => (publicPaths = publicPaths.filter((__, j) => j !== i))}><X size={14} /></button></div>
+					{/each}
+				</div>
+			{/if}
+			<div class="acts left">
+				<button class="btn ghost" onclick={() => (publicPaths = [...publicPaths, ''])}><Plus size={13} />Add a path</button>
+				{#if pathsDirty}<span class="grow"></span><button class="btn primary" onclick={() => save({ public_paths: publicPaths.filter((p) => p.trim()) })}>Save paths</button>{/if}
+			</div>
+		</section>
+	{/if}
+
 	<section>
-		<h3>Source</h3>
+		<h3><GitBranch size={14} />Source</h3>
 		{#if app.source === 'kern'}
 			<p class="muted">Kern repository <a href="/git/{app.repo}" onclick={(e) => { e.preventDefault(); goto(`/git/${app.repo}`); }}>{app.repo}</a>. Clone it, change it, push: Kern deploys it.</p>
 		{:else}
@@ -170,7 +176,7 @@
 		{/if}
 		<div class="grid two">
 			<label class="field"><span>Branch</span><input class="input mono" bind:value={branch} /></label>
-			<label class="field"><span>Folder <em>inside the repository</em></span><input class="input mono" bind:value={subdir} placeholder="(top level)" /></label>
+			<label class="field"><span>Folder <em>in the repo</em></span><input class="input mono" bind:value={subdir} placeholder="(top level)" /></label>
 		</div>
 		{#if sourceDirty}<div class="acts"><button class="btn ghost" onclick={() => reset(app)}>Cancel</button><button class="btn primary" onclick={() => save(app.source === 'url' ? { branch, subdir, git_url: gitUrl, ...(gitToken ? { git_token: gitToken } : {}) } : { branch, subdir })}>Save</button></div>{/if}
 		{#if app.source === 'kern'}
@@ -186,7 +192,7 @@
 	</section>
 
 	<section>
-		<h3>How it runs</h3>
+		<h3><Terminal size={14} />How it runs</h3>
 		<p class="muted">Empty fields come from <code>.kern/app.yml</code> in the code, or are worked out from its files.</p>
 		<div class="grid two">
 			<label class="field"><span>Runtime</span>
@@ -195,7 +201,7 @@
 					<option value="static">Static files</option><option value="python">Python</option><option value="node">Node.js</option><option value="command">Command</option>
 				</select>
 			</label>
-			<label class="field"><span>Health check path <em>must answer before traffic moves</em></span><input class="input mono" bind:value={health} placeholder="/healthz" /></label>
+			<label class="field"><span>Health check path <em>before traffic moves</em></span><input class="input mono" bind:value={health} placeholder="/healthz" /></label>
 			<label class="field span"><span>Build command</span><input class="input mono" bind:value={buildCmd} placeholder="npm ci && npm run build" /></label>
 			<label class="field span"><span>Start command <em>has to listen on $PORT</em></span><input class="input mono" bind:value={startCmd} placeholder="python app.py" /></label>
 		</div>
@@ -203,7 +209,15 @@
 	</section>
 
 	<section>
-		<h3>Environment variables</h3>
+		<h3><Database size={14} />Data</h3>
+		<div class="item">
+			<div><b>{data ? `${fileSize(data.size)} in ${data.files} file${data.files === 1 ? '' : 's'}` : '…'}</b><span>What the app keeps in <code>APP_DATA_DIR</code>. It survives deploys, but isn't in Kern's backups: download a copy now and then.</span></div>
+			<a class="btn" href="/api/apps/{app.slug}/data?download=1" download><Download size={14} />Download</a>
+		</div>
+	</section>
+
+	<section class="wide">
+		<h3><KeyRound size={14} />Environment variables</h3>
 		<p class="muted">Secrets and settings for the app, stored encrypted. Kern also sets <code>PORT</code>, <code>APP_DATA_DIR</code>, <code>KERN_BASE_PATH</code> and <code>KERN_APP_SECRET</code>.</p>
 		<div class="vars">
 			{#each vars as v, i (i)}
@@ -225,16 +239,8 @@
 		</div>
 	</section>
 
-	<section>
-		<h3>Data</h3>
-		<div class="item">
-			<div><b>{data ? `${fileSize(data.size)} in ${data.files} file${data.files === 1 ? '' : 's'}` : '…'}</b><span>What the app keeps in <code>APP_DATA_DIR</code>. It survives deploys, but isn't in Kern's backups: download a copy now and then.</span></div>
-			<a class="btn" href="/api/apps/{app.slug}/data?download=1" download><Download size={14} />Download</a>
-		</div>
-	</section>
-
-	<section class="danger">
-		<h3>Delete</h3>
+	<section class="wide danger">
+		<h3><TriangleAlert size={14} />Danger zone</h3>
 		<div class="item">
 			<div><b>Delete this app</b><span>Stops it and deletes its data and deployments.</span>
 				{#if app.source === 'kern'}<label class="check"><input type="checkbox" bind:checked={deleteRepo} />Also delete the repository {app.repo}</label>{/if}
@@ -249,52 +255,63 @@
 {/if}
 
 <style>
-	.settings { display: flex; flex-direction: column; gap: 14px; max-width: 760px; }
-	section { padding: 16px 18px; border: 1px solid var(--border); border-radius: 10px; background: var(--surface); display: flex; flex-direction: column; gap: 12px; }
-	section.danger { border-color: color-mix(in srgb, var(--danger) 35%, var(--border)); }
-	h3 { margin: 0; font-size: 14px; font-weight: 650; }
-	.muted { margin: -6px 0 0; color: var(--text-2); font-size: 13px; }
+	/* Masonry: CSS columns, 1 to 3 wide depending on the width the page gives us. */
+	.settings { column-width: 330px; column-count: 3; column-gap: 12px; max-width: 100%; min-width: 0; }
+	section { display: block; break-inside: avoid; margin: 0 0 12px; padding: 12px 14px; border: 1px solid var(--border); border-radius: 10px; background: var(--surface); min-width: 0; }
+	section > * + * { margin-top: 10px; }
+	section.wide { column-span: all; }
+	section.danger { border-color: color-mix(in srgb, var(--danger) 45%, var(--border)); background: color-mix(in srgb, var(--danger) 5%, var(--surface)); }
+	section.danger h3 { color: var(--danger); }
+	section.danger h3 :global(svg) { color: var(--danger); }
+	h3 { margin: 0; display: flex; align-items: center; gap: 7px; font-size: 13px; font-weight: 650; }
+	h3 :global(svg) { flex: none; color: var(--text-3); }
+	section > h3 + * { margin-top: 8px; }
+	.muted { margin: 0; color: var(--text-2); font-size: 12.5px; line-height: 1.45; overflow-wrap: anywhere; }
+	section > h3 + .muted { margin-top: 6px; }
 	.muted a { color: var(--accent); }
 	code { font: 0.9em var(--font-mono); padding: 0 3px; border-radius: 3px; background: var(--code-bg); }
-	.grid { display: grid; grid-template-columns: auto 1fr; gap: 10px 12px; align-items: end; }
-	.grid.two { grid-template-columns: 1fr 1fr; }
+	.grid { display: grid; grid-template-columns: auto 1fr; gap: 8px 10px; align-items: end; }
+	.grid.two { grid-template-columns: repeat(auto-fit, minmax(130px, 1fr)); }
 	.span { grid-column: 1 / -1; }
-	.field { display: flex; flex-direction: column; gap: 4px; font-size: 12px; font-weight: 550; color: var(--text-2); min-width: 0; }
+	.field { display: flex; flex-direction: column; gap: 3px; font-size: 12px; font-weight: 550; color: var(--text-2); min-width: 0; }
 	.field em { font-style: normal; font-weight: 400; color: var(--text-3); }
 	.field > em { font-size: 12px; }
 	.field .input { width: 100%; }
 	.emoji { width: 40px; height: 34px; border-radius: 8px; border: 1px solid var(--border-strong); font-size: 18px; background: var(--bg); }
 	.emoji:hover { background: var(--hover); }
 	.mono { font-family: var(--font-mono); font-size: 12.5px; }
-	.slug { display: flex; align-items: center; gap: 2px; height: 30px; padding: 0 3px 0 8px; border-radius: var(--radius); border: 1px solid var(--border-strong); background: var(--bg); font-weight: 400; }
+	.slug { display: flex; align-items: center; gap: 2px; height: 30px; padding: 0 3px 0 8px; border-radius: var(--radius); border: 1px solid var(--border-strong); background: var(--bg); font-weight: 400; min-width: 0; }
 	.slug:focus-within { border-color: color-mix(in srgb, var(--accent) 65%, var(--border-strong)); }
-	.slug span { font: 12.5px var(--font-mono); }
+	.slug span { font: 12.5px var(--font-mono); flex: none; }
+	.slug .host { flex: 0 1 auto; min-width: 0; max-width: 55%; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
 	.slug input { flex: 1; min-width: 0; border: 0; outline: 0; background: none; color: var(--text); }
 	.btn.sm { height: 24px; padding: 0 8px; font-size: 12px; }
-	.access { display: grid; grid-template-columns: repeat(3, 1fr); gap: 8px; }
-	.opt { display: grid; grid-template-columns: auto 1fr; gap: 1px 8px; align-items: center; text-align: left; padding: 10px 12px; border: 1px solid var(--border); border-radius: 9px; font-size: 12px; color: var(--text-2); }
+	.access { display: grid; grid-template-columns: 1fr; gap: 6px; }
+	.opt { display: grid; grid-template-columns: auto 1fr; gap: 0 8px; align-items: center; text-align: left; padding: 7px 10px; border: 1px solid var(--border); border-radius: 8px; font-size: 12px; color: var(--text-2); }
 	.opt :global(svg) { grid-row: span 2; color: var(--text-3); }
 	.opt b { font-size: 13px; color: var(--text); font-weight: 600; }
 	.opt:hover { background: var(--hover); }
 	.opt.on { border-color: var(--accent); background: color-mix(in srgb, var(--accent) 7%, transparent); }
 	.opt.on :global(svg) { color: var(--accent); }
-	.pp { display: flex; align-items: center; gap: 6px; font-weight: 400; }
-	.pp .input { flex: 1; }
-	.item { display: flex; align-items: center; gap: 16px; justify-content: space-between; }
-	.item > div { display: flex; flex-direction: column; gap: 2px; font-size: 12.5px; color: var(--text-2); }
+	.paths { display: flex; flex-direction: column; gap: 6px; }
+	.pp { display: flex; align-items: center; gap: 6px; font-weight: 400; min-width: 0; }
+	.pp > .faint { flex: none; max-width: 40%; overflow: hidden; text-overflow: ellipsis; }
+	.pp .input { flex: 1; min-width: 0; }
+	.item { display: flex; align-items: center; flex-wrap: wrap; gap: 8px 14px; justify-content: space-between; }
+	.item > div { flex: 1 1 200px; min-width: 0; display: flex; flex-direction: column; gap: 2px; font-size: 12.5px; color: var(--text-2); overflow-wrap: anywhere; }
 	.item b { font-size: 13px; color: var(--text); font-weight: 550; }
-	.copy { display: flex; align-items: center; gap: 4px; padding: 0 3px 0 8px; height: 30px; border: 1px solid var(--border); border-radius: var(--radius); background: var(--bg); font-weight: 400; }
+	.copy { display: flex; align-items: center; gap: 4px; padding: 0 3px 0 8px; height: 30px; border: 1px solid var(--border); border-radius: var(--radius); background: var(--bg); font-weight: 400; min-width: 0; }
 	.copy code { flex: 1; background: none; color: var(--text-2); }
 	.vars { display: flex; flex-direction: column; gap: 6px; }
 	.vars:empty { display: none; }
 	.var { display: grid; grid-template-columns: minmax(120px, 1fr) 2fr auto auto; gap: 6px; align-items: center; }
-	.acts { display: flex; gap: 6px; justify-content: flex-end; align-items: center; }
+	.var .input { min-width: 0; }
+	.acts { display: flex; gap: 6px; justify-content: flex-end; align-items: center; flex-wrap: wrap; }
 	.acts.left { justify-content: flex-start; }
 	.grow { flex: 1; }
 	.check { display: flex; align-items: center; gap: 6px; margin-top: 6px; color: var(--text-2); font-size: 12.5px; }
 	@media (max-width: 640px) {
-		.access, .grid.two { grid-template-columns: 1fr; }
-		.item { flex-direction: column; align-items: stretch; }
+		.settings { column-count: 1; column-width: auto; }
 		.var { grid-template-columns: 1fr 1fr auto auto; }
 	}
 </style>

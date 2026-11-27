@@ -20,7 +20,7 @@ from kern import tenancy
 from notes import gitrepo as g
 from notes import remote_guard
 
-from . import core, deploy, source, starters
+from . import core, dbexplore, deploy, source, starters, tasks as tasks_mod
 from .models import App, BuilderChat, Deployment
 
 MAX_LOG_CHUNK = 256 * 1024
@@ -46,6 +46,8 @@ def handle(fn):
             return fn(request, *args, **kwargs)
         except ApiError as e:
             return bad(str(e), e.status, **e.extra)
+        except dbexplore.DbError as e:
+            return bad(str(e), e.status)
         except (source.SourceError, core.PlanError, ValueError) as e:
             return bad(str(e))
         except g.GitError as e:
@@ -72,6 +74,14 @@ def _app(request, slug: str) -> App:
 def worker_status() -> dict | None:
     try:
         r = requests.get(core.control_url() + "/status", headers={"X-Kern-Control": core.control_token()}, timeout=1.5)
+        return r.json() if r.ok else None
+    except (requests.RequestException, ValueError):
+        return None
+
+
+def worker_get(path: str, timeout=3) -> dict | None:
+    try:
+        r = requests.get(core.control_url() + path, headers={"X-Kern-Control": core.control_token()}, timeout=timeout)
         return r.json() if r.ok else None
     except (requests.RequestException, ValueError):
         return None
@@ -416,8 +426,14 @@ def deploy_log(request, slug, number):
         raise ApiError("No such deployment.", 404)
     out = _read_from(core.deploy_log(a.id, d.number), _offset(request) or 0, tail=10 ** 9)
     out["status"] = d.status
-    out["done"] = d.status not in ("queued", "building", "starting") and out["offset"] >= out["size"]
+    # Over only when the worker has recorded the end (``finished``: it writes the last lines of the log first;
+    # a build cancelled from here is "cancelled" long before the worker has stopped writing) and the
+    # reader has everything that was written.
+    over = d.status not in ("queued", "building", "starting") and d.finished is not None
+    out["done"] = over and out["offset"] >= out["size"]
     out["deploy"] = deploy_json(d)
+    # Phases of the deployment, recorded next to the log (see deploy.Log): [{name, status, started, seconds, detail}].
+    out["phases"] = deploy.read_phases(a.id, d.number, finished=over)
     return Response(out)
 
 
@@ -461,6 +477,62 @@ def app_logs(request, slug):
                 pass
         return Response(status=204)
     return Response(_read_from(p, _offset(request)))
+
+
+# ------------------------------------------------------------------ tasks, database
+
+
+@api_view(["GET"])
+@handle
+def app_tasks(request, slug):
+    """What the app is running: its processes, the deployment in progress, the ones waiting, the builder."""
+    a = _app(request, slug)
+    st = worker_status()
+    live = _live_of(st, a)
+    procs = None
+    if live and live.get("running") and live.get("pid"):
+        r = worker_get(f"/processes/{a.id}")
+        procs = r.get("processes") if isinstance(r, dict) else None
+    return Response(tasks_mod.build(a, live, procs, worker_up=st is not None))
+
+
+def _db_file(request, body=None) -> str:
+    src = body if body is not None else request.query_params
+    return str(src.get("file") or "").strip()
+
+
+@api_view(["GET"])
+@handle
+def app_db(request, slug):
+    """The SQLite files in the app's data folder and the tables of one of them (read-only)."""
+    a = _app(request, slug)
+    return Response(dbexplore.overview(a.id, _db_file(request) or None))
+
+
+@api_view(["GET"])
+@handle
+def app_db_rows(request, slug):
+    a = _app(request, slug)
+    q = request.query_params
+    table = str(q.get("table") or "")
+    if not table:
+        raise ApiError("Say which table.")
+    try:
+        offset, limit = int(q.get("offset") or 0), int(q.get("limit") or 50)
+    except ValueError:
+        raise ApiError("offset and limit are numbers.")
+    rel = dbexplore.pick_file(a.id, _db_file(request))
+    return Response(dbexplore.table_rows(a.id, rel, table, offset, limit, q.get("order") or None, str(q.get("dir") or "asc")))
+
+
+@api_view(["POST"])
+@handle
+def app_db_query(request, slug):
+    """Run one read-only statement (SELECT, WITH, EXPLAIN, a few PRAGMAs) on a database file."""
+    a = _app(request, slug)
+    body = _body(request)
+    rel = dbexplore.pick_file(a.id, _db_file(request, body))
+    return Response(dbexplore.run_query(a.id, rel, body.get("sql")))
 
 
 # ------------------------------------------------------------------------ env

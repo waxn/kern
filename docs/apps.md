@@ -100,6 +100,18 @@ Apps that were running start again when the server restarts.
 **Deploy hook.** Settings → Source shows a secret URL; a `POST` to it deploys the branch (for git
 URL sources, from GitHub's webhooks or a CI job). Kern repositories deploy on push by themselves.
 
+### The deploy log
+
+Every phase of a deployment writes a line to its log (Deploys → the deployment): `[12:00:01] ▸ Name` when
+it begins, `[12:00:03] ✓ note · 1.2 s` (or `✗`) when it ends, with the time in UTC. The phases are: get the
+code, write the release, plan, each build step (with its exit code and duration), start on a port, wait for
+the app to answer, switch traffic, stop the old version, and a last `✓ Live` or `✗ Deployment failed: why`
+with the total time. When the new version does not start, the log ends with the last lines of what it printed
+(`!` marks stderr). `GET /api/apps/<slug>/deploys/<n>/log` returns the text as before (`text`, `offset`,
+`size`, `status`, `done`, `deploy`) and also `phases`: `[{name, status: "running"|"ok"|"fail", started, seconds,
+detail}]`, kept in `deploy-<n>.phases.json` next to the log. `done` is true only once the deployment is over
+and the reader has everything written to the log.
+
 ## The AI builder
 
 The *Build with AI* tab is a conversation about one app, using the AI provider from Settings → AI.
@@ -117,6 +129,14 @@ the app, environment variables or anything outside the app.
 `APP_DATA_DIR` lives in the `kern_data` volume under `apps/<id>/home/data` and survives deploys,
 restarts and rebuilds. It is **not part of Kern's backups** (Settings → Data & backups): download
 it from the app's Settings → Data now and then. The code is in your repository.
+
+**Looking inside.** The app's Database view opens the SQLite files in `APP_DATA_DIR` read-only:
+`GET /api/apps/<slug>/db` (files, and the tables of one), `GET /api/apps/<slug>/db/rows` (a page of one
+table) and `POST /api/apps/<slug>/db/query` (one SELECT, WITH, EXPLAIN or `PRAGMA table_info` statement,
+500 rows, 5 seconds). Kern refuses links: a file is only opened when no part of its path is a symbolic link,
+it is a regular file owned by the app's user, and nothing else can be written through the connection.
+`GET /api/apps/<slug>/tasks` shows what the app is running (its processes, the deployment in progress,
+those waiting, the builder). The AI builder has the same two views as its `query_db` and `list_processes` tools.
 
 Deleting an app stops it and deletes its data and releases; tick the box to delete its repository
 too. Deleting a user deletes their apps.

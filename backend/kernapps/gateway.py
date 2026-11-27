@@ -380,6 +380,7 @@ class Control:
     def app(self) -> web.Application:
         a = web.Application(middlewares=[self.auth])
         a.router.add_get("/status", self.status)
+        a.router.add_get(r"/processes/{id:\d+}", self.processes)
         a.router.add_post("/kick", self.kick)
         a.router.add_post(r"/restart/{id:\d+}", self.restart)
         a.router.add_post(r"/request/{id:\d+}", self.request)
@@ -395,6 +396,11 @@ class Control:
 
     async def status(self, request):
         return web.json_response(self.sup.status())
+
+    async def processes(self, request):
+        """What runs for one app (its process group and children): pid, parent, command line, cpu, memory, age."""
+        procs = await asyncio.to_thread(self.sup.processes, int(request.match_info["id"]))
+        return web.json_response({"processes": procs})
 
     async def kick(self, request):
         self.sup.wake.set()

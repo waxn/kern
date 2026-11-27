@@ -20,7 +20,7 @@ from django.utils import timezone
 from kern import tenancy
 from notes import ai
 
-from . import core, deploy, source
+from . import core, dbexplore, deploy, source, tasks
 from .models import App, BuilderChat, Deployment
 
 log = logging.getLogger("kern.apps")
@@ -30,6 +30,7 @@ MAX_TOKENS = 64000
 CONCURRENT = 2
 MAX_HISTORY_BYTES = 1_500_000
 DEPLOY_WAIT = deploy.BUILD_TIMEOUT + 120
+MAX_TOOL_RESULT = 20_000  # characters of a database answer handed to the model
 
 SYSTEM = """You build and maintain one small web app that runs on the user's own server, inside Kern
 (their self-hosted workspace). You work on the app's files through the tools, deploy it, and check that
@@ -63,6 +64,9 @@ How to work:
 - After changing files, call deploy. Read its result: if the build or start failed, fix the cause and
   deploy again. When it is live, try it with http_request (e.g. GET / and the API routes) and look at
   read_logs for errors.
+- To check what the app stored, use query_db (read-only SQL on the SQLite files in APP_DATA_DIR; start with
+  SELECT name, sql FROM sqlite_master). To see what is running (processes, CPU, memory, deployments in
+  progress), use list_processes.
 - Make it look good: a clean, modern, mobile-friendly design with light and dark mode
   (prefers-color-scheme), system fonts, comfortable spacing, clear empty states.
 - Keep it small and readable: a few files, no frameworks or build steps unless asked for.
@@ -94,6 +98,13 @@ TOOLS = [
          {"method": {"type": "string", "enum": ["GET", "POST", "PUT", "PATCH", "DELETE"]}, "path": S,
           "body": {"description": "JSON value or text to send."},
           "headers": {"type": "object", "description": "Extra request headers."}}, ["method", "path"]),
+    tool("query_db", "Run ONE read-only SQL statement (SELECT, WITH, EXPLAIN or PRAGMA table_info) on a SQLite "
+                     "database in the app's data folder (APP_DATA_DIR). It can't change anything. Returns columns "
+                     "and up to 100 rows. Start with: SELECT name, sql FROM sqlite_master.",
+         {"sql": S, "file": {"type": "string", "description": "Database file relative to APP_DATA_DIR, e.g. "
+                                                              "\"app.db\". Optional when there is only one."}}, ["sql"]),
+    tool("list_processes", "What the app is running now: its state, the processes (pid, command, CPU %, memory, age), "
+                           "the deployment being built, the ones waiting and whether the builder is busy.", {}),
     tool("update_settings", "Change the app's settings in Kern: description, icon (one emoji), public paths "
                             "(path prefixes reachable without signing in, e.g. [\"/api/ingest\"]). Only when "
                             "the app needs it or the user asks.",
@@ -262,6 +273,32 @@ class Session:
         self.act("Tried", f"{method} {path} → {status if status else result.get('error', '')[:80]}",
                  ok=bool(status and status < 500) if status or result.get("error") else None)
         return json.dumps(result)
+
+    def query_db(self, sql, file=None):
+        try:
+            rel = dbexplore.pick_file(self.app.id, file)
+            out = dbexplore.run_query(self.app.id, rel, sql, max_rows=100)
+        except dbexplore.DbError as e:
+            self.act("Queried the database", str(e), ok=False)
+            return json.dumps({"error": str(e)})
+        self.act("Queried the database", f"{rel}: {str(sql).strip()[:120]}", ok=True)
+        out["file"] = rel
+        text = json.dumps(out, default=str)
+        if len(text) > MAX_TOOL_RESULT:
+            while out["rows"] and len(text) > MAX_TOOL_RESULT:
+                out["rows"] = out["rows"][: max(0, len(out["rows"]) // 2)]
+                out["truncated"] = True
+                text = json.dumps(out, default=str)
+        return text
+
+    def list_processes(self):
+        sup = self.call.sup
+        status = sup.status()
+        live = (status.get("apps") or {}).get(str(self.app.id))
+        self.app.refresh_from_db(fields=["state", "state_detail", "enabled"])
+        out = tasks.build(self.app, live, sup.processes(self.app.id), worker_up=True)
+        self.act("Looked at the processes", f"{len(out['processes'])} running")
+        return json.dumps(out, default=str)
 
     def update_settings(self, description=None, icon=None, public_paths=None):
         changed = []

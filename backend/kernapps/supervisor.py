@@ -13,7 +13,9 @@ import os
 import random
 import signal
 import socket
+import threading
 import time
+from collections import deque
 from dataclasses import dataclass, field
 from pathlib import Path
 
@@ -32,6 +34,8 @@ CRASH_WINDOW = 300  # seconds
 CRASH_LIMIT = 5  # crashes inside the window before Kern stops trying
 HEALTHY_AFTER = 60  # a run this long resets the backoff
 PORTS = range(9200, 9999)
+TAIL_LINES = 40  # the app's newest lines kept for the deploy log when it fails to start
+CMD_MAX = 200  # characters of a command line shown in the task list
 CONCURRENT_DEPLOYS = int(os.environ.get("KERN_APPS_CONCURRENT_DEPLOYS", 2))
 
 
@@ -93,6 +97,8 @@ class Instance:
     cpu: float = 0.0
     rss: int = 0
     _cpu_last: tuple[float, float] | None = None
+    tail: deque = field(default_factory=lambda: deque(maxlen=TAIL_LINES))  # what it printed last: (stream, line)
+    ready_note: str = ""  # how the start check ended, for the deploy log
 
     @property
     def pid(self) -> int | None:
@@ -172,6 +178,46 @@ def _proc_stats(pgid: int) -> tuple[int, float]:
     return rss, cpu
 
 
+def _scan_proc() -> dict[int, dict]:
+    """pid → {ppid, pgrp, cpu (seconds), start (ticks after boot), rss (bytes), name, state} of every process.
+    Reads only /proc/<pid>/stat."""
+    out = {}
+    page = os.sysconf("SC_PAGE_SIZE")
+    tick = os.sysconf("SC_CLK_TCK")
+    for d in os.listdir("/proc"):
+        if not d.isdigit():
+            continue
+        try:
+            with open(f"/proc/{d}/stat") as f:
+                stat = f.read()
+        except OSError:
+            continue
+        lp, rp = stat.find("("), stat.rfind(")")
+        rest = stat[rp + 1:].split()
+        try:
+            out[int(d)] = {"name": stat[lp + 1:rp], "state": rest[0], "ppid": int(rest[1]), "pgrp": int(rest[2]),
+                           "cpu": (int(rest[11]) + int(rest[12])) / tick, "start": int(rest[19]) / tick,
+                           "rss": int(rest[21]) * page}
+        except (IndexError, ValueError):
+            continue
+    return out
+
+
+def _cmdline(pid: int, name: str, state: str) -> str:
+    """The command line, cut at CMD_MAX characters. Never the environment."""
+    try:
+        with open(f"/proc/{pid}/cmdline", "rb") as f:
+            raw = f.read(4 * CMD_MAX)
+    except OSError:
+        raw = b""
+    cmd = raw.replace(b"\0", b" ").decode("utf-8", "replace").strip()
+    if not cmd:
+        cmd = f"[{name}]"
+    if state == "Z":
+        cmd += " <defunct>"
+    return cmd[:CMD_MAX]
+
+
 class Supervisor:
     def __init__(self):
         self.apps: dict[int, Runtime] = {}
@@ -181,6 +227,8 @@ class Supervisor:
         self.deploy_sem = asyncio.Semaphore(CONCURRENT_DEPLOYS)
         self.deploy_tasks: dict[int, asyncio.Task] = {}  # app id → task
         self.builder = None  # set by the worker (AI builder runner)
+        self._cpu_prev: dict[int, tuple[float, float, float]] = {}  # pid → (when, cpu seconds, start) of the last look
+        self._cpu_lock = threading.Lock()
 
     # ------------------------------------------------------------------ lookups
 
@@ -191,7 +239,7 @@ class Supervisor:
     def status(self) -> dict:
         out = {}
         now = time.time()
-        for i, rt in self.apps.items():
+        for i, rt in list(self.apps.items()):  # a copy: the builder's thread asks too
             c = rt.current
             out[str(i)] = {
                 "running": bool(c and c.alive()), "pid": c.pid if c else None, "port": c.port if c else None,
@@ -201,6 +249,51 @@ class Supervisor:
                 "backoff": max(0, int(rt.backoff_until - now)) if rt.backoff_until > now else 0,
             }
         return {"isolated": isolation.isolated(), "apps": out}
+
+    def processes(self, app_id: int) -> list[dict]:
+        """The processes of the app's running release: its process group and everything started under it.
+
+        ``cpu`` is a percentage of one core since the last time this was asked (the average over the
+        process's life the first time). ``mem_bytes`` is resident memory. Safe to call from any thread."""
+        rt = self.apps.get(app_id)
+        inst = rt.current if rt else None
+        if inst is None or inst.proc is None or inst.proc.returncode is not None:
+            return []
+        root = inst.proc.pid
+        table = _scan_proc()
+        kids: dict[int, list[int]] = {}
+        for pid, p in table.items():
+            kids.setdefault(p["ppid"], []).append(pid)
+        members, todo = set(), [root]
+        while todo:  # descendants (they may have left the group)
+            pid = todo.pop()
+            if pid in members or pid not in table:
+                continue
+            members.add(pid)
+            todo.extend(kids.get(pid, []))
+        members |= {pid for pid, p in table.items() if p["pgrp"] == root}
+        try:
+            with open("/proc/uptime") as f:
+                uptime = float(f.read().split()[0])
+        except (OSError, ValueError, IndexError):
+            uptime = time.time() - inst.started
+        now, out = time.monotonic(), []
+        with self._cpu_lock:
+            for pid in sorted(members, key=lambda x: (x != root, x)):
+                p = table[pid]
+                age = max(0.0, uptime - p["start"])
+                prev = self._cpu_prev.get(pid)
+                if prev and prev[2] == p["start"] and now - prev[0] >= 0.5:
+                    pct = 100 * max(0.0, p["cpu"] - prev[1]) / (now - prev[0])
+                else:
+                    pct = 100 * p["cpu"] / age if age > 0.5 else 0.0
+                if not prev or now - prev[0] >= 0.5:
+                    self._cpu_prev[pid] = (now, p["cpu"], p["start"])
+                out.append({"pid": pid, "ppid": p["ppid"], "cmd": _cmdline(pid, p["name"], p["state"]), "cpu": round(pct, 1),
+                            "mem_bytes": p["rss"], "age_s": int(age)})
+            for pid in set(self._cpu_prev) - set(table):
+                self._cpu_prev.pop(pid, None)
+        return out
 
     # -------------------------------------------------------------------- state
 
@@ -283,23 +376,33 @@ class Supervisor:
                 enabled = await db(lambda: App.objects.filter(pk=app_id).values_list("enabled", flat=True).first())
                 if not enabled:
                     # Built while stopped: it becomes the live release and starts with the app.
-                    await db(deploy.finish, dep, True)
+                    await db(deploy.finish, dep, True, "", "built while the app is stopped; it starts when you start the app")
                     await self.set_state(rt, "stopped")
                     return
-                inst, err = await self.launch(rt, dep.number, plan, release)
-                if inst is None:
-                    await db(deploy.finish, dep, False, err)
-                    if rt.current is None:
-                        await self.set_state(rt, "failed", f"Deployment #{dep.number} failed: {err}")
-                    return
-                old, rt.current = rt.current, inst
-                rt.held, rt.crashes, rt.backoff_until = False, [], 0
+                dl = deploy.Log(core.deploy_log(app_id, dep.number))
+                try:
+                    inst, err = await self.launch(rt, dep.number, plan, release, dl)
+                    if inst is None:
+                        await db(deploy.finish, dep, False, err)
+                        if rt.current is None:
+                            await self.set_state(rt, "failed", f"Deployment #{dep.number} failed: {err}")
+                        return
+                    dl.phase("Switch traffic")
+                    old, rt.current = rt.current, inst
+                    rt.held, rt.crashes, rt.backoff_until = False, [], 0
+                    dl.end(True, f"#{dep.number} serves /{rt.app['slug']}/" + (f" on port {inst.port}" if inst.port else "")
+                           + (f" (was #{old.number})" if old else ""))
+                    if old:
+                        # Before the deployment is marked live: the UI stops reading the log once it is over.
+                        dl.phase(f"Stop the old version #{old.number}")
+                        await self.stop_instance(old)
+                        dl.end(True, f"#{old.number} stopped")
+                finally:
+                    dl.close()
                 await db(deploy.finish, dep, True)
                 rt.app["live"], rt.app["release"] = dep.number, dep.rollback_of or dep.number
                 await self.set_state(rt, "running")
                 AppLog(app_id).kern(f"Deployment #{dep.number} is live" + (f" on port {inst.port}." if inst.port else "."))
-                if old:
-                    await self.stop_instance(old)
         except asyncio.CancelledError:
             raise
         except Exception:
@@ -335,20 +438,28 @@ class Supervisor:
         finally:
             rt.starting = False
 
-    async def launch(self, rt: Runtime, number: int, plan: core.Plan, release: Path) -> tuple[Instance | None, str]:
+    async def launch(self, rt: Runtime, number: int, plan: core.Plan, release: Path, dlog=None) -> tuple[Instance | None, str]:
+        """Start a release and wait until it answers. ``dlog``: the deploy log to write the phases to (a
+        deployment); None when the live release is started again after a crash or a restart."""
         a = rt.app
         lg = AppLog(a["id"])
+        dl = dlog or deploy.NullLog()
         if plan.runtime == "static":
+            dl.phase("Start", "static files, no process")
             root = core.static_root(release, plan)
             if not (root / "index.html").is_file() and not root.is_dir():
+                dl.end(False, "the static files are missing")
                 return None, "The static files are missing."
+            dl.end(True, "served by Kern")
             return Instance(a["id"], number, plan, release, static_root=root), ""
         row = await db(lambda: App.objects.filter(pk=a["id"]).first())
         if row is None:
+            dl.end(False, "the app was deleted")
             return None, "The app was deleted."
         port = free_port()
         env = core.app_env(_Row(row), port, release, plan, core.home_dir(a["id"]))
         cmd = isolation.wrap(["sh", "-c", plan.start], a["id"])
+        dl.phase(f"Start on port {port}", plan.start)
         lg.kern(f"Starting deployment #{number}: {plan.start}")
         try:
             proc = await asyncio.create_subprocess_exec(*cmd, cwd=str(release), env=env, stdin=asyncio.subprocess.DEVNULL,
@@ -356,36 +467,64 @@ class Supervisor:
                                                         start_new_session=True)
         except OSError as e:
             lg.kern(f"Could not start: {e}")
+            dl.end(False, f"could not start: {e}")
             return None, f"Could not start: {e}"
         inst = Instance(a["id"], number, plan, release, port=port, proc=proc)
-        inst.tasks = [asyncio.create_task(self._pump(proc.stdout, lg, "out")),
-                      asyncio.create_task(self._pump(proc.stderr, lg, "err"))]
+        inst.tasks = [asyncio.create_task(self._pump(proc.stdout, lg, "out", inst)),
+                      asyncio.create_task(self._pump(proc.stderr, lg, "err", inst))]
+        dl.end(True, f"process {proc.pid} started")
+        dl.phase("Wait for the app to answer", f"port {port}" + (f", GET {plan.health}" if plan.health else "")
+                 + f", up to {START_TIMEOUT} s")
         ok, err = await self.wait_ready(inst, lg)
         if not ok:
             await self.stop_instance(inst)
+            await asyncio.wait(inst.tasks, timeout=2)  # let the last of its output arrive
+            dl.end(False, err)
+            self._dump_tail(dl, inst)
             return None, err
+        dl.end(True, inst.ready_note or "answered")
         inst.tasks.append(asyncio.create_task(self._watch(rt, inst)))
         return inst, ""
 
-    async def _pump(self, stream, lg: AppLog, kind: str):
+    @staticmethod
+    def _dump_tail(dl, inst: Instance):
+        """What the app printed last, into the deploy log: the reason it did not start is usually there."""
+        lines = list(inst.tail)
+        if not lines:
+            dl.line("The app printed nothing.")
+            return
+        dl.line(f"The app's last {len(lines)} line{'s' if len(lines) != 1 else ''} of output (! = stderr):")
+        for kind, text in lines:
+            dl.line(f"  {'!' if kind == 'err' else '|'} {text}")
+
+    async def _pump(self, stream, lg: AppLog, kind: str, inst: Instance | None = None):
         while True:
             line = await stream.readline()
             if not line:
                 return
-            lg.write(line.decode("utf-8", errors="replace"), kind)
+            text = line.decode("utf-8", errors="replace")
+            lg.write(text, kind)
+            if inst is not None:
+                for part in text.rstrip("\n").split("\n"):
+                    inst.tail.append((kind, part[:500]))
 
     async def wait_ready(self, inst: Instance, lg: AppLog) -> tuple[bool, str]:
         deadline = time.monotonic() + START_TIMEOUT
+        port_open, last_status = False, None
         while time.monotonic() < deadline:
             if inst.proc.returncode is not None:
                 return False, f"The app exited with code {inst.proc.returncode} while starting. See the app log."
             try:
                 r, w = await asyncio.wait_for(asyncio.open_connection("127.0.0.1", inst.port), 1)
                 w.close()
+                port_open = True
                 if not inst.plan.health:
+                    inst.ready_note = f"port {inst.port} open"
                     return True, ""
                 status = await self._http_status(inst.port, inst.plan.health)
+                last_status = status or last_status
                 if status and status < 500:
+                    inst.ready_note = f"GET {inst.plan.health} answered {status}"
                     return True, ""
             except (OSError, asyncio.TimeoutError):
                 pass
@@ -394,6 +533,10 @@ class Supervisor:
                "It has to listen on the port in the PORT environment variable.")
         if inst.plan.health:
             msg = f"{inst.plan.health} did not answer with a success within {START_TIMEOUT} s."
+            if last_status:
+                msg += f" (The last answer was {last_status}.)"
+            elif port_open:
+                msg += " (The port was open, but the path gave no HTTP answer.)"
         lg.kern(msg)
         return False, msg
 

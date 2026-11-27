@@ -1,4 +1,4 @@
-import { api } from '#lib/api.ts';
+import { api, qs } from '#lib/api.ts';
 
 export type AppState = 'new' | 'stopped' | 'starting' | 'running' | 'crashed' | 'building' | 'failed';
 export type Access = 'private' | 'users' | 'public';
@@ -82,6 +82,42 @@ export interface Starter {
 	public_paths: string[];
 }
 
+/** A phase of a deployment (clone, build, start, ...) as the log endpoint reports it. */
+export interface Phase {
+	name: string;
+	status: 'ok' | 'fail' | 'running';
+	started: string | null;
+	seconds: number | null;
+}
+
+export interface DeployLog {
+	text: string;
+	offset: number;
+	size: number;
+	done?: boolean;
+	phases?: Phase[];
+}
+
+export interface DbFile { path: string; size: number; is_sqlite: boolean }
+export interface DbColumn { name: string; type: string; pk: boolean }
+export interface DbTable { name: string; kind: 'table' | 'view'; rows: number; columns: DbColumn[] }
+export interface DbInfo { files: DbFile[]; file: string | null; tables: DbTable[] }
+/** A BLOB cell arrives as { blob: size }. */
+export type DbCell = string | number | boolean | null | { blob: number };
+export interface DbRows { columns: string[]; rows: DbCell[][]; total: number; offset: number; limit: number }
+export interface DbQueryResult { columns: string[]; rows: DbCell[][]; truncated: boolean; seconds: number }
+
+export interface TaskProcess { pid: number; ppid: number; cmd: string; cpu: number; mem_bytes: number; age_s: number }
+export interface TasksInfo {
+	state: AppState;
+	worker_up: boolean;
+	process: { pid: number; uptime_s: number; restarts: number; cpu: number; mem_bytes: number } | null;
+	processes: TaskProcess[];
+	deploy: { number: number; status: string; started: string | null; subject: string } | null;
+	queued: { number: number; status: string; trigger: string }[];
+	builder: { status: string; step: string } | null;
+}
+
 export const ACCESS_LABEL: Record<Access, string> = {
 	private: 'Only me',
 	users: 'Signed-in users',
@@ -128,5 +164,10 @@ export const appsApi = {
 	action: (slug: string, action: 'start' | 'stop' | 'restart' | 'deploy', body: Record<string, unknown> = {}) =>
 		api.post<App>(`/apps/${slug}/${action}`, body),
 	remove: (slug: string, deleteRepo: boolean) =>
-		fetch(`/api/apps/${slug}`, { method: 'DELETE', headers: { 'X-Kern': '1', 'Content-Type': 'application/json' }, body: JSON.stringify({ delete_repo: deleteRepo }) })
+		fetch(`/api/apps/${slug}`, { method: 'DELETE', headers: { 'X-Kern': '1', 'Content-Type': 'application/json' }, body: JSON.stringify({ delete_repo: deleteRepo }) }),
+	dbInfo: (slug: string, file?: string | null) => api.get<DbInfo>(`/apps/${slug}/db${qs({ file })}`),
+	dbRows: (slug: string, p: { file: string; table: string; offset: number; limit: number; order?: string; dir?: 'asc' | 'desc' }) =>
+		api.get<DbRows>(`/apps/${slug}/db/rows${qs(p)}`),
+	dbQuery: (slug: string, file: string, sql: string) => api.post<DbQueryResult>(`/apps/${slug}/db/query`, { file, sql }),
+	tasks: (slug: string) => api.get<TasksInfo>(`/apps/${slug}/tasks`)
 };

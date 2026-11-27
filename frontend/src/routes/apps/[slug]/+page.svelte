@@ -6,19 +6,22 @@
 	import { ApiError } from '#lib/api.ts';
 	import Sparkle from '#lib/ai/Sparkle.svelte';
 	import BuilderView from '#lib/apps/BuilderView.svelte';
+	import DatabaseView from '#lib/apps/DatabaseView.svelte';
 	import DeploysView from '#lib/apps/DeploysView.svelte';
 	import FilesView from '#lib/apps/FilesView.svelte';
 	import LogView from '#lib/apps/LogView.svelte';
 	import SettingsView from '#lib/apps/SettingsView.svelte';
+	import TasksView from '#lib/apps/TasksView.svelte';
 	import { ACCESS_LABEL, appsApi, RUNTIME_LABEL, uptime, view, type App } from '#lib/apps/types.ts';
 	import { open } from '#lib/state/tabs.ts';
 	import { ui } from '#lib/state/ui.svelte.ts';
 	import { fileSize, relTime } from '#lib/util.ts';
 
-	type Tab = 'preview' | 'build' | 'logs' | 'deploys' | 'files' | 'settings';
+	type Tab = 'preview' | 'build' | 'logs' | 'deploys' | 'tasks' | 'files' | 'database' | 'settings';
 	const TABS: { k: Tab; label: string }[] = [
 		{ k: 'preview', label: 'Preview' }, { k: 'build', label: 'Build with AI' }, { k: 'logs', label: 'Logs' },
-		{ k: 'deploys', label: 'Deploys' }, { k: 'files', label: 'Files' }, { k: 'settings', label: 'Settings' }
+		{ k: 'deploys', label: 'Deploys' }, { k: 'tasks', label: 'Tasks' }, { k: 'files', label: 'Files' },
+		{ k: 'database', label: 'Database' }, { k: 'settings', label: 'Settings' }
 	];
 
 	let slug = $derived(page.params.slug ?? '');
@@ -173,8 +176,12 @@
 					<LogView url="/apps/{app.slug}/logs" height="calc(100dvh - 230px)" empty="No output yet. What the app prints shows up here." />
 				{:else if tab === 'deploys'}
 					<DeploysView {app} onchange={load} />
+				{:else if tab === 'tasks'}
+					<TasksView {app} ontab={setTab} />
 				{:else if tab === 'files'}
 					<FilesView {app} onchange={load} />
+				{:else if tab === 'database'}
+					<DatabaseView {app} />
 				{:else}
 					<SettingsView {app} onsaved={(a) => (app = { ...app!, ...a })} />
 				{/if}
