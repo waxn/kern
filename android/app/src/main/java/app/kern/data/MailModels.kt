@@ -99,7 +99,7 @@ data class MailMapInfo(val provider: String = "osm", val attribution: String = "
 data class MailIdentity(val address: String = "", val name: String = "")
 
 @Serializable
-data class MailInfo(val address: String = "", val fromName: String = "", val identities: List<MailIdentity> = emptyList())
+data class MailInfo(val address: String = "", val fromName: String = "", val identities: List<MailIdentity> = emptyList(), val undoSeconds: Int = 0)
 
 @Serializable
 data class MailThreads(val threads: List<MailThread> = emptyList(), val next: String? = null, val total: Int? = null)
@@ -182,7 +182,18 @@ data class MailPrefill(
 )
 
 @Serializable
-data class MailDraft(val id: Long, val status: String = "")
+data class MailDraft(
+    val id: Long,
+    val status: String = "",
+    val mode: String = "new",
+    val to: List<MailAddr> = emptyList(),
+    val cc: List<MailAddr> = emptyList(),
+    val bcc: List<MailAddr> = emptyList(),
+    val subject: String = "",
+    val bodyHtml: String = "",
+    val from: String = "",
+    val inReplyTo: Long? = null,
+)
 
 @Serializable
 data class MailOpen(val threadId: Long)

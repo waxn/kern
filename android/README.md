@@ -58,8 +58,11 @@ allowed because Kern is usually self-hosted on a home network; use HTTPS when it
   archive, left to snooze with the web's choices, long-press for more), search, full-width
   conversations (email HTML in a WebView with JavaScript and file access off that loads only
   pictures from your Kern server: inline images, and remote ones through its image proxy after
-  "Load images"), attachments that open in other apps, archive, trash, star, mark unread, report
-  spam, make a task, reply/reply all/forward and new messages (plain text, with your signature).
+  "Load images"), attachments that open in other apps, archive, trash, snooze and report spam
+  (each with Undo, by the web's rules), star, mark unread, make a task, reply/reply all/forward
+  and new messages (plain text, with your signature, Cc and Bcc). Sending can be undone for as
+  long as the server holds it back; Back asks whether to keep what you wrote as a draft, and
+  drafts open again from Drafts.
   A "New mail" notification (never the sender or subject), a Mail card on Home, and tasks made
   from an email open it. Connecting the account and two-factor setup are in the web app.
 - **Home**: greeting, today's tasks, flashcards due, favorites, recently edited.

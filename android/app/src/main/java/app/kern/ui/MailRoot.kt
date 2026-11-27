@@ -166,10 +166,14 @@ private fun MailSignedIn(ws: Workspace, launch: MutableStateFlow<Launch?>, host:
             composable("mail") { MailScreen(ws, n, null, standalone = true) }
             composable("mail/thread/{id}") { MailThreadScreen(ws, n, it.arguments!!.getString("id")!!.toLong()) }
             composable("mail/packages") { MailPackagesScreen(ws, n) }
-            composable("mail/compose?msg={msg}&mode={mode}", arguments = listOf(
+            composable("mail/compose?msg={msg}&mode={mode}&draft={draft}", arguments = listOf(
                 navArgument("msg") { type = NavType.StringType; nullable = true; defaultValue = null },
                 navArgument("mode") { type = NavType.StringType; nullable = true; defaultValue = null },
-            )) { MailComposeScreen(ws, n, it.arguments?.getString("msg")?.toLongOrNull(), it.arguments?.getString("mode")) }
+                navArgument("draft") { type = NavType.StringType; nullable = true; defaultValue = null },
+            )) {
+                MailComposeScreen(ws, n, it.arguments?.getString("msg")?.toLongOrNull(), it.arguments?.getString("mode"),
+                    it.arguments?.getString("draft")?.toLongOrNull())
+            }
             composable("chat/{id}?page={page}&mail={mail}", arguments = listOf(
                 navArgument("page") { type = NavType.StringType; nullable = true; defaultValue = null },
                 navArgument("mail") { type = NavType.StringType; nullable = true; defaultValue = null },

@@ -193,13 +193,22 @@ class Kern(val api: Api) {
         api.post("/mail/threads/$thread/task", jsonOf("title" to title, "due" to due))
     suspend fun mailOpen(key: String): MailOpen = api.get("/mail/open" + qs("key" to key))
     suspend fun mailPrefill(message: Long, mode: String): MailPrefill = api.get("/mail/compose/prefill" + qs("message" to message, "mode" to mode))
-    /** New draft, then send it (the server's undo delay still applies). */
-    suspend fun mailSend(mode: String, inReplyTo: Long?, to: List<MailAddr>, cc: List<MailAddr>, subject: String, bodyHtml: String, from: String = ""): MailDraft {
+    suspend fun mailDraft(id: Long): MailDraft = api.get("/mail/drafts/$id")
+    /** The draft behind a message in the Drafts folder, so it can be edited and sent. */
+    suspend fun mailDraftOf(message: Long): MailDraft = api.get("/mail/messages/$message/draft")
+    /** Creates the draft (id null) or updates it; [toServer] also puts a copy in the server's Drafts folder. */
+    suspend fun mailSaveDraft(id: Long?, fields: MailDraft, toServer: Boolean = false): MailDraft {
         fun addrs(l: List<MailAddr>) = l.map { mapOf("name" to it.name, "addr" to it.addr) }
-        val d: MailDraft = api.post("/mail/drafts", jsonOf("mode" to mode, "inReplyTo" to inReplyTo, "to" to addrs(to), "cc" to addrs(cc),
-            "subject" to subject, "bodyHtml" to bodyHtml, "from" to from))
-        return api.post("/mail/drafts/${d.id}/send")
+        val body = jsonOf("to" to addrs(fields.to), "cc" to addrs(fields.cc), "bcc" to addrs(fields.bcc),
+            "subject" to fields.subject, "bodyHtml" to fields.bodyHtml, "from" to fields.from)
+        if (id != null) return api.patch("/mail/drafts/$id", JsonObject(body + ("saveToServer" to JsonPrimitive(toServer))))
+        val d: MailDraft = api.post("/mail/drafts", JsonObject(body + jsonOf("mode" to fields.mode, "inReplyTo" to fields.inReplyTo)))
+        return if (toServer) api.patch("/mail/drafts/${d.id}", jsonOf("saveToServer" to true)) else d
     }
+    /** Sends after the server's undo delay. */
+    suspend fun mailSendDraft(id: Long): MailDraft = api.post("/mail/drafts/$id/send")
+    suspend fun mailUndoSend(id: Long): MailDraft = api.post("/mail/drafts/$id/undo")
+    suspend fun mailDeleteDraft(id: Long) = api.delete("/mail/drafts/$id")
 
     // ---- misc
     suspend fun settings(): JsonObject = api.get("/settings")

@@ -60,6 +60,7 @@ import androidx.compose.ui.unit.IntOffset
 import androidx.compose.ui.unit.dp
 import androidx.compose.ui.unit.sp
 import app.kern.data.MailAddr
+import app.kern.data.MailPackage
 import app.kern.ui.theme.KernColors
 import app.kern.ui.theme.kern
 import kotlinx.coroutines.Job
@@ -144,6 +145,104 @@ internal fun snoozePresets(now: LocalDateTime = LocalDateTime.now()): List<Snooz
 }
 
 internal fun LocalDateTime.isoOffset(): String = atZone(ZoneId.systemDefault()).toOffsetDateTime().toString()
+
+/** A date in the phone's own order for a skeleton like "MMMd": "Nov 24" in the US, "24 Nov" in the UK. */
+internal fun localDate(d: LocalDate, skeleton: String, locale: Locale = Locale.getDefault()): String =
+    d.format(DateTimeFormatter.ofPattern(android.text.format.DateFormat.getBestDateTimePattern(locale, skeleton), locale))
+
+/** One short line about when a package arrives (or arrived), worded like the web's packages.js arrivalLabel. */
+internal fun arrival(
+    p: MailPackage,
+    today: LocalDate = LocalDate.now(),
+    zone: ZoneId = ZoneId.systemDefault(),
+    date: (LocalDate, String) -> String = { d, skeleton -> localDate(d, skeleton) },
+): String {
+    val at = runCatching { ZonedDateTime.parse(p.statusAt).withZoneSameInstant(zone).toLocalDate() }.getOrNull()
+    when (p.status) {
+        "delivered" -> return when (at) {
+            null -> "Delivered"
+            today -> "Delivered today"
+            today.minusDays(1) -> "Delivered yesterday"
+            else -> "Delivered " + date(at, "EEEMMMd")
+        }
+        "ready_for_pickup" -> return "Waiting for you to pick it up"
+        "out_for_delivery" -> return if (at == null || at == today) "Arriving today" else "Out for delivery since " + date(at, "EEEMMMd")
+    }
+    val expected = p.expected?.let { runCatching { LocalDate.parse(it) }.getOrNull() }
+        ?: return if (p.status == "exception") "Check with the carrier" else "No delivery date yet"
+    val n = ChronoUnit.DAYS.between(today, expected)
+    return when {
+        n == -1L -> "Expected yesterday"
+        n < 0 -> "Expected ${-n} days ago"
+        n == 0L -> "Arriving today"
+        n == 1L -> "Arriving tomorrow"
+        n < 7 -> "Arriving " + date(expected, "EEEE")
+        else -> "Arriving " + date(expected, "MMMd")
+    }
+}
+
+/**
+ * The To and Cc fields: `"Doe, Jane" <jane@x.org>, bob@y.org` is two people. Commas and semicolons
+ * inside quotes or angle brackets don't split.
+ */
+internal fun parseAddrs(s: String): List<MailAddr> {
+    val parts = mutableListOf<String>()
+    val cur = StringBuilder()
+    var quoted = false
+    var angle = false
+    for (c in s) {
+        when {
+            c == '"' && !angle -> { quoted = !quoted; cur.append(c) }
+            c == '<' && !quoted -> { angle = true; cur.append(c) }
+            c == '>' && !quoted -> { angle = false; cur.append(c) }
+            (c == ',' || c == ';') && !quoted && !angle -> { parts += cur.toString(); cur.clear() }
+            else -> cur.append(c)
+        }
+    }
+    parts += cur.toString()
+    return parts.map { it.trim() }.filter { it.isNotEmpty() }.map { part ->
+        val m = Regex("^(.*)<([^>]*)>$").find(part)
+        if (m == null) MailAddr("", part)
+        else MailAddr(m.groupValues[1].trim().removeSurrounding("\"").replace("\\\"", "\"").trim(), m.groupValues[2].trim())
+    }
+}
+
+/** The other way round, quoting a name that would otherwise be split ("Doe, Jane"). */
+internal fun addrsText(l: List<MailAddr>): String = l.joinToString(", ") { a ->
+    when {
+        a.name.isBlank() -> a.addr
+        a.name.any { it in ",;<>\"@" } -> "\"" + a.name.replace("\"", "\\\"") + "\" <${a.addr}>"
+        else -> "${a.name} <${a.addr}>"
+    }
+}
+
+/** A conversation action as /mail/threads/actions takes it. [context] is the folder it's taken in
+ *  (null in Starred, All mail and search). */
+internal data class MailAct(val action: String, val context: Long? = null, val dest: Long? = null) {
+    val extras: Array<Pair<String, Any?>>
+        get() = listOfNotNull(context?.let { "context" to it }, dest?.let { "dest" to it }).toTypedArray()
+}
+
+/** Folder ids by role, for putting things back. */
+internal data class MailRoles(val inbox: Long? = null, val archive: Long? = null, val trash: Long? = null, val junk: Long? = null)
+
+/** What puts an action back the way it was: the web's undo.js inverseOf. */
+internal fun inverseOf(a: MailAct, roles: MailRoles): MailAct? {
+    val back = a.context ?: roles.inbox
+    return when (a.action) {
+        "archive" -> MailAct("move", roles.archive, back)
+        "trash" -> MailAct("move", roles.trash, back)
+        "move" -> if (back != null) MailAct("move", a.dest, back) else null
+        "spam" -> MailAct("not_spam", roles.junk)
+        "inbox" -> if (a.context != null) MailAct("move", roles.inbox, a.context) else null
+        "snooze" -> MailAct("unsnooze")
+        else -> null
+    }
+}
+
+/** Something that can't be an address ("bob", "bob@", "@x.org"), or null when they all look fine. */
+internal fun badAddr(l: List<MailAddr>): String? =
+    l.firstOrNull { !Regex("^[^@\\s<>]+@[^@\\s<>]+\\.[^@\\s<>]+$").matches(it.addr) }?.let { it.addr.ifBlank { it.name } }
 
 /** The web's hue(): a calm, steady colour for each address. */
 internal fun addrHue(addr: String): Int {

@@ -194,48 +194,50 @@ fun MailScreen(ws: Workspace, nav: Nav, initialView: String? = null, standalone:
     var parcels by remember { mutableStateOf<List<app.kern.data.MailPackage>>(emptyList()) }
     val me = status?.account?.str("address") ?: ""
 
-    // Instant start: the Inbox as this phone last saw it, until the server answers.
+    /** The Inbox as this phone last saw it. */
+    fun cachedInbox(): List<MailThread>? = ctx.app.settings.mailInboxCache?.let { c ->
+        runCatching { app.kern.data.KernJson.decodeFromString<List<MailThread>>(c) }.getOrNull()
+    }
+    // Instant start: the cached Inbox until the server answers.
     LaunchedEffect(Unit) {
         if (standalone) app.kern.notify.Notifications.clearMail(ctx) // you're looking at it now
-        if (view == "inbox" && threads.isEmpty()) {
-            ctx.app.settings.mailInboxCache?.let { c ->
-                runCatching { app.kern.data.KernJson.decodeFromString<List<MailThread>>(c) }.getOrNull()?.let {
-                    threads.addAll(it); loading = false
-                }
-            }
-        }
+        if (view == "inbox" && threads.isEmpty()) cachedInbox()?.let { threads.addAll(it); loading = false }
     }
 
-    fun apiView(v: String): String {
-        if (v == "starred" || v == "all" || v in ROLE_VIEWS) return v // the server knows folders by role
-        val f = folders.firstOrNull { "f${it.id}" == v }
-        return if (f != null) "folder:${f.id}" else "all"
-    }
-    suspend fun load(more: Boolean = false) {
+    /** Loads the list (or its next page); [counts] also refreshes the folders and their unread numbers. */
+    suspend fun load(more: Boolean = false, counts: Boolean = false) {
+        val asked = Triple(view, unreadOnly, query.takeIf { searching && it.isNotBlank() })
+        // False once another folder, filter or search was picked while this was on its way.
+        fun current() = asked == Triple(view, unreadOnly, query.takeIf { searching && it.isNotBlank() })
         try {
             val r = kotlinx.coroutines.coroutineScope {
-                val f = if (folders.isEmpty()) async { runCatching { ws.kern.mailFolders().folders }.getOrNull() } else null
+                val f = if (folders.isEmpty() || counts) async { runCatching { ws.kern.mailFolders().folders }.getOrNull() } else null
                 val t = async {
-                    ws.kern.mailThreads(apiView(view), q = query.takeIf { searching && it.isNotBlank() }, cursor = if (more) next else null,
+                    ws.kern.mailThreads(apiView(view), q = asked.third, cursor = if (more) next else null,
                         unread = unreadOnly && !searching && view !in setOf("snoozed", "sent", "drafts"))
                 }
                 f?.await()?.let { folders = it }
                 t.await()
             }
+            if (!current()) return
             if (!more) threads.clear()
-            threads.addAll(r.threads)
+            // A page asked for before new mail arrived can repeat rows that are already shown.
+            val shown = threads.mapTo(HashSet()) { it.id }
+            threads.addAll(r.threads.filter { shown.add(it.id) })
             next = r.next
             error = null
             if (!more && view == "inbox" && !searching && !unreadOnly) runCatching {
                 ctx.app.settings.mailInboxCache = app.kern.data.KernJson.encodeToString(kotlinx.serialization.builtins.ListSerializer(MailThread.serializer()), r.threads)
             }
+        } catch (e: kotlinx.coroutines.CancellationException) {
+            throw e // a newer load took over
         } catch (e: ApiError) {
             if (e.status == 403) status = runCatching { ws.kern.mailStatus() }.getOrNull() ?: status
-            else error = e.message
+            else if (current()) error = e.message
         } catch (e: Exception) {
-            error = e.message
+            if (current()) error = e.message
         } finally {
-            loading = false
+            if (current()) loading = false
         }
     }
     LaunchedEffect(Unit) {
@@ -264,7 +266,7 @@ fun MailScreen(ws: Workspace, nav: Nav, initialView: String? = null, standalone:
                 val r = ws.kern.mailChanges(since, 25)
                 val changed = r.reset || r.events.isNotEmpty()
                 since = r.last
-                if (changed && !searching) load()
+                if (changed && !searching) load(counts = true)
                 if (r.events.any { it.kind == "package" }) loadParcels()
                 if (changed && view == "inbox") app.kern.notify.Notifications.clearMail(ctx)
             } catch (e: kotlinx.coroutines.CancellationException) {
@@ -296,22 +298,31 @@ fun MailScreen(ws: Workspace, nav: Nav, initialView: String? = null, standalone:
         if (i >= 0) threads[i] = with
     }
 
-    /** Swipe right: Archive, or back to the Inbox from Archive and Trash (the web's rule). */
-    fun moveOut(t: MailThread) {
-        val toInbox = view == "archive" || view == "trash"
-        val context = folders.firstOrNull { it.role == view }?.id
+    val roles = rolesOf(folders)
+    /** The folder being looked at; null for Starred, All mail and search. */
+    val here = folders.firstOrNull { (it.role.isNotBlank() && it.role == view) || "f${it.id}" == view }?.id
+
+    /** Takes [t] out of the list, does [act] and offers Undo, which puts it back where it was. */
+    fun leave(t: MailThread, act: MailAct, done: String, vararg extra: Pair<String, Any?>) {
         threads.removeAll { it.id == t.id }
+        val undo = inverseOf(act, roles)
         scope.launch {
             try {
-                if (toInbox) ws.kern.mailAction(listOf(t.id), "inbox")
-                else ws.kern.mailAction(listOf(t.id), "archive", *(if (context != null) arrayOf("context" to context) else emptyArray()))
-                val r = snack.host.showSnackbar(if (toInbox) "Moved to Inbox" else "Archived", actionLabel = "Undo", duration = androidx.compose.material3.SnackbarDuration.Short)
+                ws.kern.mailAction(listOf(t.id), act.action, *act.extras, *extra)
+                if (undo == null) { snack.show(done); return@launch }
+                val r = snack.host.showSnackbar(done, actionLabel = "Undo", duration = androidx.compose.material3.SnackbarDuration.Short)
                 if (r == androidx.compose.material3.SnackbarResult.ActionPerformed) {
-                    ws.kern.mailAction(listOf(t.id), if (!toInbox) "inbox" else if (view == "trash") "trash" else "archive")
-                    load()
+                    ws.kern.mailAction(listOf(t.id), undo.action, *undo.extras)
+                    load(counts = true)
                 }
             } catch (e: Exception) { snack.error(e); load() }
         }
+    }
+
+    /** Swipe right: Archive, or back to the Inbox from Archive and Trash (the web's rule). */
+    fun moveOut(t: MailThread) {
+        if (view == "archive" || view == "trash") leave(t, MailAct("inbox", here), "Moved to Inbox")
+        else leave(t, MailAct("archive", here), "Archived")
     }
 
     fun snooze(t: MailThread, at: java.time.LocalDateTime) {
@@ -319,7 +330,7 @@ fun MailScreen(ws: Workspace, nav: Nav, initialView: String? = null, standalone:
         if (view != "snoozed") threads.removeAll { it.id == t.id }
         scope.launch {
             try {
-                ws.kern.mailAction(listOf(t.id), "snooze", "until" to at.isoOffset())
+                ws.kern.mailAction(listOf(t.id), "snooze", "until" to at.isoOffset(), *MailAct("snooze", here).extras)
                 val r = snack.host.showSnackbar("Snoozed until " + snoozeLabel(at, h24), actionLabel = "Undo", duration = androidx.compose.material3.SnackbarDuration.Short)
                 if (r == androidx.compose.material3.SnackbarResult.ActionPerformed) { ws.kern.mailAction(listOf(t.id), "unsnooze"); load() }
                 else if (view == "snoozed") load()
@@ -331,8 +342,8 @@ fun MailScreen(ws: Workspace, nav: Nav, initialView: String? = null, standalone:
         replace(t, t.copy(starred = !t.starred))
         scope.launch {
             runCatching { ws.kern.mailAction(listOf(t.id), if (t.starred) "unstar" else "star") }
+                .onSuccess { if (view == "starred" && t.starred) threads.removeAll { it.id == t.id } }
                 .onFailure { replace(t, t); snack.error(it) }
-            if (view == "starred" && t.starred) threads.removeAll { it.id == t.id }
         }
     }
 
@@ -346,16 +357,7 @@ fun MailScreen(ws: Workspace, nav: Nav, initialView: String? = null, standalone:
             "archive", "inbox" -> moveOut(t)
             "snooze" -> snoozing = t
             "star" -> star(t)
-            "trash" -> {
-                threads.removeAll { it.id == t.id }
-                scope.launch {
-                    try {
-                        ws.kern.mailAction(listOf(t.id), "trash")
-                        val r = snack.host.showSnackbar("Moved to Trash", actionLabel = "Undo", duration = androidx.compose.material3.SnackbarDuration.Short)
-                        if (r == androidx.compose.material3.SnackbarResult.ActionPerformed) { ws.kern.mailAction(listOf(t.id), "inbox"); load() }
-                    } catch (e: Exception) { snack.error(e); load() }
-                }
-            }
+            "trash" -> leave(t, MailAct("trash", here), "Moved to Trash")
         }
     }
 
@@ -407,7 +409,15 @@ fun MailScreen(ws: Workspace, nav: Nav, initialView: String? = null, standalone:
                                 }
                             } + folders.filter { it.role.isBlank() }.map { "f${it.id}" to it.displayName }
                             chips.forEach { (v, label) ->
-                                Pill(label, if (v == view) kern.accent else kern.text2, onClick = { pinned = true; view = v })
+                                Pill(label, if (v == view) kern.accent else kern.text2, onClick = {
+                                    pinned = true
+                                    if (v != view) {
+                                        // Not the last folder's mail under this one's name while it loads.
+                                        threads.clear(); next = null; error = null; loading = true
+                                        if (v == "inbox") cachedInbox()?.let { threads.addAll(it) }
+                                        view = v
+                                    }
+                                })
                             }
                             Pill("Packages" + if (parcels.isNotEmpty()) " ${parcels.size}" else "", kern.text2, onClick = { nav.go("mail/packages") })
                         }
@@ -418,8 +428,8 @@ fun MailScreen(ws: Workspace, nav: Nav, initialView: String? = null, standalone:
                             scope.launch {
                                 refreshing = true
                                 runCatching { ws.kern.mailCheckNow() } // ask the server to look for new mail now
-                                folders = emptyList(); load()
-                                kotlinx.coroutines.delay(900); load() // the check usually lands within a second
+                                load(counts = true)
+                                kotlinx.coroutines.delay(900); load(counts = true) // the check usually lands within a second
                                 refreshing = false
                             }
                         },
@@ -428,7 +438,10 @@ fun MailScreen(ws: Workspace, nav: Nav, initialView: String? = null, standalone:
                         when {
                             loading && threads.isEmpty() -> Loading()
                             error != null && threads.isEmpty() -> ErrorState(error!!) { scope.launch { loading = true; load() } }
-                            threads.isEmpty() -> EmptyState(Icons.Outlined.Email, if (searching) "No matches" else "Nothing here", null)
+                            threads.isEmpty() -> Column(Modifier.fillMaxSize().verticalScroll(rememberScrollState())) { // still pulls to refresh
+                                val (head, line) = emptyText(view, searching, unreadOnly)
+                                EmptyState(if (view == "inbox" && !searching) Icons.Outlined.Inbox else Icons.Outlined.Email, head, line)
+                            }
                             else -> LazyColumn(Modifier.fillMaxSize(), state = listState) {
                                 if (view == "inbox" && !searching && parcels.isNotEmpty()) item(key = "parcels") {
                                     ParcelStrip(parcels) { p -> nav.go(p.threadId?.let { "mail/thread/$it" } ?: "mail/packages") }
@@ -461,7 +474,7 @@ fun MailScreen(ws: Workspace, nav: Nav, initialView: String? = null, standalone:
                                                 SwipeAction("Snooze", Icons.Outlined.Schedule, kern.accent, leaves = false) { snoozing = t },
                                             modifier = Modifier.animateItem(fadeInSpec = null, placementSpec = null, fadeOutSpec = null), // the row folds itself away
                                         ) {
-                                            ThreadRow(t, me, h24,
+                                            ThreadRow(t, me, h24, view,
                                                 onStar = { star(t) },
                                                 onLongClick = { menuFor = t.id },
                                                 menu = menuFor == t.id,
@@ -495,6 +508,34 @@ fun MailScreen(ws: Workspace, nav: Nav, initialView: String? = null, standalone:
 
 private val ROLE_VIEWS = setOf("inbox", "snoozed", "drafts", "sent", "archive", "junk", "trash")
 
+internal fun rolesOf(folders: List<MailFolder>) = MailRoles(
+    inbox = folders.firstOrNull { it.role == "inbox" }?.id,
+    archive = folders.firstOrNull { it.role == "archive" }?.id,
+    trash = folders.firstOrNull { it.role == "trash" }?.id,
+    junk = folders.firstOrNull { it.role == "junk" }?.id,
+)
+
+/** The list's view as the server takes it: folders by role, "f12" (a folder of your own) as folder:12. */
+internal fun apiView(v: String): String = when {
+    v == "starred" || v == "all" || v in ROLE_VIEWS -> v
+    v.startsWith("f") && v.drop(1).toLongOrNull() != null -> "folder:" + v.drop(1)
+    else -> "all"
+}
+
+/** What an empty list says. */
+internal fun emptyText(view: String, searching: Boolean, unreadOnly: Boolean): Pair<String, String?> = when {
+    searching -> "No matches" to "Try other words, or fewer of them."
+    unreadOnly -> "No unread mail" to null
+    view == "inbox" -> "All caught up" to "New mail shows up here."
+    view == "starred" -> "Nothing starred" to "Star a conversation to keep it here."
+    view == "snoozed" -> "Nothing snoozed" to "Swipe a conversation left to have it come back later."
+    view == "drafts" -> "No drafts" to null
+    view == "sent" -> "Nothing sent yet" to null
+    view == "junk" -> "No junk" to null
+    view == "trash" -> "Trash is empty" to null
+    else -> "Nothing here" to null
+}
+
 /** A search match from the server: the matched words sit between \u0002 and \u0003. */
 private fun hitText(hit: String, strong: androidx.compose.ui.graphics.Color) = androidx.compose.ui.text.buildAnnotatedString {
     hit.split('\u0002').forEachIndexed { i, piece ->
@@ -520,29 +561,6 @@ private fun ParcelStrip(parcels: List<app.kern.data.MailPackage>, onOpen: (app.k
                 Text(p.merchant.ifBlank { p.carrierName }, style = MaterialTheme.typography.labelMedium, color = kern.text, maxLines = 1)
                 Spacer(Modifier.width(6.dp))
                 Text(arrival(p), style = MaterialTheme.typography.labelMedium, color = if (hot) kern.accent else kern.text2, maxLines = 1)
-            }
-        }
-    }
-}
-
-/** One short line about when it arrives (like the web's packages.js arrivalLabel). */
-internal fun arrival(p: app.kern.data.MailPackage): String {
-    val today = LocalDate.now()
-    val at = runCatching { ZonedDateTime.parse(p.statusAt).withZoneSameInstant(java.time.ZoneId.systemDefault()).toLocalDate() }.getOrNull()
-    return when (p.status) {
-        "delivered" -> when (at) { today -> "Delivered today"; today.minusDays(1) -> "Delivered yesterday"; null -> "Delivered"; else -> "Delivered ${at.dayOfMonth}/${at.monthValue}" }
-        "ready_for_pickup" -> "Ready to pick up"
-        "out_for_delivery" -> if (at == null || at == today) "Arriving today" else "Out for delivery"
-        "exception" -> "Needs attention"
-        else -> {
-            val exp = p.expected?.let { runCatching { LocalDate.parse(it) }.getOrNull() }
-            when {
-                exp == null -> p.statusLabel
-                exp == today -> "Arriving today"
-                exp == today.plusDays(1) -> "Arriving tomorrow"
-                exp.isBefore(today) -> "Expected ${java.time.temporal.ChronoUnit.DAYS.between(exp, today)} d ago"
-                java.time.temporal.ChronoUnit.DAYS.between(today, exp) < 7 -> "Arriving " + exp.dayOfWeek.name.lowercase().replaceFirstChar { it.uppercase() }
-                else -> "Arriving ${exp.dayOfMonth}/${exp.monthValue}"
             }
         }
     }
@@ -771,7 +789,7 @@ private fun PackageItem(p: app.kern.data.MailPackage, nav: Nav, ctx: android.con
 /** One conversation in the list, laid out like the web's ThreadList row. */
 @Composable
 private fun ThreadRow(
-    t: MailThread, me: String, h24: Boolean,
+    t: MailThread, me: String, h24: Boolean, view: String,
     onStar: () -> Unit, onLongClick: () -> Unit, menu: Boolean, onMenuClose: () -> Unit, onMenu: (String) -> Unit,
     onClick: () -> Unit,
 ) {
@@ -851,9 +869,17 @@ private fun ThreadRow(
                 DropdownMenuItem(text = { Text(if (unread) "Mark read" else "Mark unread") }, leadingIcon = { Icon(Icons.Outlined.MarkEmailUnread, null) },
                     onClick = { onMenu(if (unread) "read" else "unread") })
                 DropdownMenuItem(text = { Text(if (t.starred) "Unstar" else "Star") }, leadingIcon = { Icon(Icons.Outlined.StarBorder, null) }, onClick = { onMenu("star") })
-                DropdownMenuItem(text = { Text("Snooze…") }, leadingIcon = { Icon(Icons.Outlined.Schedule, null) }, onClick = { onMenu("snooze") })
-                DropdownMenuItem(text = { Text("Archive") }, leadingIcon = { Icon(Icons.Outlined.Archive, null) }, onClick = { onMenu("archive") })
-                DropdownMenuItem(text = { Text("Move to Trash") }, leadingIcon = { Icon(Icons.Outlined.Delete, null) }, onClick = { onMenu("trash") })
+                if (view != "drafts" && view != "sent") {
+                    DropdownMenuItem(text = { Text("Snooze…") }, leadingIcon = { Icon(Icons.Outlined.Schedule, null) }, onClick = { onMenu("snooze") })
+                }
+                if (view == "archive" || view == "trash") {
+                    DropdownMenuItem(text = { Text("Move to Inbox") }, leadingIcon = { Icon(Icons.Outlined.Inbox, null) }, onClick = { onMenu("inbox") })
+                } else {
+                    DropdownMenuItem(text = { Text("Archive") }, leadingIcon = { Icon(Icons.Outlined.Archive, null) }, onClick = { onMenu("archive") })
+                }
+                if (view != "trash") {
+                    DropdownMenuItem(text = { Text("Move to Trash") }, leadingIcon = { Icon(Icons.Outlined.Delete, null) }, onClick = { onMenu("trash") })
+                }
             }
         }
         HorizontalDivider(color = k.border)
@@ -904,11 +930,23 @@ fun MailThreadScreen(ws: Workspace, nav: Nav, id: Long) {
         asking = false
     }
 
+    var roles by remember { mutableStateOf(MailRoles()) }
+    LaunchedEffect(Unit) { runCatching { ws.kern.mailFolders().folders }.getOrNull()?.let { roles = rolesOf(it) } }
+
     fun act(action: String, done: String, vararg extra: Pair<String, Any?>) = scope.launch {
         try {
             ws.kern.mailAction(listOf(id), action, *extra)
-            snack.show(done)
-            if (action in setOf("archive", "trash", "snooze", "spam")) nav.back() else load()
+            if (action !in setOf("archive", "trash", "snooze", "spam")) { snack.show(done); load(); return@launch }
+            nav.back()
+            val undo = inverseOf(MailAct(action), roles) ?: return@launch snack.show(done)
+            // On the app's own scope: this screen is gone by the time Undo is tapped.
+            snack.scope.launch {
+                snack.host.currentSnackbarData?.dismiss()
+                val r = snack.host.showSnackbar(done, actionLabel = "Undo", duration = androidx.compose.material3.SnackbarDuration.Short)
+                if (r == androidx.compose.material3.SnackbarResult.ActionPerformed) {
+                    runCatching { ws.kern.mailAction(listOf(id), undo.action, *undo.extras) }.onFailure { snack.error(it) }
+                }
+            }
         } catch (e: Exception) { snack.error(e) }
     }
 
@@ -926,7 +964,10 @@ fun MailThreadScreen(ws: Workspace, nav: Nav, id: Long) {
                     IconButton(onClick = { menu = true }) { Icon(Icons.Outlined.MoreVert, "More", tint = kern.text2) }
                     DropdownMenu(expanded = menu, onDismissRequest = { menu = false }) {
                         DropdownMenuItem(text = { Text("Mark unread") }, leadingIcon = { Icon(Icons.Outlined.MarkEmailUnread, null) },
-                            onClick = { menu = false; scope.launch { runCatching { ws.kern.mailAction(listOf(id), "unread") }; nav.back() } })
+                            onClick = {
+                                menu = false
+                                scope.launch { runCatching { ws.kern.mailAction(listOf(id), "unread") }.onSuccess { nav.back() }.onFailure { snack.error(it) } }
+                            })
                         DropdownMenuItem(text = { Text("Snooze…") }, leadingIcon = { Icon(Icons.Outlined.Schedule, null) },
                             onClick = { menu = false; snoozing = true })
                         DropdownMenuItem(text = { Text("Make a task for tomorrow") }, leadingIcon = { Icon(Icons.Outlined.TaskAlt, null) },
@@ -1005,7 +1046,13 @@ fun MailThreadScreen(ws: Workspace, nav: Nav, id: Long) {
                 }
                 item(key = "reply") {
                     val last = d.messages.lastOrNull()
-                    if (last != null) Row(Modifier.fillMaxWidth().padding(16.dp), horizontalArrangement = Arrangement.spacedBy(8.dp)) {
+                    if (last != null && last.isDraft) Row(Modifier.fillMaxWidth().padding(16.dp)) {
+                        KButton("Edit draft", Modifier.weight(1f), primary = true, icon = Icons.Outlined.Edit) {
+                            scope.launch {
+                                try { nav.go("mail/compose?draft=${ws.kern.mailDraftOf(last.id).id}") } catch (e: Exception) { snack.error(e) }
+                            }
+                        }
+                    } else if (last != null) Row(Modifier.fillMaxWidth().padding(16.dp), horizontalArrangement = Arrangement.spacedBy(8.dp)) {
                         KButton("Reply", Modifier.weight(1f), icon = Icons.AutoMirrored.Outlined.Reply) { nav.go("mail/compose?msg=${last.id}&mode=reply") }
                         KButton("Reply all", Modifier.weight(1f), icon = Icons.AutoMirrored.Outlined.ReplyAll) { nav.go("mail/compose?msg=${last.id}&mode=reply_all") }
                         KButton("Forward", Modifier.weight(1f), icon = Icons.AutoMirrored.Outlined.Forward) { nav.go("mail/compose?msg=${last.id}&mode=forward") }
@@ -1373,35 +1420,69 @@ private fun EmailView(b: MailBody, original: Boolean = false) {
 
 private fun refused() = android.webkit.WebResourceResponse("text/plain", "utf-8", 403, "Blocked", emptyMap(), java.io.ByteArrayInputStream(ByteArray(0)))
 
-private fun parseAddrs(s: String): List<MailAddr> = s.split(',', ';').map { it.trim() }.filter { it.isNotEmpty() }.map { part ->
-    val m = Regex("^(.*)<([^>]+)>$").find(part)
-    if (m != null) MailAddr(m.groupValues[1].trim().trim('"'), m.groupValues[2].trim()) else MailAddr("", part)
-}
-
-private fun addrsText(l: List<MailAddr>) = l.joinToString(", ") { if (it.name.isBlank()) it.addr else "${it.name} <${it.addr}>" }
-
 private fun textToHtml(t: String): String =
     t.trimEnd().split(Regex("\n{2,}")).joinToString("") { p -> "<p>" + android.text.Html.escapeHtml(p).replace("\n", "<br>") + "</p>" }
 
+/** A draft's HTML as text to edit in the phone's plain field. */
+private fun htmlToText(html: String): String =
+    android.text.Html.fromHtml(html, android.text.Html.FROM_HTML_MODE_COMPACT).toString().replace('\u00A0', ' ').trim()
+
+/** What was typed in a message whose send can still be undone, so Undo brings it back exactly as it was. */
+private data class Typed(val to: String, val cc: String, val bcc: String, val subject: String, val text: String,
+                         val quoted: String, val signature: String, val from: String)
+
+private val unsent = HashMap<Long, Typed>()
+
 @Composable
-fun MailComposeScreen(ws: Workspace, nav: Nav, message: Long? = null, mode: String? = null) {
+fun MailComposeScreen(ws: Workspace, nav: Nav, message: Long? = null, mode: String? = null, draft: Long? = null) {
     val scope = rememberCoroutineScope()
     val snack = LocalSnack.current
     var to by remember { mutableStateOf("") }
     var cc by remember { mutableStateOf("") }
+    var bcc by remember { mutableStateOf("") }
+    var copies by remember { mutableStateOf(false) }
     var subject by remember { mutableStateOf("") }
     var text by remember { mutableStateOf("") }
     var quoted by remember { mutableStateOf("") }
     var signature by remember { mutableStateOf("") }
     var busy by remember { mutableStateOf(false) }
-    var ready by remember { mutableStateOf(message == null) }
+    var ready by remember { mutableStateOf(message == null && draft == null) }
     var from by remember { mutableStateOf("") }
     var info by remember { mutableStateOf<app.kern.data.MailInfo?>(null) }
     var fromMenu by remember { mutableStateOf(false) }
-    val m = mode ?: "new"
+    var m by remember { mutableStateOf(mode ?: "new") }
+    var draftId by remember { mutableStateOf(draft) }
+    // A draft opened from the Drafts folder: Discard leaves it there. Its HTML is sent as it was unless the text changed.
+    var onServer by remember { mutableStateOf(false) }
+    var loadedHtml by remember { mutableStateOf<String?>(null) }
+    var loadedText by remember { mutableStateOf("") }
+    var leaving by remember { mutableStateOf(false) }
+    var asking by remember { mutableStateOf(false) }
+    fun typed() = Typed(to, cc, bcc, subject, text, quoted, signature, from)
+    // What was there before any typing (a new message starts empty); the signature and quote don't count.
+    var start by remember { mutableStateOf(if (message == null && draft == null) Typed("", "", "", "", "", "", "", "") else null) }
+    val changed = ready && start?.let { typed().copy(quoted = "", signature = "") != it.copy(quoted = "", signature = "") } == true
 
     LaunchedEffect(Unit) { info = runCatching { ws.kern.mailInfo() }.getOrNull() }
-    LaunchedEffect(message, mode) {
+    LaunchedEffect(message, mode, draft) {
+        if (draft != null) {
+            val kept = unsent.remove(draft)
+            try {
+                val d = ws.kern.mailDraft(draft)
+                m = d.mode
+                if (kept != null) {
+                    to = kept.to; cc = kept.cc; bcc = kept.bcc; subject = kept.subject; text = kept.text
+                    quoted = kept.quoted; signature = kept.signature; from = kept.from
+                } else {
+                    to = addrsText(d.to); cc = addrsText(d.cc); bcc = addrsText(d.bcc); subject = d.subject; from = d.from
+                    text = htmlToText(d.bodyHtml)
+                    loadedHtml = d.bodyHtml; loadedText = text; onServer = true
+                }
+                copies = cc.isNotBlank() || bcc.isNotBlank()
+            } catch (e: Exception) { snack.error(e) }
+            start = typed(); ready = true
+            return@LaunchedEffect
+        }
         runCatching { ws.kern.api.get<kotlinx.serialization.json.JsonObject>("/mail/preferences") }.getOrNull()?.let { p ->
             val sig = p.str("signature") ?: ""
             val onReplies = p.str("signature_on_replies") != "false"
@@ -1412,26 +1493,79 @@ fun MailComposeScreen(ws: Workspace, nav: Nav, message: Long? = null, mode: Stri
                 val p = ws.kern.mailPrefill(message, m)
                 to = addrsText(p.to); cc = addrsText(p.cc); subject = p.subject; quoted = p.bodyHtml; from = p.from
             } catch (e: Exception) { snack.error(e) }
-            ready = true
+            start = typed(); ready = true
+        }
+    }
+
+    fun fields(): app.kern.data.MailDraft {
+        val body = loadedHtml?.takeIf { text == loadedText } ?: run {
+            val sigHtml = if (signature.isNotBlank()) "<div><br></div><div>-- <br>" + android.text.Html.escapeHtml(signature).replace("\n", "<br>") + "</div>" else ""
+            textToHtml(text) + sigHtml + quoted
+        }
+        return app.kern.data.MailDraft(id = draftId ?: 0, mode = m, to = parseAddrs(to), cc = parseAddrs(cc), bcc = parseAddrs(bcc),
+            subject = subject, bodyHtml = body, from = from, inReplyTo = message)
+    }
+
+    /** "Sending…" with Undo for as long as the server holds the message back. */
+    fun offerUndo(id: Long, seconds: Int) = snack.scope.launch {
+        snack.host.currentSnackbarData?.dismiss()
+        if (seconds <= 0) { snack.host.showSnackbar("Sending…"); return@launch }
+        val r = kotlinx.coroutines.withTimeoutOrNull(seconds * 1000L) {
+            snack.host.showSnackbar("Sending…", actionLabel = "Undo", duration = androidx.compose.material3.SnackbarDuration.Indefinite)
+        }
+        if (r != androidx.compose.material3.SnackbarResult.ActionPerformed) { unsent.remove(id); return@launch }
+        try {
+            ws.kern.mailUndoSend(id)
+            nav.go("mail/compose?draft=$id")
+        } catch (e: Exception) {
+            unsent.remove(id)
+            snack.error(e)
         }
     }
 
     fun send() = scope.launch {
-        val rcpt = parseAddrs(to)
-        if (rcpt.isEmpty() || rcpt.any { "@" !in it.addr }) { snack.show("Check the recipients."); return@launch }
+        val all = parseAddrs(to) + parseAddrs(cc) + parseAddrs(bcc)
+        if (all.isEmpty()) { snack.show("Add someone to send it to."); return@launch }
+        badAddr(all)?.let { snack.show("“$it” isn't an email address."); return@launch }
         busy = true
         try {
-            val sigHtml = if (signature.isNotBlank()) "<div><br></div><div>-- <br>" + android.text.Html.escapeHtml(signature).replace("\n", "<br>") + "</div>" else ""
-            ws.kern.mailSend(m, message, rcpt, parseAddrs(cc), subject, textToHtml(text) + sigHtml + quoted, from)
-            snack.show("Sending…")
+            val d = ws.kern.mailSaveDraft(draftId, fields())
+            draftId = d.id
+            ws.kern.mailSendDraft(d.id)
+            val seconds = info?.undoSeconds ?: 0
+            if (seconds > 0) unsent[d.id] = typed()
+            leaving = true
             nav.back()
+            offerUndo(d.id, seconds)
         } catch (e: Exception) {
             snack.error(e)
         } finally { busy = false }
     }
 
+    fun saveAndLeave() = scope.launch {
+        busy = true
+        try {
+            ws.kern.mailSaveDraft(draftId, fields(), toServer = true)
+            leaving = true
+            nav.back()
+            snack.show("Saved to Drafts")
+        } catch (e: Exception) {
+            snack.error(e)
+        } finally { busy = false }
+    }
+
+    fun discardAndLeave() {
+        val id = draftId
+        if (id != null && !onServer) snack.scope.launch { runCatching { ws.kern.mailDeleteDraft(id) } }
+        leaving = true
+        nav.back()
+    }
+
+    fun leave() { if (changed && !leaving) asking = true else nav.back() }
+    androidx.activity.compose.BackHandler(enabled = changed && !leaving) { asking = true }
+
     Column(Modifier.fillMaxSize().background(kern.bg).statusBarsPadding().imePadding()) {
-        KTopBar(when (m) { "reply", "reply_all" -> "Reply"; "forward" -> "Forward"; else -> "New message" }, onBack = { nav.back() }) {
+        KTopBar(when (m) { "reply", "reply_all" -> "Reply"; "forward" -> "Forward"; else -> if (onServer) "Draft" else "New message" }, onBack = { leave() }) {
             IconButton(onClick = { send() }, enabled = ready && !busy, modifier = Modifier.padding(end = 4.dp)) { Icon(Icons.AutoMirrored.Outlined.Send, "Send", tint = kern.accent) }
         }
         if (!ready) Loading() else Column(Modifier.fillMaxSize().verticalScroll(rememberScrollState()).padding(horizontal = 16.dp),
@@ -1447,8 +1581,15 @@ fun MailComposeScreen(ws: Workspace, nav: Nav, message: Long? = null, mode: Stri
                     i.identities.forEach { id -> DropdownMenuItem(text = { Text(id.address) }, onClick = { from = id.address; fromMenu = false }) }
                 }
             }
-            KField(to, { to = it }, "To", keyboard = KeyboardOptions(keyboardType = KeyboardType.Email))
-            if (cc.isNotBlank() || m == "reply_all") KField(cc, { cc = it }, "Cc", keyboard = KeyboardOptions(keyboardType = KeyboardType.Email))
+            val showCopies = copies || cc.isNotBlank() || bcc.isNotBlank() || m == "reply_all"
+            Row(verticalAlignment = Alignment.CenterVertically) {
+                KField(to, { to = it }, "To", modifier = Modifier.weight(1f), keyboard = KeyboardOptions(keyboardType = KeyboardType.Email))
+                if (!showCopies) app.kern.ui.components.TextAction("Cc Bcc") { copies = true }
+            }
+            if (showCopies) {
+                KField(cc, { cc = it }, "Cc", keyboard = KeyboardOptions(keyboardType = KeyboardType.Email))
+                KField(bcc, { bcc = it }, "Bcc", keyboard = KeyboardOptions(keyboardType = KeyboardType.Email))
+            }
             KField(subject, { subject = it }, "Subject")
             KField(text, { text = it }, "Message", singleLine = false, minLines = 8)
             if (signature.isNotBlank()) Text("-- \n$signature", style = MaterialTheme.typography.bodySmall, color = kern.text3)
@@ -1460,4 +1601,12 @@ fun MailComposeScreen(ws: Workspace, nav: Nav, message: Long? = null, mode: Stri
             Spacer(Modifier.height(32.dp).navigationBarsPadding())
         }
     }
+    if (asking) androidx.compose.material3.AlertDialog(
+        onDismissRequest = { asking = false },
+        containerColor = kern.surface,
+        title = { Text(if (onServer) "Keep your changes?" else "Keep this message?") },
+        text = { Text("Saved drafts are in Drafts, here and on the web.", color = kern.text2) },
+        confirmButton = { androidx.compose.material3.TextButton(onClick = { asking = false; saveAndLeave() }) { Text("Save draft", color = kern.accent) } },
+        dismissButton = { androidx.compose.material3.TextButton(onClick = { asking = false; discardAndLeave() }) { Text("Discard", color = kern.danger) } },
+    )
 }

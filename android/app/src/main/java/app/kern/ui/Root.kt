@@ -236,10 +236,14 @@ private fun SignedIn(ws: Workspace, launch: MutableStateFlow<Launch?>, host: Sna
             )) { app.kern.ui.screens.MailScreen(ws, n, it.arguments?.getString("view")) }
             composable("mail/thread/{id}") { app.kern.ui.screens.MailThreadScreen(ws, n, it.arguments!!.getString("id")!!.toLong()) }
             composable("mail/packages") { app.kern.ui.screens.MailPackagesScreen(ws, n) }
-            composable("mail/compose?msg={msg}&mode={mode}", arguments = listOf(
+            composable("mail/compose?msg={msg}&mode={mode}&draft={draft}", arguments = listOf(
                 navArgument("msg") { type = NavType.StringType; nullable = true; defaultValue = null },
                 navArgument("mode") { type = NavType.StringType; nullable = true; defaultValue = null },
-            )) { app.kern.ui.screens.MailComposeScreen(ws, n, it.arguments?.getString("msg")?.toLongOrNull(), it.arguments?.getString("mode")) }
+                navArgument("draft") { type = NavType.StringType; nullable = true; defaultValue = null },
+            )) {
+                app.kern.ui.screens.MailComposeScreen(ws, n, it.arguments?.getString("msg")?.toLongOrNull(), it.arguments?.getString("mode"),
+                    it.arguments?.getString("draft")?.toLongOrNull())
+            }
             composable("review?deck={deck}&doc={doc}", arguments = listOf(
                 navArgument("deck") { type = NavType.StringType; nullable = true; defaultValue = null },
                 navArgument("doc") { type = NavType.StringType; nullable = true; defaultValue = null },
