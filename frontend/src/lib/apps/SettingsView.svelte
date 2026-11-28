@@ -1,8 +1,9 @@
 <script lang="ts">
-	import { Copy, Database, Download, Eye, EyeOff, GitBranch, Globe, KeyRound, Lock, Plus, Route, SlidersHorizontal, Terminal, Trash2, TriangleAlert, Users, X } from '@lucide/svelte';
+	import { Copy, Cpu, Database, Download, Eye, EyeOff, GitBranch, Globe, KeyRound, Lock, Plus, Route, SlidersHorizontal, Terminal, Trash2, TriangleAlert, Users, X } from '@lucide/svelte';
 	import { onMount } from 'svelte';
 	import { goto } from '$app/navigation';
 	import { api } from '#lib/api.ts';
+	import type { AiConfig } from '#lib/ai/ai.svelte.ts';
 	import Toggle from '#lib/auth/Toggle.svelte';
 	import EmojiPicker from '#lib/components/EmojiPicker.svelte';
 	import { ui } from '#lib/state/ui.svelte.ts';
@@ -28,6 +29,7 @@
 	let data = $state<{ size: number; files: number } | null>(null);
 	let picker = $state<{ x: number; y: number } | null>(null);
 	let deleteRepo = $state(false);
+	let aiCfg = $state<AiConfig | null>(null);
 
 	function reset(a: App) {
 		name = a.name;
@@ -51,6 +53,7 @@
 			vars = e.vars;
 			varsOriginal = JSON.stringify(e.vars);
 			data = await api.get(`/apps/${app.slug}/data`);
+			aiCfg = await api.get<AiConfig>(`/apps/${app.slug}/ai`).catch(() => null);
 		} catch (err) {
 			ui.error(err);
 		}
@@ -206,6 +209,15 @@
 			<label class="field span"><span>Start command <em>has to listen on $PORT</em></span><input class="input mono" bind:value={startCmd} placeholder="python app.py" /></label>
 		</div>
 		{#if runDirty}<div class="acts"><button class="btn ghost" onclick={() => reset(app)}>Cancel</button><button class="btn primary" onclick={() => save({ runtime, build_cmd: buildCmd, start_cmd: startCmd, health_path: health }, 'Saved. Deploy to use it.')}>Save</button></div>{/if}
+	</section>
+
+	<section>
+		<h3><Cpu size={14} />Build with AI</h3>
+		<div class="item">
+			<div><b>Model</b><span>{aiCfg ? (aiCfg.inherited ? 'Following the workspace model' : 'Chosen for this app') : '…'}{aiCfg?.model ? ` · ${aiCfg.model}` : ''}</span></div>
+			<a class="btn" href="/apps/{app.slug}?tab=build&ai=1">Choose…</a>
+		</div>
+		<p class="muted">Only this app's AI builder uses it. The rest of Kern keeps the workspace model from <a href="/settings?s=ai">Settings → AI</a>.</p>
 	</section>
 
 	<section>

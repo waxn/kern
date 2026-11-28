@@ -2,10 +2,11 @@
 	// The AI builder: a conversation about one app. Each message runs in the apps service: the model
 	// reads and writes the app's files, deploys, reads the logs and tries the app, then answers.
 	import {
-		ArrowDown, ArrowUp, Check, ChevronRight, CircleAlert, Cpu, Database, FileMinus, FilePen, FileSearch, Loader,
+		ArrowDown, ArrowUp, Check, ChevronDown, ChevronRight, CircleAlert, Cpu, Database, FileMinus, FilePen, FileSearch, Loader,
 		RotateCcw, Rocket, ScrollText, Settings, Square, TestTube, X
 	} from '@lucide/svelte';
 	import { goto } from '$app/navigation';
+	import { page } from '$app/state';
 	import { onMount, tick } from 'svelte';
 	import { api } from '#lib/api.ts';
 	import { ai, type AiConfig } from '#lib/ai/ai.svelte.ts';
@@ -69,6 +70,9 @@
 
 	let aiReady = $derived((appAi ?? ai.config)?.configured ?? false);
 	let aiMissing = $derived(!!(appAi ?? ai.config) && !aiReady);
+	// The model in effect: the app's own choice, else the workspace one (public_config returns the effective one).
+	let aiModel = $derived(appAi?.model || ai.config?.model || '');
+	let aiLabel = $derived(aiModel ? `Model: ${aiModel}` : 'Model');
 
 	type ProviderInfo = { label: string; base_url: string; model: string; needs_key: boolean };
 	let aiProviders = $derived((ai.config?.providers ?? appAi?.providers ?? {}) as Record<string, ProviderInfo>);
@@ -135,7 +139,15 @@
 
 	onMount(() => {
 		ai.load();
-		loadAppAi().then(() => load().then(() => scroll(true)));
+		loadAppAi().then(() => {
+			if (page.url.searchParams.get('ai') === '1') {
+				openAi();
+				const u = new URL(page.url.href);
+				u.searchParams.delete('ai');
+				goto(u.pathname + u.search, { replaceState: true });
+			}
+			return load().then(() => scroll(true));
+		});
 		return () => timer && clearTimeout(timer);
 	});
 
@@ -383,8 +395,8 @@
 		<span class="state">{status.label}</span>
 		{#if status.sub}<span class="stateSub truncate">{status.sub}</span>{/if}
 		<span class="grow"></span>
-		<button class="btn ghost sm aiBtn" onclick={openAi} title="The AI model Build with AI uses for this app">
-			<Cpu size={13} /><span class="lbl truncate">{appAi ? (appAi.inherited ? 'Workspace AI' : appAi.model || 'AI model') : 'AI'}</span>
+		<button class="btn ghost sm aiBtn" onclick={openAi} title="Choose the model Build with AI uses for this app">
+			<Cpu size={13} /><span class="lbl truncate">{aiLabel}</span><ChevronDown size={12} />
 		</button>
 		{#if chat.transcript.length && !busy}
 			<button class="btn ghost sm" onclick={clear} title="Start a new conversation"><RotateCcw size={13} /><span class="lbl">New conversation</span></button>
@@ -400,8 +412,8 @@
 				<button class="icon-btn" title="Close" onclick={() => (aiPanel = false)}><X size={14} /></button>
 			</div>
 			<div class="aiScope">
-				<button class="scope" class:on={aiScope === 'inherit'} onclick={() => (aiScope = 'inherit')}>Workspace default</button>
-				<button class="scope" class:on={aiScope === 'app'} onclick={() => (aiScope = 'app')}>Just this app</button>
+				<button class="scope" class:on={aiScope === 'inherit'} onclick={() => (aiScope = 'inherit')}>Use the workspace model</button>
+				<button class="scope" class:on={aiScope === 'app'} onclick={() => (aiScope = 'app')}>Choose a model for this app</button>
 			</div>
 			{#if aiScope === 'app'}
 				<div class="providers">
@@ -429,7 +441,7 @@
 					</div>
 				{/if}
 			{:else}
-				<p class="aiNote">{aiReady ? `Uses the workspace settings${ai.config ? ` (${ai.config.model || ai.config.provider})` : ''}.` : 'The workspace has no AI provider yet.'} <a href="/settings?s=ai">Open AI settings</a></p>
+				<p class="aiNote">{aiReady ? `Uses the workspace model${aiModel ? ` (${aiModel})` : ''}. Choose “Choose a model for this app” to use a different one.` : 'The workspace has no AI model yet.'} <a href="/settings?s=ai">Open AI settings</a></p>
 			{/if}
 			<div class="aiActs">
 				<span class="aiHint">Only Build with AI uses this; the rest of Kern keeps the workspace model.</span>
@@ -459,6 +471,8 @@
 						{:else}
 							<p class="warn"><CircleAlert size={14} />No AI provider is set up yet. <a href="/settings?s=ai">Choose one in Settings → AI.</a></p>
 						{/if}
+					{:else if aiReady}
+						<p class="using">Builds with <b>{aiModel}</b> · <button class="linkish" onclick={openAi}>Change model</button></p>
 					{/if}
 				</div>
 			{/if}
@@ -582,6 +596,8 @@
 	.ci { flex: none; display: grid; place-items: center; width: 24px; height: 24px; border-radius: 7px; color: var(--accent); background: color-mix(in srgb, var(--accent) 12%, transparent); }
 	.warn { display: flex; align-items: center; justify-content: center; flex-wrap: wrap; gap: 6px; margin-top: 14px !important; color: var(--c-yellow); }
 	.warn a { color: var(--accent); }
+	.using { display: flex; align-items: center; justify-content: center; flex-wrap: wrap; gap: 4px; margin-top: 14px !important; color: var(--text-3); font-size: 12.5px; }
+	.using b { color: var(--text-2); font-weight: 600; }
 	.linkish { padding: 0; border: 0; background: none; color: var(--accent); font: inherit; cursor: pointer; }
 	.linkish:hover { text-decoration: underline; }
 
