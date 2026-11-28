@@ -28,9 +28,12 @@
 	// ----- AI provider
 	let aiForm = $state({ provider: '', model: '', base_url: '', api_key: '' });
 	let aiTest = $state<{ ok: boolean; text: string } | null>(null);
+	let aiModels = $state<string[]>([]);
+	let aiDetecting = $state(false);
+	let aiModelNote = $state('');
 	const MODEL_HINTS: Record<string, string[]> = {
 		anthropic: ['claude-opus-5-5', 'claude-sonnet-5-5', 'claude-haiku-5-5', 'claude-fable-5-1'],
-		openai: [], gemini: [], openrouter: [], ollama: ['llama3.3', 'qwen3', 'mistral'], custom: []
+		openai: [], gemini: [], openrouter: [], ollama: ['llama3.3', 'qwen3', 'mistral'], lmstudio: [], custom: []
 	};
 	$effect(() => {
 		if (section === 'ai' && !ai.config) ai.load();
@@ -44,8 +47,30 @@
 	});
 	function pickProvider(p: string) {
 		const info = ai.config?.providers[p];
-		aiForm = { ...aiForm, provider: p, model: p === ai.config?.provider ? ai.config.model : (info?.model ?? ''), base_url: p === ai.config?.provider ? ai.config.base_url : (info?.base_url ?? '') };
+		const same = p === ai.config?.provider;
+		aiForm = { ...aiForm, provider: p, model: same ? ai.config?.model ?? '' : (info?.model ?? ''), base_url: same ? ai.config?.base_url ?? '' : (info?.base_url ?? '') };
 		aiTest = null;
+		aiModels = [];
+		aiModelNote = '';
+		if (!same && (p === 'anthropic' ? !!ai.config?.has_key : !!aiForm.base_url)) detectAiModels();
+	}
+	async function detectAiModels() {
+		if (!aiForm.provider || aiDetecting) return;
+		if (aiForm.provider !== 'anthropic' && !aiForm.base_url.trim()) return;
+		aiDetecting = true;
+		aiModelNote = '';
+		try {
+			const r = await api.post<{ models: string[] }>('/ai/models', {
+				provider: aiForm.provider, base_url: aiForm.base_url, api_key: aiForm.api_key.trim()
+			});
+			aiModels = r.models;
+			if (!aiModels.length) aiModelNote = 'No models found.';
+			else if (!aiForm.model.trim()) aiForm = { ...aiForm, model: aiModels[0] };
+		} catch (e) {
+			aiModelNote = (e as Error).message;
+		} finally {
+			aiDetecting = false;
+		}
 	}
 	async function saveAi(extra: Record<string, unknown> = {}) {
 		busy = 'ai';
@@ -302,7 +327,7 @@
 					</div>
 					{#if aiForm.provider}
 						{@const info = ai.config.providers[aiForm.provider]}
-						{#if info.needs_key || aiForm.provider === 'custom' || aiForm.provider === 'ollama'}
+						{#if info.needs_key || aiForm.provider === 'custom' || aiForm.provider === 'ollama' || aiForm.provider === 'lmstudio'}
 							<div class="item"><div><b>API key</b><span>{ai.config.has_key && ai.config.provider === aiForm.provider ? `Saved${ai.config.key_hint ? ` (ends in …${ai.config.key_hint})` : ''}. Leave empty to keep it.` : info.needs_key ? 'Stored on your Kern server only; the browser never receives it.' : 'Optional for local servers.'}</span></div>
 								<div class="row">
 									<input class="input wide" type="password" autocomplete="off" bind:value={aiForm.api_key} placeholder={ai.config.has_key ? '••••••••' : aiForm.provider === 'anthropic' ? 'sk-ant-…' : 'API key'} />
@@ -310,13 +335,16 @@
 								</div>
 							</div>
 						{/if}
-						<div class="item"><div><b>Model</b><span>{aiForm.provider === 'anthropic' ? 'Claude Opus 5.5 is the default; Sonnet 5.5 and Haiku 5.5 are faster and cheaper.' : 'The model name exactly as your provider spells it.'}</span></div>
-							<input class="input wide" list="ai-models" bind:value={aiForm.model} placeholder="model name" />
-							<datalist id="ai-models">{#each MODEL_HINTS[aiForm.provider] ?? [] as m (m)}<option value={m}></option>{/each}</datalist>
+						<div class="item"><div><b>Model</b><span>{aiDetecting ? 'Detecting models…' : aiModels.length ? `${aiModels.length} models detected — pick one or type another.` : aiModelNote ? aiModelNote : aiForm.provider === 'anthropic' ? 'Claude Opus 5.5 is the default; Sonnet 5.5 and Haiku 5.5 are faster and cheaper.' : 'Detect the list from the server, or type the name exactly as your provider spells it.'}</span></div>
+							<div class="row">
+								<input class="input wide" list="ai-models" bind:value={aiForm.model} placeholder="model name" />
+								<button class="btn ghost" disabled={aiDetecting || !aiForm.provider || (aiForm.provider !== 'anthropic' && !aiForm.base_url.trim())} onclick={detectAiModels}>{aiDetecting ? 'Detecting…' : 'Detect models'}</button>
+							</div>
+							<datalist id="ai-models">{#each [...new Set([...aiModels, ...(MODEL_HINTS[aiForm.provider] ?? [])])] as m (m)}<option value={m}></option>{/each}</datalist>
 						</div>
 						{#if aiForm.provider !== 'anthropic'}
-							<div class="item"><div><b>Base URL</b><span>{aiForm.provider === 'ollama' ? 'Inside Docker, host.docker.internal reaches the machine Kern runs on. Without Docker, use http://localhost:11434/v1.' : 'An OpenAI-compatible endpoint (the part before /chat/completions).'}</span></div>
-								<input class="input wide" bind:value={aiForm.base_url} placeholder="https://…/v1" /></div>
+							<div class="item"><div><b>Base URL</b><span>{aiForm.provider === 'ollama' ? 'Inside Docker, host.docker.internal reaches the machine Kern runs on. Without Docker, use http://localhost:11434/v1.' : aiForm.provider === 'lmstudio' ? 'Start LM Studio’s server (Developer tab). Inside Docker use host.docker.internal instead of localhost.' : 'An OpenAI-compatible endpoint (the part before /chat/completions).'}</span></div>
+								<input class="input wide" bind:value={aiForm.base_url} onchange={() => detectAiModels()} placeholder="https://…/v1" /></div>
 						{/if}
 						<div class="item">
 							<div>{#if aiTest}<span class:ok={aiTest.ok} class:bad={!aiTest.ok} class="test">{aiTest.text}</span>{:else}<span>Save, then send a tiny test request.</span>{/if}</div>

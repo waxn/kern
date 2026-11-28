@@ -5,7 +5,10 @@
 	import { onMount, tick } from 'svelte';
 	import { api, ApiError } from '#lib/api.ts';
 	import { ai } from '#lib/ai/ai.svelte.ts';
+	import ModelSelector from '#lib/ai/ModelSelector.svelte';
+	import ChatThread from '#lib/ai/ChatThread.svelte';
 	import { answerPermission, revokeGrant, sendChat, type Chat, type ChatScope, type ChatSummary, type PermissionAnswer } from '#lib/ai/chat.ts';
+	import type { AiConfig } from '#lib/ai/ai.svelte.ts';
 	import ChatThread from '#lib/ai/ChatThread.svelte';
 	import Sparkle from '#lib/ai/Sparkle.svelte';
 	import { ui } from '#lib/state/ui.svelte.ts';
@@ -19,6 +22,24 @@
 	let listOpen = $state(true);
 	let input = $state<HTMLTextAreaElement>();
 	let scroller = $state<HTMLDivElement>();
+
+	// Model selector state
+	let modelConfig = $state<AiConfig | null>(null);
+	const defaultProviders: Record<string, ModelInfo> = {
+		anthropic: { name: 'Anthropic', description: 'Claude (default)' },
+		gemini: { name: 'Google' },
+		openai: { name: 'OpenAI' },
+		ollama: { name: 'Ollama' },
+		lmstudio: { name: 'LM Studio' },
+		custom: { name: 'Custom' }
+	};
+	let detectedModels = $state<string[]>([]);
+	let detecting = $state(false);
+
+	function updateModelConfig(c?: AiConfig) {
+		modelConfig = c;
+		if (c?.base_url && !detectedModels.length) void loadModels();
+	}
 
 	const suggestions = [
 		'What do I have due this week?',
@@ -50,12 +71,36 @@
 		} catch {
 			chat = null;
 			goto('/intelligence', { replaceState: true });
+		} finally {
+			// Load model config for this chat's intelligence session
+			try {
+				modelConfig = await ai.config;
+			} catch {
+				modelConfig = null;
+			}
 		}
 	}
 
 	$effect(() => {
 		openChat(current);
 	});
+
+	async function loadModels() {
+		if (!modelConfig?.base_url || detecting) return;
+		try {
+			detecting = true;
+			const r = await api.post<{ models: string[] }>('/ai/models', {
+				provider: modelConfig.provider,
+				base_url: modelConfig.base_url,
+				api_key: ''
+			});
+			if (r.models) detectedModels = r.models;
+		} catch {
+			// Silently fail - models are optional
+		} finally {
+			detecting = false;
+		}
+	}
 
 	onMount(() => {
 		ai.load();
@@ -194,6 +239,7 @@
 		<header class="bar">
 			<button class="icon-btn" title={listOpen ? 'Hide chats' : 'Show chats'} onclick={() => (listOpen = !listOpen)}><PanelLeft size={15} /></button>
 			<span class="title truncate">{chat?.title || 'Intelligence'}</span>
+			<ModelSelector config={modelConfig} providerOptions={defaultProviders} onreset={() => loadList()} />
 			{#if chat}
 				<button class="btn ghost" onclick={newChat}><MessageSquarePlus size={14} />New chat</button>
 			{/if}
