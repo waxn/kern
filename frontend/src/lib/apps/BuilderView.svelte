@@ -527,6 +527,9 @@
 				placeholder={busy ? 'The AI is working. You can write your next message…' : chat.transcript.length ? 'Ask for a change…' : 'Describe the app…'}
 				onkeydown={keydown}></textarea>
 			<div class="row">
+				<button class="modelChip" onclick={openAi} title="Choose the model Build with AI uses for this app">
+					<Cpu size={11} /><span class="m">{aiModel || 'Model'}</span><ChevronDown size={10} />
+				</button>
 				<span class="hint">Enter to send · Shift+Enter for a new line</span>
 				<span class="grow"></span>
 				{#if busy}
@@ -555,6 +558,10 @@
 	.btn.sm { height: 26px; padding: 0 9px; font-size: 12.5px; }
 	.aiBtn { max-width: 210px; }
 	.aiBtn .lbl { min-width: 0; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+	.modelChip { display: inline-flex; align-items: center; gap: 4px; min-width: 0; max-width: 200px; height: 24px; padding: 0 8px; border-radius: 12px; border: 1px solid var(--border); background: var(--bg); color: var(--text-3); font-size: 11.5px; }
+	.modelChip:hover { background: var(--hover); color: var(--text); }
+	.modelChip :global(svg) { flex: none; }
+	.modelChip .m { min-width: 0; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
 
 	/* per-app AI settings */
 	.aiPanel { flex: none; padding: 10px 14px; border-bottom: 1px solid var(--border); background: var(--surface); display: flex; flex-direction: column; gap: 10px; }
