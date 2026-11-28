@@ -301,6 +301,19 @@ def ai_config(request):
 
 
 @api_view(["POST"])
+def ai_models(request):
+    try:
+        models = ai_mod.list_models(
+            str(request.data.get("provider") or ""),
+            str(request.data.get("base_url") or ""),
+            str(request.data.get("api_key") or ""),
+        )
+    except ai_mod.AIError as e:
+        return _ai_error(e)
+    return Response({"models": models})
+
+
+@api_view(["POST"])
 def ai_test(request):
     try:
         text = ai_mod.complete("You are a connection test. Reply with exactly: OK", "Reply with OK.")

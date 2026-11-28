@@ -574,6 +574,27 @@ def app_ai(request, slug):
         return Response(ai.public_config(a.slug))
 
 
+@api_view(["POST"])
+@handle
+def app_ai_models(request, slug):
+    """The models this app's provider serves, detected before the settings are saved."""
+    from notes import ai
+
+    a = _app(request, slug)
+    body = _body(request)
+    with tenancy.use(a.owner):
+        try:
+            models = ai.list_models(
+                str(body.get("provider") or ""),
+                str(body.get("base_url") or ""),
+                str(body.get("api_key") or ""),
+                a.slug,
+            )
+        except ai.AIError as e:
+            return bad(str(e), e.status)
+    return Response({"models": models})
+
+
 # ---------------------------------------------------------------------- files
 
 

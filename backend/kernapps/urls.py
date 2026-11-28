@@ -9,6 +9,7 @@ urlpatterns = [
     path("<str:slug>", v.app_detail),
     path("<str:slug>/logs", v.app_logs),
     path("<str:slug>/env", v.app_env),
+    path("<str:slug>/ai/models", v.app_ai_models),
     path("<str:slug>/ai", v.app_ai),
     path("<str:slug>/files", v.app_files),
     path("<str:slug>/data", v.app_data),

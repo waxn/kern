@@ -59,6 +59,7 @@ urlpatterns = [
     path("storage", data.storage),
     path("recent/clear", data.clear_recent),
     path("ai/config", data.ai_config),
+    path("ai/models", data.ai_models),
     path("ai/test", data.ai_test),
     path("ai/write", data.ai_write),
     path("ai/cards", data.ai_cards),

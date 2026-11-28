@@ -243,6 +243,22 @@ class ApiTests(AppsRoot, TestCase):
         self.assertTrue(r["inherited"])
         self.assertEqual(r["provider"], "ollama")
 
+    def test_app_ai_models_detects_from_the_entered_url(self):
+        class Reply:
+            def __init__(self, payload): self.payload = payload
+            def read(self): return json.dumps(self.payload).encode()
+            def __enter__(self): return self
+            def __exit__(self, *a): return False
+
+        self.c.post("/api/apps", {"kind": "template", "template": "static", "name": "A", "slug": "a"}, format="json")
+        with mock.patch("notes.ai.urllib.request.urlopen",
+                        return_value=Reply({"data": [{"id": "local-model"}, {"id": "other-model"}]})) as m:
+            r = self.c.post("/api/apps/a/ai/models", {"provider": "lmstudio", "base_url": "http://studio:1234/v1"},
+                            format="json")
+        self.assertEqual(r.status_code, 200, r.content)
+        self.assertEqual(r.json()["models"], ["local-model", "other-model"])
+        self.assertEqual(m.call_args[0][0].full_url, "http://studio:1234/v1/models")
+
     def test_settings_env_and_edit(self):
         self.c.post("/api/apps", {"kind": "template", "template": "static", "name": "S", "slug": "s"}, format="json")
         r = self.c.patch("/api/apps/s", {"access": "public", "public_paths": ["api/in"], "slug": "s2"}, format="json")

@@ -652,6 +652,29 @@ class AITests(TestCase):
         self.c.patch("/api/settings", {"ai_secret": {"api_key": "evil"}}, format="json")
         self.assertEqual(self.c.get("/api/ai/config").json()["key_hint"], "6789")
 
+    def test_model_detection(self):
+        import urllib.error
+        from unittest import mock
+
+        class Reply:
+            def __init__(self, payload): self.payload = payload
+            def read(self): return json.dumps(self.payload).encode()
+            def __enter__(self): return self
+            def __exit__(self, *a): return False
+
+        payload = {"data": [{"id": "qwen2.5-7b-instruct"}, {"id": "llama-3.2-3b"}, {"id": "qwen2.5-7b-instruct"}]}
+        with mock.patch("notes.ai.urllib.request.urlopen", return_value=Reply(payload)) as m:
+            r = self.c.post("/api/ai/models", {"provider": "lmstudio", "base_url": "http://host:1234/v1"}, format="json")
+        self.assertEqual(r.status_code, 200, r.content)
+        self.assertEqual(r.json()["models"], ["llama-3.2-3b", "qwen2.5-7b-instruct"])
+        self.assertTrue(m.call_args[0][0].full_url.endswith("/v1/models"))
+
+        with mock.patch("notes.ai.urllib.request.urlopen",
+                        side_effect=urllib.error.HTTPError("http://host:1234/v1/models", 401, "Unauthorized", {}, None)):
+            r = self.c.post("/api/ai/models", {"provider": "lmstudio", "base_url": "http://host:1234/v1"}, format="json")
+        self.assertEqual(r.status_code, 400)
+        self.assertIn("rejected the API key", r.json()["detail"])
+
     def test_tasks_with_mocked_model(self):
         from unittest import mock
         self.c.put("/api/ai/config", {"provider": "anthropic", "api_key": "sk-ant-test-123456789"}, format="json")

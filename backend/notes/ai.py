@@ -16,6 +16,7 @@ PROVIDERS = {
     "gemini": {"label": "Google Gemini", "base_url": "https://generativelanguage.googleapis.com/v1beta/openai", "model": ""},
     "openrouter": {"label": "OpenRouter", "base_url": "https://openrouter.ai/api/v1", "model": ""},
     "ollama": {"label": "Ollama (local)", "base_url": "http://host.docker.internal:11434/v1", "model": ""},
+    "lmstudio": {"label": "LM Studio (local)", "base_url": "http://host.docker.internal:1234/v1", "model": ""},
     "custom": {"label": "Other OpenAI-compatible", "base_url": "", "model": ""},
 }
 NEEDS_KEY = {"anthropic", "openai", "gemini", "openrouter"}
@@ -122,6 +123,50 @@ def save_config(data: dict, app_slug: str | None = None) -> dict:
 
 
 # -------------------------------------------------------------- providers
+
+
+def list_models(provider: str, base_url: str = "", key_value: str = "", app_slug: str | None = None) -> list[str]:
+    """The models a provider offers, so the browser can show a list instead of a blank field.
+
+    Uses the values typed in the form (before they are saved); a missing key falls back to
+    the one already stored for the app or the workspace.
+    """
+    provider = provider if provider in PROVIDERS else ""
+    if not provider:
+        raise AIError("Choose a provider first.")
+    key = key_value or api_key(app_slug)
+    if provider == "anthropic":
+        url = "https://api.anthropic.com/v1/models?limit=1000"
+        headers = {"x-api-key": key, "anthropic-version": "2023-06-01"}
+    else:
+        base = (base_url or PROVIDERS[provider]["base_url"]).strip().rstrip("/")
+        if not base:
+            raise AIError("Enter the base URL first.")
+        if not re.match(r"^https?://", base):
+            raise AIError("The base URL must start with http:// or https://.")
+        url = base + "/models"
+        headers = {"Authorization": f"Bearer {key}"} if key else {}
+    req = urllib.request.Request(url, headers={"Accept": "application/json", **headers})
+    try:
+        with urllib.request.urlopen(req, timeout=15) as res:
+            data = json.loads(res.read().decode())
+    except urllib.error.HTTPError as e:
+        if e.code in (401, 403):
+            raise AIError("The provider rejected the API key.")
+        if e.code == 404:
+            raise AIError("This endpoint has no model list. Type the model name instead.")
+        raise AIError(f"The provider returned an error ({e.code}).")
+    except (urllib.error.URLError, TimeoutError, ValueError):
+        raise AIError(f"Could not reach {url}. Check the URL and that the server is running.")
+    rows = data.get("data") if isinstance(data, dict) else data
+    if not isinstance(rows, list) and isinstance(data, dict):
+        rows = data.get("models")
+    names = []
+    for row in rows if isinstance(rows, list) else []:
+        mid = row.get("id") if isinstance(row, dict) else row
+        if isinstance(mid, str) and mid.strip():
+            names.append(mid.strip())
+    return sorted(dict.fromkeys(names), key=str.lower)
 
 
 def complete(system: str, prompt: str, app_slug: str | None = None) -> str:
