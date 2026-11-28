@@ -62,10 +62,13 @@
 	let aiScope = $state<'inherit' | 'app'>('inherit');
 	let aiForm = $state({ provider: '', model: '', base_url: '', api_key: '' });
 	let aiSaving = $state(false);
+	let models = $state<string[]>([]);
+	let detecting = $state(false);
+	let modelNote = $state('');
 
 	const MODEL_HINTS: Record<string, string[]> = {
 		anthropic: ['claude-opus-5-5', 'claude-sonnet-5-5', 'claude-haiku-5-5', 'claude-fable-5-1'],
-		openai: [], gemini: [], openrouter: [], ollama: ['llama3.3', 'qwen3', 'mistral'], custom: []
+		openai: [], gemini: [], openrouter: [], ollama: ['llama3.3', 'qwen3', 'mistral'], lmstudio: [], custom: []
 	};
 
 	let aiReady = $derived((appAi ?? ai.config)?.configured ?? false);
@@ -77,33 +80,73 @@
 	type ProviderInfo = { label: string; base_url: string; model: string; needs_key: boolean };
 	let aiProviders = $derived((ai.config?.providers ?? appAi?.providers ?? {}) as Record<string, ProviderInfo>);
 
-	function fillAiForm(c: AiConfig) {
+	function fillAiForm(c?: AiConfig | null) {
+		if (!c) return;
 		aiScope = c.inherited ? 'inherit' : 'app';
 		aiForm = { provider: c.provider, model: c.model, base_url: c.base_url, api_key: '' };
+		models = [];
+		modelNote = '';
 	}
 
-	async function loadAppAi() {
+	async function loadAppAi(): Promise<AiConfig | null> {
 		try {
 			const c = await api.get<AiConfig>(`/apps/${app.slug}/ai`);
 			appAi = c;
 			if (!aiPanel) fillAiForm(c);
+			return c;
 		} catch {
 			/* the workspace settings still apply */
+			return null;
 		}
 	}
 
 	function openAi() {
 		if (appAi) fillAiForm(appAi);
+		else loadAppAi().then(async (c) => {
+			const conf = c ?? (ai.config || null);
+			if (!aiPanel) return; // Panel might have been closed by Cancel while loading
+			await fillAiForm(conf);
+		}).catch(() => {});
 		aiPanel = !aiPanel;
+		models = [];
+		modelNote = '';
 	}
+
+	// Show a warning when the form has unsaved changes that differ from what's saved
+	let base_urlMismatch = $derived(aiScope === 'app' && aiForm.provider && aiForm.base_url && (appAi?.base_url !== aiForm.base_url));
 
 	function pickProvider(p: string) {
 		const info = aiProviders[p];
+		const same = p === aiForm.provider;
+		const baseToUse = same ? aiForm.base_url : (appAi?.base_url ?? info?.base_url ?? '');
 		aiForm = {
 			...aiForm, provider: p,
-			model: p === aiForm.provider ? aiForm.model : (info?.model ?? ''),
-			base_url: p === aiForm.provider ? aiForm.base_url : (info?.base_url ?? '')
+			model: same ? aiForm.model : (info?.model ?? ''),
+			base_url: baseToUse
 		};
+		models = [];
+		modelNote = '';
+		// A local or OpenAI-compatible server usually knows its models; ask as soon as it is picked.
+		if (!same && (p === 'anthropic' ? !!(appAi?.has_key || aiForm.api_key.trim()) : !!aiForm.base_url)) detectModels();
+	}
+
+	async function detectModels() {
+		if (!aiForm.provider || detecting) return;
+		if (aiForm.provider !== 'anthropic' && !aiForm.base_url.trim()) return;
+		detecting = true;
+		modelNote = '';
+		try {
+			const r = await api.post<{ models: string[] }>(`/apps/${app.slug}/ai/models`, {
+				provider: aiForm.provider, base_url: aiForm.base_url, api_key: aiForm.api_key.trim()
+			});
+			models = r.models;
+			if (!models.length) modelNote = 'No models found.';
+			else if (!aiForm.model.trim()) aiForm = { ...aiForm, model: models[0] };
+		} catch (e) {
+			modelNote = (e as Error).message;
+		} finally {
+			detecting = false;
+		}
 	}
 
 	async function saveAppAi() {
@@ -424,16 +467,23 @@
 				{#if aiForm.provider}
 					{@const info = aiProviders[aiForm.provider]}
 					<div class="aiGrid">
-						<label class="field span"><span>Model</span>
-							<input class="input mono" list="app-ai-models" bind:value={aiForm.model} placeholder="model name" />
-							<datalist id="app-ai-models">{#each MODEL_HINTS[aiForm.provider] ?? [] as m (m)}<option value={m}></option>{/each}</datalist>
+						<label class="field span"><span>Model
+							{#if detecting}<em>detecting…</em>
+							{:else if models.length}<em>{models.length} detected</em>
+							{:else if modelNote}<em class="bad">{modelNote}</em>{/if}
+						</span>
+							<div class="modelRow">
+								<input class="input mono" list="app-ai-models" bind:value={aiForm.model} placeholder="model name" />
+								<button class="btn ghost sm" onclick={detectModels} disabled={detecting || !aiForm.provider || (aiForm.provider !== 'anthropic' && !aiForm.base_url.trim())}>{detecting ? 'Detecting…' : 'Detect models'}</button>
+							</div>
+							<datalist id="app-ai-models">{#each [...new Set([...models, ...(MODEL_HINTS[aiForm.provider] ?? [])])] as m (m)}<option value={m}></option>{/each}</datalist>
 						</label>
 						{#if aiForm.provider !== 'anthropic'}
-							<label class="field span"><span>Base URL</span>
-								<input class="input mono" bind:value={aiForm.base_url} placeholder="https://…/v1" />
+							<label class="field span"><span class="{base_urlMismatch ? 'warn' : ''}">Base URL <em>{base_urlMismatch ? '(unsaved)' : ''}</em> {aiForm.provider === 'lmstudio' ? '→ Developer → Start server. Use host.docker.internal instead of localhost inside Docker.' : ''}</span>
+								<input class="input mono" bind:value={aiForm.base_url} onchange={() => detectModels()} placeholder="https://…/v1" />
 							</label>
 						{/if}
-						{#if info?.needs_key || aiForm.provider === 'custom' || aiForm.provider === 'ollama'}
+						{#if info?.needs_key || aiForm.provider === 'custom' || aiForm.provider === 'ollama' || aiForm.provider === 'lmstudio'}
 							<label class="field span"><span>API key <em>{appAi?.own_key ? 'saved for this app; leave empty to keep it' : 'empty uses the workspace key'}</em></span>
 								<input class="input mono" type="password" autocomplete="off" bind:value={aiForm.api_key} placeholder={appAi?.own_key ? '••••••••' : info?.needs_key ? 'API key' : 'optional'} />
 							</label>
@@ -579,7 +629,10 @@
 	.aiGrid .span { grid-column: 1 / -1; }
 	.aiGrid .field { display: flex; flex-direction: column; gap: 3px; font-size: 12px; font-weight: 550; color: var(--text-2); }
 	.aiGrid .field em { font-style: normal; font-weight: 400; color: var(--text-3); }
+	.aiGrid .field em.bad { color: var(--danger); }
 	.aiGrid .input { width: 100%; }
+	.modelRow { display: flex; gap: 6px; align-items: center; }
+	.modelRow .input { flex: 1; min-width: 0; }
 	.aiNote { margin: 0; font-size: 12.5px; color: var(--text-2); }
 	.aiNote a { color: var(--accent); }
 	.aiActs { display: flex; align-items: center; gap: 6px; flex-wrap: wrap; }
